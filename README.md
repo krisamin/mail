@@ -66,18 +66,26 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
 ## 개발
 
 ```bash
-# Go 1.26+, Bun 1.3+
-go run ./spikes/smtp-recv          # 스파이크 SMTP 수신 서버 (:2525)
+# Go 1.26+, Bun 1.3+, Docker
+
+# 1) dev 인프라 (Postgres) — 첫 기동 시 스키마 자동 생성
+cp .env.example .env
+make up               # docker compose up -d
+make db-test          # 통합 테스트 (compose DB에 연결)
+
+# 스파이크
+make spike-smtp       # Phase 0 SMTP 수신 서버 (:2525)
 go run ./spikes/smtp-recv/testclient   # 테스트 메일 한 통 전송
 
-# 저장 엔진 테스트 (dev Postgres 필요)
-docker run -d --name mail-dev-pg -e POSTGRES_USER=mail \
-  -e POSTGRES_PASSWORD=maildev -e POSTGRES_DB=mail \
-  -p 55432:5432 postgres:17-alpine
-docker exec -i mail-dev-pg psql -U mail -d mail < internal/store/migrations/0001_init.up.sql
-MAIL_TEST_DSN="postgres://mail:maildev@localhost:55432/mail" \
-  go test ./internal/store/postgres/ -v
+# 기타
+make help             # 전체 명령 목록
+make reset-db         # DB 볼륨 초기화 + 마이그레이션 재적용
+make check            # 커밋 전 검증 (build + vet)
 ```
+
+> dev 환경은 지금 Postgres만 compose로 띄운다. 앱(maild)은 아직 호스트에서
+> `go run`으로 돈다. Phase 2에서 valkey(발송 큐), Phase 3에서 backend/frontend를
+> compose에 추가한다.
 
 ## 구조
 

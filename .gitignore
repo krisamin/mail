@@ -13,6 +13,7 @@
 # 환경/시크릿
 .env
 .env.*
+!.env.example
 *.local
 config.local.yaml
 secrets/

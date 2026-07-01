@@ -1,0 +1,39 @@
+# mail — 개발용 인프라 compose (Phase 1)
+#
+# 지금은 Postgres만. 앱(maild)은 아직 호스트에서 `go run`으로 돌린다.
+#   → 그래서 Postgres는 호스트 포트(55432)를 노출한다.
+# Phase 2에서 valkey(발송 큐), Phase 3에서 backend/frontend를 이 파일에 추가한다.
+#
+# 사용:
+#   cp .env.example .env      # 최초 1회
+#   docker compose up -d      # Postgres 기동 (첫 기동 시 스키마 자동 생성)
+#   make db-test              # 통합 테스트
+#
+# 스키마는 initdb 훅으로 자동 적용된다 (첫 기동, 빈 볼륨일 때만).
+# 마이그레이션을 바꿨으면 볼륨을 날려야 재적용됨:
+#   docker compose down -v && docker compose up -d
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mail}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-maildev}
+      POSTGRES_DB: ${POSTGRES_DB:-mail}
+    ports:
+      # 호스트 go run이 붙어야 하니 노출. Phase 3에서 앱이 컨테이너로 들어오면 제거 검토.
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # initdb 훅: 빈 볼륨 첫 기동 시 *.sql 알파벳 순 실행.
+      # up 마이그레이션만 마운트 (down은 롤백용이라 제외).
+      - ./internal/store/migrations/0001_init.up.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-mail}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
