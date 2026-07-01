@@ -1,0 +1,38 @@
+# Go
+/bin/
+*.exe
+*.out
+/tmp/
+# 빌드 바이너리(루트에 생기는 것만) — 디렉토리명과 충돌 안 나게 경로 고정
+/maild
+/smtp-recv
+
+# 의존성 (vendored 안 함)
+/vendor/
+
+# 환경/시크릿
+.env
+.env.*
+*.local
+config.local.yaml
+secrets/
+*.pem
+*.key
+!**/testdata/**/*.key
+
+# 메일 데이터 (로컬 개발 시 생성)
+/data/
+/mailstore/
+*.db
+*.sqlite
+
+# 프론트 (Bun/RR7)
+node_modules/
+/web/build/
+/web/.react-router/
+.DS_Store
+
+# 에디터/IDE
+.idea/
+.vscode/
+*.swp
