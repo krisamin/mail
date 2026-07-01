@@ -53,7 +53,12 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
 ## 로드맵
 
 - [x] **Phase 0** — 프로토콜 감 잡기 (go-smtp 수신 스파이크) → `spikes/smtp-recv`
-- [ ] **Phase 1** — 저장 엔진 (Postgres 스키마 + IMAP 백엔드)
+- [ ] **Phase 1** — 저장 엔진 (Postgres 스키마 + IMAP 백엔드) — *진행중*
+  - [x] store 도메인 타입 + 인터페이스 (`internal/store`)
+  - [x] Postgres 스키마 마이그레이션 (`internal/store/migrations`, up/down 검증)
+  - [x] Postgres 구현체 (인증/메일박스/메시지) + 통합 테스트 PASS
+  - [ ] go-imap v2 `imapserver.Session`을 store 위에서 구현
+  - [ ] Thunderbird로 붙어서 INBOX 검증
 - [ ] **Phase 2** — 발송 큐 + DKIM 서명 + OAuth/SASL 인증
 - [ ] **Phase 3** — Admin REST API + React Router v7 관리 UI
 - [ ] **Phase 4** — 프로덕션화 (deliverability, 안티스팸, k8s, 백업)
@@ -64,6 +69,14 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
 # Go 1.26+, Bun 1.3+
 go run ./spikes/smtp-recv          # 스파이크 SMTP 수신 서버 (:2525)
 go run ./spikes/smtp-recv/testclient   # 테스트 메일 한 통 전송
+
+# 저장 엔진 테스트 (dev Postgres 필요)
+docker run -d --name mail-dev-pg -e POSTGRES_USER=mail \
+  -e POSTGRES_PASSWORD=maildev -e POSTGRES_DB=mail \
+  -p 55432:5432 postgres:17-alpine
+docker exec -i mail-dev-pg psql -U mail -d mail < internal/store/migrations/0001_init.up.sql
+MAIL_TEST_DSN="postgres://mail:maildev@localhost:55432/mail" \
+  go test ./internal/store/postgres/ -v
 ```
 
 ## 구조
