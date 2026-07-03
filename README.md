@@ -65,7 +65,9 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
   - [x] **2-1. SMTP 수신 배달** (`internal/smtp`) — RCPT 단계 수신자 검증(550, backscatter
         방지, 오픈 릴레이 아님) + 수신자별 Received 헤더 + INBOX 자동 생성 배달.
         e2e 테스트: SMTP 발사→IMAP 읽기 왕복, NOOP이 새 메일 감지까지 PASS
-  - [ ] 2-2. SMTP AUTH + submission (앱 비밀번호, 587 역할)
+  - [x] **2-2. SMTP AUTH + submission** (`internal/smtp/submission.go`, dev :2587) —
+        SASL PLAIN(앱 비밀번호) 필수, envelope from=인증 계정 강제(위조 553),
+        로컬 배달, 외부 도메인은 발송 큐 전까지 550. 테스트 5종 PASS
   - [ ] 2-3. 발송 큐 (재시도/백오프, bounce/DSN) — relay 결정 필요
   - [ ] 2-4. DKIM 서명 + 수신 SPF/DKIM/DMARC 검증
 - [ ] **Phase 3** — Admin REST API + React Router v7 관리 UI

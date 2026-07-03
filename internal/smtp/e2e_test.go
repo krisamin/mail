@@ -33,6 +33,7 @@ const (
 type testEnv struct {
 	smtpAddr string
 	imapAddr string
+	store    *postgres.Store
 }
 
 func setupServers(t *testing.T) *testEnv {
@@ -106,6 +107,7 @@ func setupServers(t *testing.T) *testEnv {
 	return &testEnv{
 		smtpAddr: smtpLn.Addr().String(),
 		imapAddr: imapLn.Addr().String(),
+		store:    st,
 	}
 }
 

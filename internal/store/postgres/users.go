@@ -27,6 +27,20 @@ func splitAddress(address string) (local, domain string, err error) {
 	return address[:at], address[at+1:], nil
 }
 
+// FindDomain은 활성 도메인을 이름으로 찾는다.
+func (s *Store) FindDomain(ctx context.Context, name string) (*store.Domain, error) {
+	const q = `SELECT id, name, active, created_at FROM domains WHERE name = $1 AND active`
+	var d store.Domain
+	err := s.pool.QueryRow(ctx, q, name).Scan(&d.ID, &d.Name, &d.Active, &d.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("도메인 조회: %w", err)
+	}
+	return &d, nil
+}
+
 // FindUserByAddress는 이메일 주소로 활성 유저를 찾는다.
 func (s *Store) FindUserByAddress(ctx context.Context, address string) (*store.User, error) {
 	local, domain, err := splitAddress(address)

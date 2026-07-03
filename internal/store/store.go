@@ -96,6 +96,11 @@ type Store interface {
 	AuthenticateAppPassword(ctx context.Context, address, password string) (*User, error)
 	FindUserByAddress(ctx context.Context, address string) (*User, error)
 
+	// 도메인
+	// FindDomain은 활성 도메인을 이름으로 찾는다. 수신/제출 시
+	// "우리 도메인인가"(로컬 배달 대상) 판단에 쓴다.
+	FindDomain(ctx context.Context, name string) (*Domain, error)
+
 	// 메일박스
 	ListMailboxes(ctx context.Context, userID int64) ([]*Mailbox, error)
 	GetMailbox(ctx context.Context, userID int64, name string) (*Mailbox, error)
