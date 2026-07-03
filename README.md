@@ -53,15 +53,21 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
 ## 로드맵
 
 - [x] **Phase 0** — 프로토콜 감 잡기 (go-smtp 수신 스파이크) → `spikes/smtp-recv`
-- [ ] **Phase 1** — 저장 엔진 (Postgres 스키마 + IMAP 백엔드) — *진행중*
+- [x] **Phase 1** — 저장 엔진 (Postgres 스키마 + IMAP 백엔드)
   - [x] store 도메인 타입 + 인터페이스 (`internal/store`)
   - [x] Postgres 스키마 마이그레이션 (`internal/store/migrations`, up/down 검증)
   - [x] Postgres 구현체 (인증/메일박스/메시지) + 통합 테스트 PASS
   - [x] go-imap v2 `imapserver.Session`을 store 위에서 구현 (`internal/imap`, DD-06 세션 스냅샷)
         — imapclient 통합테스트로 LOGIN→LIST→SELECT→APPEND→FETCH→STORE→SEARCH→COPY→EXPUNGE 왕복 PASS
   - [x] `cmd/maild`에 IMAP 서버 조립 (`MAIL_DSN`/`MAIL_IMAP_ADDR`, dev 기본 :1143)
-  - [ ] Thunderbird로 붙어서 INBOX 검증
-- [ ] **Phase 2** — 발송 큐 + DKIM 서명 + OAuth/SASL 인증
+  - [ ] Thunderbird로 붙어서 INBOX 검증 *(마로 데스크톱 필요 — 보류)*
+- [ ] **Phase 2** — 발송 큐 + DKIM 서명 + OAuth/SASL 인증 — *진행중*
+  - [x] **2-1. SMTP 수신 배달** (`internal/smtp`) — RCPT 단계 수신자 검증(550, backscatter
+        방지, 오픈 릴레이 아님) + 수신자별 Received 헤더 + INBOX 자동 생성 배달.
+        e2e 테스트: SMTP 발사→IMAP 읽기 왕복, NOOP이 새 메일 감지까지 PASS
+  - [ ] 2-2. SMTP AUTH + submission (앱 비밀번호, 587 역할)
+  - [ ] 2-3. 발송 큐 (재시도/백오프, bounce/DSN) — relay 결정 필요
+  - [ ] 2-4. DKIM 서명 + 수신 SPF/DKIM/DMARC 검증
 - [ ] **Phase 3** — Admin REST API + React Router v7 관리 UI
 - [ ] **Phase 4** — 프로덕션화 (deliverability, 안티스팸, k8s, 백업)
 

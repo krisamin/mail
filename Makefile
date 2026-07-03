@@ -45,8 +45,9 @@ test: ## 유닛 테스트 (DB 불필요한 것만)
 	go test ./... -short
 
 .PHONY: db-test
-db-test: ## 통합 테스트 (dev DB 필요 — store + imap)
-	MAIL_TEST_DSN="$(MAIL_TEST_DSN)" go test ./internal/store/... ./internal/imap/... -v
+db-test: ## 통합 테스트 (dev DB 필요 — store/imap/smtp e2e)
+	# -p 1 필수: 테스트 패키지들이 같은 dev DB를 TRUNCATE하므로 병렬 실행 시 서로 밟음
+	MAIL_TEST_DSN="$(MAIL_TEST_DSN)" go test -p 1 ./internal/... -v
 
 .PHONY: run
 run: ## maild 실행 (IMAP :1143, dev DB 필요)
