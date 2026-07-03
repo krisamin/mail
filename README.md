@@ -73,7 +73,11 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
         (1m→2m→…, 기본 6회), 영구 오류(5xx) 즉시 failed. Sender 인터페이스 뒤에
         RelaySender(DD-04, STARTTLS+PLAIN) — relay 계정만 채우면 됨(`MAIL_RELAY_*`).
         테스트 5종: 성공/백오프/영구오류/소진/제출→큐→relay 실발송 왕복. bounce DSN은 TODO
-  - [ ] 2-4. DKIM 서명 + 수신 SPF/DKIM/DMARC 검증
+  - [x] **2-4. DKIM 서명 + 수신 SPF/DKIM/DMARC 검증** (`internal/auth` + 마이그레이션 0003)
+        — 발송: 도메인별 DKIM 키(domains.dkim_*)로 워커에서 서명(relaxed/relaxed,
+        RSA/Ed25519, best-effort). 수신: SPF(blitiri)+DKIM+DMARC(relaxed alignment)
+        검증 후 Authentication-Results 헤더 기록 (거절/격리는 Phase 4).
+        테스트 7종: 서명↔검증 왕복(RSA/Ed25519)/변조 감지/DMARC 정렬/store 키 훅
 - [ ] **Phase 3** — Admin REST API + React Router v7 관리 UI
 - [ ] **Phase 4** — 프로덕션화 (deliverability, 안티스팸, k8s, 백업)
 

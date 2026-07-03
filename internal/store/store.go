@@ -28,6 +28,11 @@ type Domain struct {
 	Name      string
 	Active    bool
 	CreatedAt time.Time
+
+	// DKIM 서명 (Phase 2-4). Selector가 비어있으면 서명 안 함.
+	// 공개키는 <selector>._domainkey.<name> TXT로 게시.
+	DKIMSelector   string
+	DKIMPrivateKey string // PKCS#8 PEM
 }
 
 // User는 계정 (local_part@domain). 사람 로그인은 OIDC, 메일앱은 앱 비밀번호.

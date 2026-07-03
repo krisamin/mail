@@ -29,9 +29,13 @@ func splitAddress(address string) (local, domain string, err error) {
 
 // FindDomain은 활성 도메인을 이름으로 찾는다.
 func (s *Store) FindDomain(ctx context.Context, name string) (*store.Domain, error) {
-	const q = `SELECT id, name, active, created_at FROM domains WHERE name = $1 AND active`
+	const q = `
+		SELECT id, name, active, created_at,
+		       COALESCE(dkim_selector, ''), COALESCE(dkim_private_key, '')
+		FROM domains WHERE name = $1 AND active`
 	var d store.Domain
-	err := s.pool.QueryRow(ctx, q, name).Scan(&d.ID, &d.Name, &d.Active, &d.CreatedAt)
+	err := s.pool.QueryRow(ctx, q, name).Scan(
+		&d.ID, &d.Name, &d.Active, &d.CreatedAt, &d.DKIMSelector, &d.DKIMPrivateKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

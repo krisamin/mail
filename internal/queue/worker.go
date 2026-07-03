@@ -68,11 +68,23 @@ type Worker struct {
 	store  store.Store
 	sender Sender
 	cfg    Config
+	// signer는 발송 전 DKIM 서명 훅 (nil이면 서명 없이 발송).
+	signer SignFunc
 }
+
+// SignFunc는 발송 직전 메시지를 서명한다. 실패하면 원문 그대로 발송
+// (서명은 best-effort — 서명 실패로 발송을 막지 않는다).
+type SignFunc func(ctx context.Context, envelopeFrom string, raw []byte) ([]byte, error)
 
 // NewWorker는 워커를 만든다.
 func NewWorker(st store.Store, sender Sender, cfg Config) *Worker {
 	return &Worker{store: st, sender: sender, cfg: cfg.withDefaults()}
+}
+
+// WithSigner는 DKIM 서명 훅을 단다.
+func (w *Worker) WithSigner(f SignFunc) *Worker {
+	w.signer = f
+	return w
 }
 
 // Run은 ctx가 취소될 때까지 주기적으로 큐를 처리한다.
@@ -112,7 +124,17 @@ func (w *Worker) ProcessOnce(ctx context.Context) (int, error) {
 }
 
 func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
-	err := w.sender.Send(ctx, m.EnvelopeFrom, m.EnvelopeRcpt, m.Raw)
+	raw := m.Raw
+	if w.signer != nil {
+		signed, err := w.signer(ctx, m.EnvelopeFrom, raw)
+		if err != nil {
+			log.Printf("queue: DKIM 서명 실패 id=%d (서명 없이 발송): %v", m.ID, err)
+		} else {
+			raw = signed
+		}
+	}
+
+	err := w.sender.Send(ctx, m.EnvelopeFrom, m.EnvelopeRcpt, raw)
 	if err == nil {
 		if err := w.store.MarkOutboundSent(ctx, m.ID); err != nil {
 			log.Printf("queue: sent 마킹 실패 id=%d: %v", m.ID, err)

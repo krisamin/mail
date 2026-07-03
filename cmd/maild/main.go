@@ -56,8 +56,8 @@ func main() {
 		errCh <- imapSrv.ListenAndServe(imapAddr)
 	}()
 
-	// SMTP 수신(MX) 서버
-	smtpSrv := gosmtp.NewServer(smtpbackend.NewBackend(st, hostname))
+	// SMTP 수신(MX) 서버 — SPF/DKIM/DMARC 검증 켬 (기록만, 거절 안 함)
+	smtpSrv := gosmtp.NewServer(smtpbackend.NewBackend(st, hostname).WithInboundVerification())
 	smtpSrv.Addr = smtpAddr
 	smtpSrv.Domain = hostname
 	smtpSrv.ReadTimeout = 60 * time.Second
@@ -97,7 +97,8 @@ func main() {
 			Password: os.Getenv("MAIL_RELAY_PASSWORD"),
 			StartTLS: os.Getenv("MAIL_RELAY_STARTTLS") != "false",
 		})
-		worker := queue.NewWorker(st, sender, queue.Config{})
+		worker := queue.NewWorker(st, sender, queue.Config{}).
+			WithSigner(queue.NewDKIMSigner(st))
 		go worker.Run(context.Background())
 	} else {
 		log.Printf("maild: MAIL_RELAY_ADDR 미설정 — 발송 큐 워커 비활성 (외부 도메인 제출 거절)")

@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"strings"
 	"time"
 
 	gosmtp "github.com/emersion/go-smtp"
 
+	"github.com/krisamin/mail/internal/auth"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -29,11 +31,20 @@ var timeNow = time.Now
 type Backend struct {
 	store    store.Store
 	hostname string // Received 헤더에 박을 서버 이름
+	// verifyInbound가 true면 수신 메일에 SPF/DKIM/DMARC 검증을 돌려
+	// Authentication-Results 헤더를 붙인다 (Phase 2-4. 기록만, 거절 안 함).
+	verifyInbound bool
 }
 
 // NewBackend는 store 위에 수신 백엔드를 만든다.
 func NewBackend(st store.Store, hostname string) *Backend {
 	return &Backend{store: st, hostname: hostname}
+}
+
+// WithInboundVerification은 수신 SPF/DKIM/DMARC 검증을 켠다.
+func (b *Backend) WithInboundVerification() *Backend {
+	b.verifyInbound = true
+	return b
 }
 
 // NewSession은 연결마다 불린다 (gosmtp.Backend 인터페이스).
@@ -108,11 +119,27 @@ func (s *Session) Data(r io.Reader) error {
 		return err
 	}
 
+	// SPF/DKIM/DMARC 검증 → Authentication-Results (Phase 2-4: 기록만)
+	var authHeader []byte
+	if s.backend.verifyInbound {
+		ip := remoteIP(s.remoteAddr)
+		vr := auth.VerifyInbound(raw, auth.VerifyOptions{
+			RemoteIP:     ip,
+			HeloName:     s.heloName,
+			EnvelopeFrom: s.from,
+			Hostname:     s.backend.hostname,
+		})
+		authHeader = vr.Header
+		log.Printf("smtp: 인증 검증 from=%s ip=%s spf=%v dkim=%v dmarc=%v",
+			s.from, ip, vr.SPFPass, vr.DKIMPass, vr.DMARCPass)
+	}
+
 	now := timeNow()
 	delivered := 0
 	for _, rc := range s.rcpts {
 		// 수신자별 Received 헤더 prepend (RFC 5321 §4.4 — 배달 추적용)
 		stamped := s.receivedHeader(rc.address, now)
+		stamped = append(stamped, authHeader...)
 		stamped = append(stamped, raw...)
 
 		if err := s.deliver(rc, stamped, now); err != nil {
@@ -162,9 +189,18 @@ func (s *Session) receivedHeader(forAddr string, now time.Time) []byte {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Received: from %s (%s)\r\n", helo, s.remoteAddr)
-	fmt.Fprintf(&b, "\tby %s with ESMTP\r\n", s.backend.hostname)
-	fmt.Fprintf(&b, "\tfor <%s>; %s\r\n", forAddr, now.Format("Mon, 02 Jan 2006 15:04:05 -0700"))
+	fmt.Fprintf(&b, "	by %s with ESMTP\r\n", s.backend.hostname)
+	fmt.Fprintf(&b, "	for <%s>; %s\r\n", forAddr, now.Format("Mon, 02 Jan 2006 15:04:05 -0700"))
 	return []byte(b.String())
+}
+
+// remoteIP는 "1.2.3.4:5678" 형태에서 IP를 뽑는다.
+func remoteIP(remoteAddr string) net.IP {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	return net.ParseIP(host)
 }
 
 func (s *Session) Reset() {
