@@ -73,39 +73,67 @@ func IdentityFrom(ctx context.Context) *Identity {
 	return id
 }
 
+// authenticate는 Bearer 토큰을 검증해 Identity를 돌려준다.
+// InsecureSkipVerify 모드에선 테스트 헤더(X-Test-Email/X-Test-Groups)로
+// 신원을 지정할 수 있다 (미지정 시 admin 취급 — 기존 테스트 호환).
+func (a *Authenticator) authenticate(r *http.Request) (*Identity, int, string) {
+	if a.cfg.InsecureSkipVerify {
+		id := &Identity{Subject: "test", Email: "test@localhost", Groups: []string{a.cfg.AdminGroup}}
+		if e := r.Header.Get("X-Test-Email"); e != "" {
+			id.Email = e
+		}
+		if g, ok := r.Header["X-Test-Groups"]; ok {
+			id.Groups = nil
+			for _, part := range strings.Split(strings.Join(g, ","), ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					id.Groups = append(id.Groups, part)
+				}
+			}
+		}
+		return id, 0, ""
+	}
+
+	raw := bearerToken(r)
+	if raw == "" {
+		return nil, http.StatusUnauthorized, "missing bearer token"
+	}
+	idToken, err := a.verifier.Verify(r.Context(), raw)
+	if err != nil {
+		return nil, http.StatusUnauthorized, "invalid token: " + err.Error()
+	}
+	var c claims
+	if err := idToken.Claims(&c); err != nil {
+		return nil, http.StatusUnauthorized, "invalid claims"
+	}
+	return &Identity{Subject: c.Subject, Email: c.Email, Groups: c.Groups}, 0, ""
+}
+
+// RequireUser는 Bearer 토큰 검증만 하는 미들웨어 (그룹 불필요).
+// 셀프서비스(/api/me/*)용 — 로그인한 누구나.
+func (a *Authenticator) RequireUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, status, msg := a.authenticate(r)
+		if id == nil {
+			writeError(w, status, msg)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey, id)))
+	})
+}
+
 // RequireAdmin은 Bearer 토큰 검증 + admin 그룹 확인 미들웨어.
 func (a *Authenticator) RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.cfg.InsecureSkipVerify {
-			ctx := context.WithValue(r.Context(), identityKey,
-				&Identity{Subject: "test", Email: "test@localhost", Groups: []string{a.cfg.AdminGroup}})
-			next.ServeHTTP(w, r.WithContext(ctx))
+		id, status, msg := a.authenticate(r)
+		if id == nil {
+			writeError(w, status, msg)
 			return
 		}
-
-		raw := bearerToken(r)
-		if raw == "" {
-			writeError(w, http.StatusUnauthorized, "missing bearer token")
-			return
-		}
-		idToken, err := a.verifier.Verify(r.Context(), raw)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid token: "+err.Error())
-			return
-		}
-		var c claims
-		if err := idToken.Claims(&c); err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid claims")
-			return
-		}
-		if !hasGroup(c.Groups, a.cfg.AdminGroup) {
+		if !hasGroup(id.Groups, a.cfg.AdminGroup) {
 			writeError(w, http.StatusForbidden, "admin group required")
 			return
 		}
-
-		ctx := context.WithValue(r.Context(), identityKey,
-			&Identity{Subject: c.Subject, Email: c.Email, Groups: c.Groups})
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey, id)))
 	})
 }
 

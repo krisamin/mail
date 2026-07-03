@@ -88,7 +88,10 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
         `/admin` 레이아웃 가드(미로그인→login, 그룹 없음→403). 대시보드/도메인
         (생성·활성·DKIM)/유저(생성·앱비번 발급·revoke)/발송 큐(필터·재시도).
         e2e: maro→admin 접근+기능 왕복, guest 403, 발급 앱비번으로 IMAP LOGIN OK
-  - [ ] 일반 유저 셀프서비스 (본인 앱비번 관리) — 후속
+  - [x] **일반 유저 셀프서비스** — `/api/me/*` (RequireUser: 토큰만, 그룹 불필요) +
+        `/account` 페이지. email 클레임→메일 계정 매핑, 본인 앱비번 발급(평문
+        1회)/revoke(소유권 검증=IDOR 방지), 미개설 계정 안내. e2e: guest UI
+        발급 앱비번으로 IMAP LOGIN OK, maro의 타인 비번 revoke 404
 - [ ] **Phase 4** — 프로덕션화 (deliverability, 안티스팸, k8s, 백업)
 
 ## 개발

@@ -49,6 +49,15 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("POST /api/admin/queue/{id}/retry", s.handleRetryQueue)
 
 	s.mux.Handle("/api/admin/", auth.RequireAdmin(admin))
+
+	// 셀프서비스 — 로그인한 유저 본인 계정 (그룹 불필요).
+	// OIDC email 클레임 → 메일 계정 매핑. 소유권 검증 필수.
+	me := http.NewServeMux()
+	me.HandleFunc("GET /api/me/account", s.handleMeAccount)
+	me.HandleFunc("GET /api/me/app-passwords", s.handleMeListAppPasswords)
+	me.HandleFunc("POST /api/me/app-passwords", s.handleMeCreateAppPassword)
+	me.HandleFunc("DELETE /api/me/app-passwords/{id}", s.handleMeRevokeAppPassword)
+	s.mux.Handle("/api/me/", auth.RequireUser(me))
 	return s
 }
 
