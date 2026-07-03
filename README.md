@@ -78,7 +78,17 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
         RSA/Ed25519, best-effort). 수신: SPF(blitiri)+DKIM+DMARC(relaxed alignment)
         검증 후 Authentication-Results 헤더 기록 (거절/격리는 Phase 4).
         테스트 7종: 서명↔검증 왕복(RSA/Ed25519)/변조 감지/DMARC 정렬/store 키 훅
-- [ ] **Phase 3** — Admin REST API + React Router v7 관리 UI
+- [ ] **Phase 3** — Admin REST API + React Router v7 관리 UI — *진행중*
+  - [x] **Go Admin API** (`internal/api`, :8080) — OIDC Bearer 검증(JWKS) +
+        groups claim 인가(mail-admin). 도메인/DKIM(Ed25519 생성→DNS TXT 반환)/
+        유저/앱비번(평문 1회 노출)/발송 큐 관리. 테스트 4종 PASS
+  - [x] **dev IdP** — compose에 Keycloak 26 (realm 자동 임포트: mail-admin 그룹,
+        maro/guest 유저, groups claim 매퍼)
+  - [x] **RR7 관리 UI** (`web/`, bun, :5573) — OIDC code flow 로그인(세션 쿠키),
+        `/admin` 레이아웃 가드(미로그인→login, 그룹 없음→403). 대시보드/도메인
+        (생성·활성·DKIM)/유저(생성·앱비번 발급·revoke)/발송 큐(필터·재시도).
+        e2e: maro→admin 접근+기능 왕복, guest 403, 발급 앱비번으로 IMAP LOGIN OK
+  - [ ] 일반 유저 셀프서비스 (본인 앱비번 관리) — 후속
 - [ ] **Phase 4** — 프로덕션화 (deliverability, 안티스팸, k8s, 백업)
 
 ## 개발
