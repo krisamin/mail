@@ -7,12 +7,14 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
 	"github.com/emersion/go-imap/v2/imapserver"
 	gosmtp "github.com/emersion/go-smtp"
 
+	"github.com/krisamin/mail/internal/api"
 	imapbackend "github.com/krisamin/mail/internal/imap"
 	"github.com/krisamin/mail/internal/queue"
 	smtpbackend "github.com/krisamin/mail/internal/smtp"
@@ -103,6 +105,26 @@ func main() {
 	} else {
 		log.Printf("maild: MAIL_RELAY_ADDR 미설정 — 발송 큐 워커 비활성 (외부 도메인 제출 거절)")
 	}
+
+	// Admin REST API (Phase 3) — OIDC Bearer 토큰 + admin 그룹 필요
+	apiAddr := env("MAIL_API_ADDR", ":8080")
+	authCfg := api.AuthConfig{
+		IssuerURL:  os.Getenv("MAIL_OIDC_ISSUER"),
+		ClientID:   os.Getenv("MAIL_OIDC_CLIENT_ID"),
+		AdminGroup: env("MAIL_ADMIN_GROUP", "mail-admin"),
+		// dev 전용: issuer 미설정이면 검증 없이 전부 admin 취급
+		InsecureSkipVerify: os.Getenv("MAIL_OIDC_ISSUER") == "",
+	}
+	authn, err := api.NewAuthenticator(context.Background(), authCfg)
+	if err != nil {
+		log.Fatalf("OIDC 초기화 실패: %v", err)
+	}
+	apiSrv := &http.Server{Addr: apiAddr, Handler: api.NewServer(st, authn)}
+	go func() {
+		log.Printf("maild: Admin API 시작 %s (issuer=%q group=%s)",
+			apiAddr, authCfg.IssuerURL, authCfg.AdminGroup)
+		errCh <- apiSrv.ListenAndServe()
+	}()
 
 	log.Fatalf("maild: 서버 종료: %v", <-errCh)
 }

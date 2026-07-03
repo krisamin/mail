@@ -159,3 +159,35 @@ type Store interface {
 	// MarkOutboundFailed는 영구 실패 처리 (재시도 소진).
 	MarkOutboundFailed(ctx context.Context, id int64, errMsg string) error
 }
+
+// AdminStore는 관리 플레인(Admin API)이 쓰는 확장 인터페이스 (Phase 3).
+// 프로토콜 경로(Store)와 분리해 서로의 표면적을 좁게 유지한다.
+type AdminStore interface {
+	Store
+
+	// 도메인
+	ListDomains(ctx context.Context) ([]*Domain, error)
+	CreateDomain(ctx context.Context, name string) (*Domain, error)
+	SetDomainActive(ctx context.Context, id int64, active bool) error
+	// SetDomainDKIM은 DKIM selector/개인키를 설정한다 (빈 문자열 = 해제).
+	SetDomainDKIM(ctx context.Context, id int64, selector, privateKeyPEM string) error
+
+	// 유저
+	ListUsers(ctx context.Context, domainID int64) ([]*User, error)
+	CreateUser(ctx context.Context, domainID int64, localPart string) (*User, error)
+	SetUserActive(ctx context.Context, id int64, active bool) error
+
+	// 앱 비밀번호 (DD-02: OAuth 로그인 후 발급)
+	ListAppPasswords(ctx context.Context, userID int64) ([]*AppPassword, error)
+	// CreateAppPassword는 해시를 저장하고 레코드를 돌려준다.
+	// 평문 생성은 호출자(API 레이어) 책임 — 발급 시 1회만 노출.
+	CreateAppPassword(ctx context.Context, userID int64, label, hash string) (*AppPassword, error)
+	RevokeAppPassword(ctx context.Context, id int64) error
+
+	// 발송 큐 관리
+	ListOutbound(ctx context.Context, status string, limit int) ([]*OutboundMessage, error)
+	// RetryOutbound는 failed 항목을 pending으로 되돌린다 (즉시 due).
+	RetryOutbound(ctx context.Context, id int64) error
+	// OutboundStats는 상태별 건수.
+	OutboundStats(ctx context.Context) (map[string]int64, error)
+}
