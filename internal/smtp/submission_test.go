@@ -15,7 +15,7 @@ func setupSubmission(t *testing.T) (*testEnv, string) {
 	t.Helper()
 	env := setupServers(t)
 
-	subSrv := gosmtp.NewServer(NewSubmissionBackend(env.store, "submit-test.krisam.in"))
+	subSrv := gosmtp.NewServer(NewSubmissionBackend(env.store, "submit-test.krisam.in", false))
 	subSrv.Domain = "submit-test.krisam.in"
 	subSrv.AllowInsecureAuth = true
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

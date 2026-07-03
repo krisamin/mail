@@ -14,6 +14,7 @@ import (
 	gosmtp "github.com/emersion/go-smtp"
 
 	imapbackend "github.com/krisamin/mail/internal/imap"
+	"github.com/krisamin/mail/internal/queue"
 	smtpbackend "github.com/krisamin/mail/internal/smtp"
 	"github.com/krisamin/mail/internal/store/postgres"
 )
@@ -69,7 +70,11 @@ func main() {
 	}()
 
 	// SMTP submission 서버 (AUTH 필수 — 앱 비밀번호로 우리 유저가 제출)
-	subSrv := gosmtp.NewServer(smtpbackend.NewSubmissionBackend(st, hostname))
+	// 발송 큐: MAIL_RELAY_ADDR가 설정된 경우에만 외부 도메인 제출 허용 + 워커 기동.
+	relayAddr := os.Getenv("MAIL_RELAY_ADDR")
+	enqueueEnabled := relayAddr != ""
+
+	subSrv := gosmtp.NewServer(smtpbackend.NewSubmissionBackend(st, hostname, enqueueEnabled))
 	subSrv.Addr = submissionAddr
 	subSrv.Domain = hostname
 	subSrv.ReadTimeout = 60 * time.Second
@@ -79,9 +84,24 @@ func main() {
 	// Phase 2 dev: TLS 없이 평문 AUTH 허용. 프로덕션에선 TLSConfig 필수.
 	subSrv.AllowInsecureAuth = true
 	go func() {
-		log.Printf("maild: SMTP submission 서버 시작 %s (AllowInsecureAuth=dev)", submissionAddr)
+		log.Printf("maild: SMTP submission 서버 시작 %s (AllowInsecureAuth=dev, 외부발송=%v)",
+			submissionAddr, enqueueEnabled)
 		errCh <- subSrv.ListenAndServe()
 	}()
+
+	// 발송 큐 워커 (relay 설정 시에만)
+	if enqueueEnabled {
+		sender := queue.NewRelaySender(queue.RelayConfig{
+			Addr:     relayAddr,
+			Username: os.Getenv("MAIL_RELAY_USERNAME"),
+			Password: os.Getenv("MAIL_RELAY_PASSWORD"),
+			StartTLS: os.Getenv("MAIL_RELAY_STARTTLS") != "false",
+		})
+		worker := queue.NewWorker(st, sender, queue.Config{})
+		go worker.Run(context.Background())
+	} else {
+		log.Printf("maild: MAIL_RELAY_ADDR 미설정 — 발송 큐 워커 비활성 (외부 도메인 제출 거절)")
+	}
 
 	log.Fatalf("maild: 서버 종료: %v", <-errCh)
 }

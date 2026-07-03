@@ -17,16 +17,20 @@ import (
 // 수신(MX)과 반대로 **AUTH가 필수**다 — 우리 유저가 앱 비밀번호로 인증하고
 // 메일을 내보내는 문. DD-02: 메일 앱 인증 = 앱 비밀번호.
 //
-// Phase 2-2 범위: 로컬 도메인 수신자에게 직접 배달.
-// 외부 도메인 발송은 Phase 2-3 발송 큐가 붙기 전까지 명시적으로 거절한다.
+// 라우팅: 로컬 도메인 수신자는 직접 배달, 외부 도메인은 발송 큐로
+// (Phase 2-3). 큐가 없으면(EnqueueDisabled) 외부 도메인은 550 거절.
 type SubmissionBackend struct {
 	store    store.Store
 	hostname string
+	// enqueueEnabled가 false면 외부 도메인 수신자를 거절한다
+	// (발송 큐 워커가 안 도는 구성 — dev에서 relay 미설정일 때).
+	enqueueEnabled bool
 }
 
 // NewSubmissionBackend는 submission 백엔드를 만든다.
-func NewSubmissionBackend(st store.Store, hostname string) *SubmissionBackend {
-	return &SubmissionBackend{store: st, hostname: hostname}
+// enqueueEnabled: 외부 도메인 수신자를 발송 큐에 넣을지 여부.
+func NewSubmissionBackend(st store.Store, hostname string, enqueueEnabled bool) *SubmissionBackend {
+	return &SubmissionBackend{store: st, hostname: hostname, enqueueEnabled: enqueueEnabled}
 }
 
 // NewSession은 연결마다 불린다.
@@ -51,8 +55,9 @@ type SubmissionSession struct {
 	user     *store.User // 인증 성공 시 채워짐
 	userAddr string      // 인증에 쓴 주소 (envelope from 검증용)
 
-	from  string
-	rcpts []rcpt
+	from     string
+	rcpts    []rcpt   // 로컬 배달 대상
+	external []string // 외부 도메인 → 발송 큐 대상
 }
 
 var _ gosmtp.Session = (*SubmissionSession)(nil)
@@ -128,12 +133,16 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 
 	if _, err := s.backend.store.FindDomain(ctx, domain); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			// 외부 도메인 → 발송 큐(Phase 2-3)가 붙기 전까진 정직하게 거절
-			return &gosmtp.SMTPError{
-				Code:         550,
-				EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
-				Message:      "relaying to external domains not yet supported",
+			// 외부 도메인 → 발송 큐 (활성화된 경우만)
+			if !s.backend.enqueueEnabled {
+				return &gosmtp.SMTPError{
+					Code:         550,
+					EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
+					Message:      "relaying to external domains is disabled",
+				}
 			}
+			s.external = append(s.external, to)
+			return nil
 		}
 		return err
 	}
@@ -153,10 +162,9 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	return nil
 }
 
-// Data는 본문을 받아 로컬 수신자에게 배달한다.
-// (수신 경로와 같은 배달 로직 재사용 — Session.deliver)
+// Data는 본문을 받아 로컬 수신자에게 배달하고, 외부 수신자는 발송 큐에 넣는다.
 func (s *SubmissionSession) Data(r io.Reader) error {
-	if len(s.rcpts) == 0 {
+	if len(s.rcpts) == 0 && len(s.external) == 0 {
 		return &gosmtp.SMTPError{
 			Code:         503,
 			EnhancedCode: gosmtp.EnhancedCode{5, 5, 1},
@@ -187,20 +195,38 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		}
 		delivered++
 	}
-	if delivered == 0 {
+
+	// 외부 수신자 → 발송 큐 (Received 헤더는 서버 통과 증적으로 동일하게 찍음)
+	enqueued := 0
+	if len(s.external) > 0 {
+		stamped := inbound.receivedHeader(s.external[0], now)
+		stamped = append(stamped, raw...)
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		err := s.backend.store.EnqueueOutbound(ctx, s.from, s.external, stamped)
+		cancel()
+		if err != nil {
+			log.Printf("submission: 큐 삽입 실패 from=%s rcpts=%v: %v", s.from, s.external, err)
+		} else {
+			enqueued = len(s.external)
+		}
+	}
+
+	if delivered == 0 && enqueued == 0 {
 		return &gosmtp.SMTPError{
 			Code:         451,
 			EnhancedCode: gosmtp.EnhancedCode{4, 3, 0},
 			Message:      "delivery failed, try again later",
 		}
 	}
-	log.Printf("submission: 제출 완료 user=%s rcpts=%d/%d size=%d", s.userAddr, delivered, len(s.rcpts), len(raw))
+	log.Printf("submission: 제출 완료 user=%s local=%d/%d queued=%d/%d size=%d",
+		s.userAddr, delivered, len(s.rcpts), enqueued, len(s.external), len(raw))
 	return nil
 }
 
 func (s *SubmissionSession) Reset() {
 	s.from = ""
 	s.rcpts = nil
+	s.external = nil
 }
 
 func (s *SubmissionSession) Logout() error {

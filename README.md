@@ -68,7 +68,11 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
   - [x] **2-2. SMTP AUTH + submission** (`internal/smtp/submission.go`, dev :2587) —
         SASL PLAIN(앱 비밀번호) 필수, envelope from=인증 계정 강제(위조 553),
         로컬 배달, 외부 도메인은 발송 큐 전까지 550. 테스트 5종 PASS
-  - [ ] 2-3. 발송 큐 (재시도/백오프, bounce/DSN) — relay 결정 필요
+  - [x] **2-3. 발송 큐** (`internal/queue` + 마이그레이션 0002) — outbound_queue
+        rcpt 단위 적재, 워커 폴링(FOR UPDATE SKIP LOCKED), 지수 백오프 재시도
+        (1m→2m→…, 기본 6회), 영구 오류(5xx) 즉시 failed. Sender 인터페이스 뒤에
+        RelaySender(DD-04, STARTTLS+PLAIN) — relay 계정만 채우면 됨(`MAIL_RELAY_*`).
+        테스트 5종: 성공/백오프/영구오류/소진/제출→큐→relay 실발송 왕복. bounce DSN은 TODO
   - [ ] 2-4. DKIM 서명 + 수신 SPF/DKIM/DMARC 검증
 - [ ] **Phase 3** — Admin REST API + React Router v7 관리 UI
 - [ ] **Phase 4** — 프로덕션화 (deliverability, 안티스팸, k8s, 백업)

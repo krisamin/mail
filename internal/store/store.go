@@ -78,6 +78,27 @@ type AppPassword struct {
 	RevokedAt *time.Time
 }
 
+// OutboundStatus는 발송 큐 항목의 상태.
+const (
+	OutboundPending = "pending" // 발송 대기 (재시도 포함)
+	OutboundSent    = "sent"    // 발송 완료
+	OutboundFailed  = "failed"  // 영구 실패 (bounce 대상)
+)
+
+// OutboundMessage는 발송 큐의 한 항목. 수신자(rcpt) 단위 —
+// 재시도/실패를 수신자별로 독립 추적한다.
+type OutboundMessage struct {
+	ID            int64
+	EnvelopeFrom  string
+	EnvelopeRcpt  string
+	Raw           []byte
+	Status        string
+	Attempts      int
+	NextAttemptAt time.Time
+	LastError     string
+	CreatedAt     time.Time
+}
+
 // MailboxStatus는 SELECT/STATUS가 요구하는 집계값.
 type MailboxStatus struct {
 	NumMessages uint32
@@ -119,4 +140,17 @@ type Store interface {
 	// uids가 nil이면 전체, 아니면 해당 UID들만 (IMAP UID EXPUNGE 대응).
 	ExpungeDeleted(ctx context.Context, mailboxID int64, uids []uint32) ([]uint32, error)
 	CopyMessage(ctx context.Context, messageID, destMailboxID int64) (*Message, error)
+
+	// 발송 큐 (Phase 2-3)
+	// EnqueueOutbound는 수신자별로 발송 항목을 큐에 넣는다.
+	EnqueueOutbound(ctx context.Context, from string, rcpts []string, raw []byte) error
+	// DueOutbound는 발송 시각이 지난 pending 항목을 최대 limit개 가져온다.
+	// FOR UPDATE SKIP LOCKED 의미론 — 여러 워커가 떠도 같은 행을 안 잡는다.
+	DueOutbound(ctx context.Context, limit int) ([]*OutboundMessage, error)
+	// MarkOutboundSent는 발송 성공 처리.
+	MarkOutboundSent(ctx context.Context, id int64) error
+	// MarkOutboundRetry는 실패 기록 + 다음 시도 시각 설정. attempts는 증가.
+	MarkOutboundRetry(ctx context.Context, id int64, errMsg string, nextAttempt time.Time) error
+	// MarkOutboundFailed는 영구 실패 처리 (재시도 소진).
+	MarkOutboundFailed(ctx context.Context, id int64, errMsg string) error
 }

@@ -28,6 +28,7 @@ services:
       # initdb 훅: 빈 볼륨 첫 기동 시 *.sql 알파벳 순 실행.
       # up 마이그레이션만 마운트 (down은 롤백용이라 제외).
       - ./internal/store/migrations/0001_init.up.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
+      - ./internal/store/migrations/0002_outbound_queue.up.sql:/docker-entrypoint-initdb.d/0002_outbound_queue.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-mail}"]
       interval: 5s
