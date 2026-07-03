@@ -7,8 +7,18 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ── 에러 ────────────────────────────────────────────────────
+
+// ErrNotFound는 조회 대상이 없을 때. 구현체가 이 sentinel을 반환해야
+// 소비자(IMAP 백엔드 등)가 구현체 패키지를 import하지 않고 분기할 수 있다.
+var ErrNotFound = errors.New("not found")
+
+// ErrAuthFailed는 인증 실패.
+var ErrAuthFailed = errors.New("authentication failed")
 
 // ── 도메인 타입 ─────────────────────────────────────────────
 
@@ -100,6 +110,8 @@ type Store interface {
 	ListMessages(ctx context.Context, mailboxID int64) ([]*Message, error)
 	GetMessageBlob(ctx context.Context, messageID int64) ([]byte, error)
 	SetFlags(ctx context.Context, messageID int64, flags []string) error
-	ExpungeDeleted(ctx context.Context, mailboxID int64) ([]uint32, error)
+	// ExpungeDeleted는 \Deleted 메시지를 실제 삭제한다.
+	// uids가 nil이면 전체, 아니면 해당 UID들만 (IMAP UID EXPUNGE 대응).
+	ExpungeDeleted(ctx context.Context, mailboxID int64, uids []uint32) ([]uint32, error)
 	CopyMessage(ctx context.Context, messageID, destMailboxID int64) (*Message, error)
 }

@@ -166,27 +166,36 @@ func (s *Store) SetFlags(ctx context.Context, messageID int64, flags []string) e
 }
 
 // ExpungeDeleted는 \Deleted 플래그가 붙은 메시지를 실제 삭제하고, 삭제된 UID들을 반환한다.
-func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID int64) ([]uint32, error) {
+// uids가 nil이면 메일박스 전체 대상, 아니면 해당 UID들만 (IMAP UID EXPUNGE).
+func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID int64, uids []uint32) ([]uint32, error) {
 	const q = `
 		DELETE FROM messages m
 		WHERE m.mailbox_id = $1
+		  AND ($2::bigint[] IS NULL OR m.uid = ANY($2))
 		  AND EXISTS (SELECT 1 FROM message_flags f
 		              WHERE f.message_id = m.id AND f.flag = '\Deleted')
 		RETURNING m.uid`
-	rows, err := s.pool.Query(ctx, q, mailboxID)
+	var uidFilter []int64
+	if uids != nil {
+		uidFilter = make([]int64, len(uids))
+		for i, u := range uids {
+			uidFilter[i] = int64(u)
+		}
+	}
+	rows, err := s.pool.Query(ctx, q, mailboxID, uidFilter)
 	if err != nil {
 		return nil, fmt.Errorf("expunge: %w", err)
 	}
 	defer rows.Close()
-	var uids []uint32
+	var out []uint32
 	for rows.Next() {
 		var uid int64
 		if err := rows.Scan(&uid); err != nil {
 			return nil, err
 		}
-		uids = append(uids, uint32(uid))
+		out = append(out, uint32(uid))
 	}
-	return uids, rows.Err()
+	return out, rows.Err()
 }
 
 // CopyMessage는 메시지를 다른 메일박스로 복사한다 (blob은 공유, 메타 복제).

@@ -12,11 +12,11 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// ErrNotFound는 조회 대상이 없을 때.
-var ErrNotFound = errors.New("not found")
+// ErrNotFound는 조회 대상이 없을 때 (store.ErrNotFound 별칭 — 하위호환).
+var ErrNotFound = store.ErrNotFound
 
-// ErrAuthFailed는 인증 실패.
-var ErrAuthFailed = errors.New("authentication failed")
+// ErrAuthFailed는 인증 실패 (store.ErrAuthFailed 별칭 — 하위호환).
+var ErrAuthFailed = store.ErrAuthFailed
 
 // splitAddress는 'maro@krisam.in' → ('maro', 'krisam.in').
 func splitAddress(address string) (local, domain string, err error) {

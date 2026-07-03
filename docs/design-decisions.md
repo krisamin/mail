@@ -59,3 +59,22 @@ maildir 개념 참고하되 k8s 환경이라 오브젝트 스토어가 깔끔. I
 Go(백엔드/프로토콜) + Bun·React Router v7(프론트) + PostgreSQL + OIDC IdP.
 emersion 생태계(go-smtp/go-imap/go-message/go-msgauth/go-sasl)를 프로토콜
 기반으로 채택.
+
+## DD-06. IMAP 세션 동시성 — Phase 1은 세션 스냅샷
+
+go-imap의 참조 구현(imapmemserver)은 in-memory tracker로 세션 간 실시간
+업데이트(EXPUNGE/EXISTS 브로드캐스트)를 처리하지만, 우리는 상태가 Postgres에
+있으므로 그대로 못 쓴다.
+
+**결정 (Phase 1)**: SELECT 시 메일박스의 (msgID, UID) 목록을 세션 메모리에
+스냅샷으로 뜬다. 시퀀스 번호 = 스냅샷 인덱스+1. 다른 세션이 만든 변경은
+Poll(NOOP 등 명령 사이)과 Idle(15초 주기 폴링)에서 스냅샷↔DB 비교로 반영:
+사라진 UID → EXPUNGE 응답, 새 UID → 스냅샷 뒤에 추가 + EXISTS 응답.
+
+- 장점: store 인터페이스 변경 없음. RFC 3501의 "seqnum은 세션 내 일관"
+  요구를 스냅샷이 자연스럽게 만족.
+- 한계: 실시간 push가 아니라 폴링. IDLE 알림이 최대 15초 지연.
+- **Phase 2+**: Postgres LISTEN/NOTIFY로 tracker를 만들어 폴링 제거 예정.
+
+플래그 등 가변 메타는 스냅샷에 넣지 않고 명령마다 DB에서 읽는다
+(스냅샷은 신원(msgID/UID)만 고정, 상태는 항상 최신).

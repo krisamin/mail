@@ -157,7 +157,7 @@ func TestFullFlow(t *testing.T) {
 
 	// 7) Expunge (msg에 \Deleted 달고 지우기)
 	_ = s.SetFlags(ctx, msg.ID, []string{`\Deleted`})
-	expunged, err := s.ExpungeDeleted(ctx, inbox.ID)
+	expunged, err := s.ExpungeDeleted(ctx, inbox.ID, nil)
 	if err != nil || len(expunged) != 1 || expunged[0] != 1 {
 		t.Fatalf("Expunge 이상: %v %v", err, expunged)
 	}

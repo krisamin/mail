@@ -45,8 +45,12 @@ test: ## 유닛 테스트 (DB 불필요한 것만)
 	go test ./... -short
 
 .PHONY: db-test
-db-test: ## 통합 테스트 (dev DB 필요)
-	MAIL_TEST_DSN="$(MAIL_TEST_DSN)" go test ./internal/store/... -v
+db-test: ## 통합 테스트 (dev DB 필요 — store + imap)
+	MAIL_TEST_DSN="$(MAIL_TEST_DSN)" go test ./internal/store/... ./internal/imap/... -v
+
+.PHONY: run
+run: ## maild 실행 (IMAP :1143, dev DB 필요)
+	MAIL_DSN="$(MAIL_DSN)" go run ./cmd/maild
 
 .PHONY: check
 check: build vet ## 커밋 전 검증 (빌드 + vet)
