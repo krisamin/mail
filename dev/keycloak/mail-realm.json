@@ -1,0 +1,68 @@
+{
+  "realm": "mail",
+  "enabled": true,
+  "registrationAllowed": false,
+  "groups": [
+    { "name": "mail-admin", "path": "/mail-admin" }
+  ],
+  "users": [
+    {
+      "username": "maro",
+      "email": "maro@krisam.in",
+      "firstName": "Maro",
+      "lastName": "Park",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "marodev", "temporary": false }],
+      "groups": ["/mail-admin"]
+    },
+    {
+      "username": "guest",
+      "email": "guest@krisam.in",
+      "firstName": "Guest",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "guestdev", "temporary": false }],
+      "groups": []
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "mail-web",
+      "name": "mail web",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "mail-web-dev-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:5573/*", "http://127.0.0.1:5573/*"],
+      "webOrigins": ["http://localhost:5573"],
+      "defaultClientScopes": ["openid", "profile", "email", "groups"],
+      "optionalClientScopes": []
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "groups",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "false", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "claim.name": "groups"
+          }
+        }
+      ]
+    }
+  ]
+}

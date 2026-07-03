@@ -29,11 +29,26 @@ services:
       # up 마이그레이션만 마운트 (down은 롤백용이라 제외).
       - ./internal/store/migrations/0001_init.up.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
       - ./internal/store/migrations/0002_outbound_queue.up.sql:/docker-entrypoint-initdb.d/0002_outbound_queue.sql:ro
+      - ./internal/store/migrations/0003_dkim_keys.up.sql:/docker-entrypoint-initdb.d/0003_dkim_keys.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-mail}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  # dev IdP (Phase 3) — realm 자동 임포트: mail-admin 그룹 + maro/guest 유저.
+  # 프로덕션은 popstar의 실 IdP(Authentik/Keycloak)로 교체 (issuer URL만 변경).
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm", "--http-port=8480"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admindev
+    ports:
+      - "${KEYCLOAK_PORT:-8480}:8480"
+    volumes:
+      - ./dev/keycloak:/opt/keycloak/data/import:ro
     restart: unless-stopped
 
 volumes:
