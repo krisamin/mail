@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -188,7 +189,10 @@ func (s *Server) handlePatchDomain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"active": *req.Active})
 }
 
-// handleGenerateDKIM은 Ed25519 키를 생성해 저장하고 DNS TXT 값을 돌려준다.
+// handleGenerateDKIM은 DKIM 키를 생성해 저장하고 DNS TXT 값을 돌려준다.
+// keyType: "rsa2048"(기본) | "ed25519".
+// 기본이 RSA인 이유: Gmail 등 대형 프로바이더가 Ed25519 DKIM(RFC 8463)을
+// 사실상 검증하지 못한다 — Ed25519로만 서명하면 무서명 취급될 수 있다.
 func (s *Server) handleGenerateDKIM(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -197,6 +201,7 @@ func (s *Server) handleGenerateDKIM(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Selector string `json:"selector"`
+		KeyType  string `json:"keyType"`
 	}
 	if err := decodeBody(r, &req); err != nil || strings.TrimSpace(req.Selector) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body (selector required)")
@@ -204,11 +209,37 @@ func (s *Server) handleGenerateDKIM(w http.ResponseWriter, r *http.Request) {
 	}
 	selector := strings.ToLower(strings.TrimSpace(req.Selector))
 
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "keygen failed")
+	var (
+		priv   any
+		dnsTxt string
+	)
+	switch req.KeyType {
+	case "", "rsa2048":
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "keygen failed")
+			return
+		}
+		der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "marshal failed")
+			return
+		}
+		priv = key
+		dnsTxt = "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der)
+	case "ed25519":
+		pub, key, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "keygen failed")
+			return
+		}
+		priv = key
+		dnsTxt = "v=DKIM1; k=ed25519; p=" + base64.StdEncoding.EncodeToString(pub)
+	default:
+		writeError(w, http.StatusBadRequest, "keyType must be rsa2048 or ed25519")
 		return
 	}
+
 	der, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "marshal failed")
@@ -223,7 +254,7 @@ func (s *Server) handleGenerateDKIM(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"selector": selector,
 		"dnsName":  selector + "._domainkey",
-		"dnsTxt":   "v=DKIM1; k=ed25519; p=" + base64.StdEncoding.EncodeToString(pub),
+		"dnsTxt":   dnsTxt,
 	})
 }
 
@@ -254,17 +285,14 @@ func dkimPublicTXT(pemText string) (string, error) {
 	case ed25519.PrivateKey:
 		pub := k.Public().(ed25519.PublicKey)
 		return "v=DKIM1; k=ed25519; p=" + base64.StdEncoding.EncodeToString(pub), nil
-	default:
-		// RSA 등 — SPKI DER로
-		signer, ok := key.(interface{ Public() any })
-		if !ok {
-			return "", fmt.Errorf("unsupported key")
-		}
-		der, err := x509.MarshalPKIXPublicKey(signer.Public())
+	case *rsa.PrivateKey:
+		der, err := x509.MarshalPKIXPublicKey(&k.PublicKey)
 		if err != nil {
 			return "", err
 		}
 		return "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der), nil
+	default:
+		return "", fmt.Errorf("unsupported key type %T", key)
 	}
 }
 

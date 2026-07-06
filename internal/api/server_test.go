@@ -105,17 +105,38 @@ func TestAdminFullFlow(t *testing.T) {
 	}
 	t.Log("✔ 중복 409 / 유효성 400")
 
-	// 2) DKIM 키 생성
+	// 2) DKIM 키 생성 — 기본 RSA-2048 (Gmail 호환), ed25519는 옵션
 	code, dkim, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/dkim", domID),
 		map[string]string{"selector": "mail"})
 	if code != 200 {
 		t.Fatalf("DKIM 생성: %d %v", code, dkim)
 	}
 	dnsTxt := dkim["dnsTxt"].(string)
-	if !strings.HasPrefix(dnsTxt, "v=DKIM1; k=ed25519; p=") {
-		t.Fatalf("TXT 형식 이상: %s", dnsTxt)
+	if !strings.HasPrefix(dnsTxt, "v=DKIM1; k=rsa; p=") {
+		t.Fatalf("기본은 RSA여야: %s", dnsTxt)
 	}
-	t.Logf("✔ DKIM Ed25519 생성: %s = %.40s...", dkim["dnsName"], dnsTxt)
+	t.Logf("✔ DKIM RSA-2048 생성(기본): %s = %.40s...", dkim["dnsName"], dnsTxt)
+
+	// ed25519 명시 생성도 동작 (키 교체 = 재생성)
+	code, dkimEd, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/dkim", domID),
+		map[string]string{"selector": "mail", "keyType": "ed25519"})
+	if code != 200 || !strings.HasPrefix(dkimEd["dnsTxt"].(string), "v=DKIM1; k=ed25519; p=") {
+		t.Fatalf("ed25519 생성: %d %v", code, dkimEd)
+	}
+	// 잘못된 keyType → 400
+	code, _, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/dkim", domID),
+		map[string]string{"selector": "mail", "keyType": "dsa"})
+	if code != 400 {
+		t.Fatalf("잘못된 keyType은 400이어야: %d", code)
+	}
+	// 이후 검증은 RSA 기본으로 다시 생성한 상태 기준
+	code, dkim, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/dkim", domID),
+		map[string]string{"selector": "mail"})
+	if code != 200 {
+		t.Fatalf("DKIM 재생성: %d", code)
+	}
+	dnsTxt = dkim["dnsTxt"].(string)
+	t.Log("✔ ed25519 옵션 + keyType 유효성 400")
 
 	// 목록에서 공개키 TXT 재계산돼 나오는지 (개인키는 안 내려옴)
 	code, _, domains := call(t, srv, "GET", "/api/admin/domains", nil)

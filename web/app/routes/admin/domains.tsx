@@ -34,7 +34,13 @@ export const action = async ({ request }: Route.ActionArgs) => {
         const result = await apiFetch<DKIMResult>(
           user.idToken,
           `/api/admin/domains/${form.get("id")}/dkim`,
-          { method: "POST", body: { selector: String(form.get("selector") ?? "mail") } },
+          {
+            method: "POST",
+            body: {
+              selector: String(form.get("selector") ?? "mail"),
+              keyType: String(form.get("keyType") ?? "rsa2048"),
+            },
+          },
         );
         return { ok: true as const, dkim: result };
       }
@@ -159,6 +165,14 @@ export default function Domains({ loaderData, actionData }: Route.ComponentProps
                         defaultValue="mail"
                         className="w-24 rounded border border-line bg-bg-0 px-2 py-0.5 text-xs outline-none focus:border-accent"
                       />
+                      <select
+                        name="keyType"
+                        defaultValue="rsa2048"
+                        className="rounded border border-line bg-bg-0 px-1.5 py-0.5 text-xs outline-none focus:border-accent"
+                      >
+                        <option value="rsa2048">RSA-2048 (호환 ◎)</option>
+                        <option value="ed25519">Ed25519</option>
+                      </select>
                       <button type="submit" disabled={busy} className="text-xs text-accent hover:underline">
                         DKIM 키 생성
                       </button>
