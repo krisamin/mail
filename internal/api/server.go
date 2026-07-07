@@ -41,6 +41,9 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("DELETE /api/admin/domains/{id}/dkim", s.handleClearDKIM)
 	admin.HandleFunc("GET /api/admin/domains/{id}/users", s.handleListUsers)
 	admin.HandleFunc("POST /api/admin/domains/{id}/users", s.handleCreateUser)
+	admin.HandleFunc("GET /api/admin/domains/{id}/aliases", s.handleListAliases)
+	admin.HandleFunc("POST /api/admin/domains/{id}/aliases", s.handleCreateAlias)
+	admin.HandleFunc("DELETE /api/admin/aliases/{id}", s.handleDeleteAlias)
 	admin.HandleFunc("PATCH /api/admin/users/{id}", s.handlePatchUser)
 	admin.HandleFunc("GET /api/admin/users/{id}/app-passwords", s.handleListAppPasswords)
 	admin.HandleFunc("POST /api/admin/users/{id}/app-passwords", s.handleCreateAppPassword)
@@ -55,6 +58,8 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	// OIDC email 클레임 → 메일 계정 매핑. 소유권 검증 필수.
 	me := http.NewServeMux()
 	me.HandleFunc("GET /api/me/account", s.handleMeAccount)
+	me.HandleFunc("GET /api/me/gate", s.handleMeGate)
+	me.HandleFunc("GET /api/me/aliases", s.handleMeAliases)
 	me.HandleFunc("GET /api/me/app-passwords", s.handleMeListAppPasswords)
 	me.HandleFunc("POST /api/me/app-passwords", s.handleMeCreateAppPassword)
 	me.HandleFunc("DELETE /api/me/app-passwords/{id}", s.handleMeRevokeAppPassword)

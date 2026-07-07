@@ -97,16 +97,25 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 	}), nil
 }
 
-// Mail은 AUTH 필수 + envelope from이 인증 계정과 일치해야 한다 (발신자 위조 방지).
+// Mail은 AUTH 필수 + envelope from이 인증 계정 소유 주소여야 한다
+// (발신자 위조 방지). 본인 주소 또는 본인에게 걸린 별칭(와일드카드 포함).
 func (s *SubmissionSession) Mail(from string, opts *gosmtp.MailOptions) error {
 	if s.user == nil {
 		return gosmtp.ErrAuthRequired
 	}
 	if strings.ToLower(from) != s.userAddr {
-		return &gosmtp.SMTPError{
-			Code:         553,
-			EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
-			Message:      "sender address must match authenticated user",
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		ok, err := s.backend.store.CanSendAs(ctx, s.user.ID, from)
+		cancel()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return &gosmtp.SMTPError{
+				Code:         553,
+				EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
+				Message:      "sender address must match authenticated user or an owned alias",
+			}
 		}
 	}
 	s.from = from
@@ -147,7 +156,7 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 		return err
 	}
 
-	u, err := s.backend.store.FindUserByAddress(ctx, to)
+	u, err := s.backend.store.ResolveAddress(ctx, to)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return &gosmtp.SMTPError{

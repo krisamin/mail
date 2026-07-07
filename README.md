@@ -92,6 +92,19 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
         `/account` 페이지. email 클레임→메일 계정 매핑, 본인 앱비번 발급(평문
         1회)/revoke(소유권 검증=IDOR 방지), 미개설 계정 안내. e2e: guest UI
         발급 앱비번으로 IMAP LOGIN OK, maro의 타인 비번 revoke 404
+  - [x] **별칭 + 와일드카드** (마이그레이션 0004) — `hello@dom→user` 정확 별칭,
+        `*@dom` catch-all. 해석 우선순위: 실제 유저 > 정확 별칭 > 와일드카드.
+        수신(MX)/submission 모두 ResolveAddress로 배달, 발신은 CanSendAs로
+        본인 별칭 envelope from 허용(타인 별칭 553). admin UI(유저 페이지
+        별칭 섹션) + /account에 내 수신 주소 표시. 실기동 e2e 검증
+  - [x] **멀티도메인 내부 라우팅** — 서버에 있는 도메인끼리(krisam.in↔kirby.so)는
+        발송 큐/relay를 안 거치고 직접 배달 (TestInternalRoutingTwoDomains,
+        큐 0건 검증)
+  - [x] **로그인 게이트** — OIDC email의 도메인이 서버에 등록돼 있어야 로그인
+        (콜백에서 /api/me/gate 판정, 미등록 도메인 403 + 세션 미생성. outsider
+        e2e 검증). 도메인은 있고 계정만 없으면 로그인 허용 + 미개설 안내
+  - [x] **relay 결정: Resend** — smtp.resend.com:587, user='resend', pw=API키
+        (.env.example 참고). Resend 대시보드 도메인 검증 후 활성화
 - [ ] **Phase 4** — 프로덕션화 (deliverability, 안티스팸, k8s, 백업)
 
 ## 개발

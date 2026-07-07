@@ -85,11 +85,12 @@ func (s *Session) Mail(from string, opts *gosmtp.MailOptions) error {
 
 // Rcpt는 수신자가 우리 유저인지 검증한다. 아니면 550 5.1.1.
 // ★여기서 거절해야 backscatter(수락 후 반송 스팸)를 안 만든다.
+// 별칭·와일드카드도 배달 대상 (ResolveAddress).
 func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
-	u, err := s.backend.store.FindUserByAddress(ctx, to)
+	u, err := s.backend.store.ResolveAddress(ctx, to)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return &gosmtp.SMTPError{

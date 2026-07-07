@@ -3,7 +3,10 @@
   "enabled": true,
   "registrationAllowed": false,
   "groups": [
-    { "name": "mail-admin", "path": "/mail-admin" }
+    {
+      "name": "mail-admin",
+      "path": "/mail-admin"
+    }
   ],
   "users": [
     {
@@ -13,8 +16,16 @@
       "lastName": "Park",
       "enabled": true,
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "marodev", "temporary": false }],
-      "groups": ["/mail-admin"]
+      "credentials": [
+        {
+          "type": "password",
+          "value": "marodev",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/mail-admin"
+      ]
     },
     {
       "username": "guest",
@@ -23,7 +34,29 @@
       "lastName": "User",
       "enabled": true,
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "guestdev", "temporary": false }],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "guestdev",
+          "temporary": false
+        }
+      ],
+      "groups": []
+    },
+    {
+      "username": "outsider",
+      "enabled": true,
+      "email": "outsider@example.com",
+      "emailVerified": true,
+      "firstName": "Out",
+      "lastName": "Sider",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "outsiderdev",
+          "temporary": false
+        }
+      ],
       "groups": []
     }
   ],
@@ -37,8 +70,13 @@
       "protocol": "openid-connect",
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
-      "redirectUris": ["http://localhost:5573/*", "http://127.0.0.1:5573/*"],
-      "webOrigins": ["http://localhost:5573"],
+      "redirectUris": [
+        "http://localhost:5573/*",
+        "http://127.0.0.1:5573/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5573"
+      ],
       "protocolMappers": [
         {
           "name": "groups",

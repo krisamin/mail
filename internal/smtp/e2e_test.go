@@ -50,7 +50,7 @@ func setupServers(t *testing.T) *testEnv {
 	}
 	t.Cleanup(st.Close)
 
-	_, _ = st.Pool().Exec(ctx, `TRUNCATE domains, users, app_passwords, mailboxes, messages, message_flags, message_blobs RESTART IDENTITY CASCADE`)
+	_, _ = st.Pool().Exec(ctx, `TRUNCATE domains, users, app_passwords, mailboxes, messages, message_flags, message_blobs, outbound_queue, aliases RESTART IDENTITY CASCADE`)
 
 	// 시드: krisam.in 도메인 + 유저 2명 (maro는 INBOX 있음, shiro는 INBOX 없음 — 자동생성 검증)
 	var domainID int64

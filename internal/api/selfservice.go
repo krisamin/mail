@@ -43,6 +43,51 @@ func (s *Server) handleMeAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toUserDTO(u))
 }
 
+// handleMeGate는 로그인 게이트 판정용 — 토큰 email의 도메인이 우리
+// 서버에 등록돼 있는지. RR7 콜백이 이걸로 로그인 허용/거부를 결정한다
+// (도메인 없으면 거부, 도메인 있는데 계정만 없으면 로그인은 허용).
+func (s *Server) handleMeGate(w http.ResponseWriter, r *http.Request) {
+	id := IdentityFrom(r.Context())
+	if id == nil || id.Email == "" {
+		writeError(w, http.StatusUnauthorized, "email claim required")
+		return
+	}
+	email := strings.ToLower(id.Email)
+	at := strings.LastIndex(email, "@")
+	if at < 0 {
+		writeError(w, http.StatusBadRequest, "invalid email claim")
+		return
+	}
+	domain := email[at+1:]
+
+	out := map[string]bool{"domainExists": false, "accountExists": false}
+	if _, err := s.store.FindDomain(r.Context(), domain); err == nil {
+		out["domainExists"] = true
+		if _, err := s.store.FindUserByAddress(r.Context(), email); err == nil {
+			out["accountExists"] = true
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleMeAliases는 본인에게 걸린 별칭 목록 (발신 가능 주소 안내용).
+func (s *Server) handleMeAliases(w http.ResponseWriter, r *http.Request) {
+	u := s.resolveMe(w, r)
+	if u == nil {
+		return
+	}
+	aliases, err := s.store.ListUserAliases(r.Context(), u.ID)
+	if err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+	out := make([]aliasDTO, 0, len(aliases))
+	for _, a := range aliases {
+		out = append(out, toAliasDTO(a))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleMeListAppPasswords는 본인 앱 비밀번호 목록.
 func (s *Server) handleMeListAppPasswords(w http.ResponseWriter, r *http.Request) {
 	u := s.resolveMe(w, r)

@@ -1,15 +1,23 @@
 import { Form, Link, useNavigation } from "react-router";
 import type { Route } from "./+types/users";
-import { ApiError, apiFetch, type AppPassword, type Domain, type User } from "~/lib/api.server";
+import {
+  ApiError,
+  apiFetch,
+  type Alias,
+  type AppPassword,
+  type Domain,
+  type User,
+} from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
   const domainId = params.domainId;
 
-  const [domains, users] = await Promise.all([
+  const [domains, users, aliases] = await Promise.all([
     apiFetch<Domain[]>(user.idToken, "/api/admin/domains"),
     apiFetch<User[]>(user.idToken, `/api/admin/domains/${domainId}/users`),
+    apiFetch<Alias[]>(user.idToken, `/api/admin/domains/${domainId}/aliases`),
   ]);
   const domain = (domains ?? []).find((d) => String(d.id) === domainId);
   if (!domain) throw new Response("도메인을 찾을 수 없어요", { status: 404 });
@@ -22,7 +30,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         (await apiFetch<AppPassword[]>(user.idToken, `/api/admin/users/${u.id}/app-passwords`)) ?? [];
     }),
   );
-  return { domain, users: users ?? [], appPasswords };
+  return { domain, users: users ?? [], aliases: aliases ?? [], appPasswords };
 };
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
@@ -60,6 +68,22 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         });
         return { ok: true as const };
       }
+      case "create-alias": {
+        await apiFetch(user.idToken, `/api/admin/domains/${params.domainId}/aliases`, {
+          method: "POST",
+          body: {
+            localPart: String(form.get("localPart") ?? ""),
+            userId: Number(form.get("userId")),
+          },
+        });
+        return { ok: true as const };
+      }
+      case "delete-alias": {
+        await apiFetch(user.idToken, `/api/admin/aliases/${form.get("id")}`, {
+          method: "DELETE",
+        });
+        return { ok: true as const };
+      }
       default:
         return { ok: false as const, error: "알 수 없는 요청" };
     }
@@ -70,7 +94,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 };
 
 export default function Users({ loaderData, actionData }: Route.ComponentProps) {
-  const { domain, users, appPasswords } = loaderData;
+  const { domain, users, aliases, appPasswords } = loaderData;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
@@ -194,6 +218,87 @@ export default function Users({ loaderData, actionData }: Route.ComponentProps) 
           ))
         )}
       </div>
+
+      {/* ── 별칭 (추가 수신 주소 + catch-all) ─────────────────── */}
+      <section className="flex flex-col gap-3">
+        <div>
+          <h2 className="text-sm font-medium text-text-1">별칭</h2>
+          <p className="mt-0.5 text-xs text-text-2">
+            추가 수신 주소를 유저에게 연결해요. local part에 <code className="rounded bg-bg-3 px-1">*</code>를
+            넣으면 catch-all (이 도메인의 모든 미지정 주소).
+          </p>
+        </div>
+
+        <Form method="post" className="flex gap-2">
+          <input type="hidden" name="intent" value="create-alias" />
+          <div className="flex flex-1 items-center gap-1 rounded-md border border-line bg-bg-1 px-3">
+            <input
+              name="localPart"
+              required
+              placeholder="hello 또는 *"
+              className="flex-1 bg-transparent py-2 text-sm outline-none"
+            />
+            <span className="text-sm text-text-2">@{domain.name}</span>
+            <span className="text-sm text-text-2">→</span>
+            <select
+              name="userId"
+              required
+              className="rounded border border-line bg-bg-0 px-2 py-1 text-sm outline-none"
+            >
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.localPart}@{domain.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="submit"
+            disabled={busy || users.length === 0}
+            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-bg-0 hover:bg-accent-hover disabled:opacity-50"
+          >
+            연결
+          </button>
+        </Form>
+
+        <div className="rounded-md border border-line bg-bg-1">
+          {aliases.length === 0 ? (
+            <p className="px-4 py-4 text-center text-xs text-text-2">별칭 없음</p>
+          ) : (
+            <ul className="divide-y divide-line">
+              {aliases.map((a) => (
+                <li key={a.id} className="flex items-center justify-between px-4 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm text-text-0">
+                      {a.localPart === "*" ? (
+                        <span className="text-warn">*</span>
+                      ) : (
+                        a.localPart
+                      )}
+                      <span className="text-text-2">@{a.domainName}</span>
+                    </span>
+                    {a.localPart === "*" && (
+                      <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] text-warn">
+                        catch-all
+                      </span>
+                    )}
+                    <span className="text-xs text-text-2">
+                      → {a.userLocalPart}@{a.userDomainName}
+                    </span>
+                  </div>
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="delete-alias" />
+                    <input type="hidden" name="id" value={a.id} />
+                    <button type="submit" disabled={busy} className="text-[10px] text-bad hover:underline">
+                      삭제
+                    </button>
+                  </Form>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

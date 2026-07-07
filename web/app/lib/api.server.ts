@@ -61,6 +61,17 @@ export type AppPassword = {
   revoked: boolean;
 };
 
+export type Alias = {
+  id: number;
+  domainId: number;
+  domainName: string;
+  localPart: string; // '*' = catch-all
+  userId: number;
+  userLocalPart: string;
+  userDomainName: string;
+  createdAt: string;
+};
+
 export type QueueItem = {
   id: number;
   from: string;

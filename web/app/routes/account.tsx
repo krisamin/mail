@@ -1,6 +1,6 @@
 import { Form, Link, redirect, useNavigation } from "react-router";
 import type { Route } from "./+types/account";
-import { ApiError, apiFetch, type AppPassword, type User } from "~/lib/api.server";
+import { ApiError, apiFetch, type Alias, type AppPassword, type User } from "~/lib/api.server";
 import { getUser, isAdmin } from "~/lib/session.server";
 
 // 셀프서비스 — 로그인한 유저 본인의 메일 계정 + 앱 비밀번호 관리.
@@ -14,10 +14,14 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   let account: User | null = null;
   let appPasswords: AppPassword[] = [];
+  let aliases: Alias[] = [];
   let noAccount = false;
   try {
     account = await apiFetch<User>(user.idToken, "/api/me/account");
-    appPasswords = (await apiFetch<AppPassword[]>(user.idToken, "/api/me/app-passwords")) ?? [];
+    [appPasswords, aliases] = await Promise.all([
+      apiFetch<AppPassword[]>(user.idToken, "/api/me/app-passwords").then((r) => r ?? []),
+      apiFetch<Alias[]>(user.idToken, "/api/me/aliases").then((r) => r ?? []),
+    ]);
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
       noAccount = true; // 관리자가 아직 메일 계정을 안 만들어준 상태
@@ -31,6 +35,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     admin: isAdmin(user),
     account,
     appPasswords,
+    aliases,
     noAccount,
   };
 };
@@ -67,7 +72,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
 };
 
 export default function Account({ loaderData, actionData }: Route.ComponentProps) {
-  const { name, email, admin, account, appPasswords, noAccount } = loaderData;
+  const { name, email, admin, account, appPasswords, aliases, noAccount } = loaderData;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
   const active = appPasswords.filter((p) => !p.revoked);
@@ -107,7 +112,22 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             <section className="rounded-md border border-line bg-bg-1 p-4">
               <h1 className="text-lg font-bold">내 메일 계정</h1>
               <p className="mt-1 font-mono text-sm text-text-1">{email}</p>
-              <p className="mt-1 text-xs text-text-2">
+              {aliases.length > 0 && (
+                <div className="mt-2">
+                  <p className="text-xs text-text-2">이 주소들로도 받고 보낼 수 있어요:</p>
+                  <ul className="mt-1 flex flex-wrap gap-1.5">
+                    {aliases.map((a) => (
+                      <li
+                        key={a.id}
+                        className="rounded bg-bg-3 px-2 py-0.5 font-mono text-xs text-text-1"
+                      >
+                        {a.localPart === "*" ? `*(모든 주소)` : a.localPart}@{a.domainName}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="mt-2 text-xs text-text-2">
                 IMAP/SMTP 접속에는 아래에서 발급한 앱 비밀번호를 사용해요 (OIDC 비밀번호 아님).
               </p>
             </section>

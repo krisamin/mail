@@ -83,6 +83,21 @@ type AppPassword struct {
 	RevokedAt *time.Time
 }
 
+// Alias는 유저의 추가 수신 주소. local_part '*'는 도메인 catch-all.
+// 예: hello@krisam.in → maro, *@kirby.so → maro.
+type Alias struct {
+	ID        int64
+	DomainID  int64
+	LocalPart string // '*' = 와일드카드 (그 도메인의 모든 미지정 주소)
+	UserID    int64
+	CreatedAt time.Time
+
+	// 조회 편의 필드 (JOIN으로 채움)
+	DomainName     string // 별칭의 도메인 이름
+	UserLocalPart  string // 대상 유저의 local_part
+	UserDomainName string // 대상 유저의 도메인 (크로스 도메인 별칭 표시용)
+}
+
 // OutboundStatus는 발송 큐 항목의 상태.
 const (
 	OutboundPending = "pending" // 발송 대기 (재시도 포함)
@@ -121,6 +136,13 @@ type Store interface {
 	// 인증
 	AuthenticateAppPassword(ctx context.Context, address, password string) (*User, error)
 	FindUserByAddress(ctx context.Context, address string) (*User, error)
+	// ResolveAddress는 배달 대상 유저를 찾는다.
+	// 우선순위: 실제 유저 > 정확 별칭 > 와일드카드(*@domain).
+	// SMTP 수신/submission의 로컬 배달이 이걸 쓴다.
+	ResolveAddress(ctx context.Context, address string) (*User, error)
+	// CanSendAs는 유저가 해당 주소로 발신 가능한지 (본인 주소 또는
+	// 본인에게 걸린 별칭 — 와일드카드 별칭 포함).
+	CanSendAs(ctx context.Context, userID int64, address string) (bool, error)
 
 	// 도메인
 	// FindDomain은 활성 도메인을 이름으로 찾는다. 수신/제출 시
@@ -183,6 +205,13 @@ type AdminStore interface {
 	// 평문 생성은 호출자(API 레이어) 책임 — 발급 시 1회만 노출.
 	CreateAppPassword(ctx context.Context, userID int64, label, hash string) (*AppPassword, error)
 	RevokeAppPassword(ctx context.Context, id int64) error
+
+	// 별칭 (추가 수신 주소 + 와일드카드)
+	ListAliases(ctx context.Context, domainID int64) ([]*Alias, error)
+	ListUserAliases(ctx context.Context, userID int64) ([]*Alias, error)
+	// CreateAlias는 localPart '*'를 catch-all로 취급한다.
+	CreateAlias(ctx context.Context, domainID int64, localPart string, userID int64) (*Alias, error)
+	DeleteAlias(ctx context.Context, id int64) error
 
 	// 발송 큐 관리
 	ListOutbound(ctx context.Context, status string, limit int) ([]*OutboundMessage, error)
