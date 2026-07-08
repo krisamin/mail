@@ -16,9 +16,10 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   return { name: user.name, email: user.email };
 };
 
-const navItems = [
+const navItemList = [
   { to: "/admin", label: "대시보드", end: true },
   { to: "/admin/domain", label: "도메인" },
+  { to: "/admin/relay", label: "relay" },
   { to: "/admin/queue", label: "발송 큐" },
 ];
 
@@ -32,7 +33,7 @@ export default function AdminLayout({ loaderData }: Route.ComponentProps) {
               mail <span className="text-accent">admin</span>
             </Link>
             <nav className="flex gap-1">
-              {navItems.map((item) => (
+              {navItemList.map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}

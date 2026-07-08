@@ -105,6 +105,19 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
         e2e 검증). 도메인은 있고 계정만 없으면 로그인 허용 + 미개설 안내
   - [x] **relay 결정: Resend** — smtp.resend.com:587, user='resend', pw=API키
         (.env.example 참고). Resend 대시보드 도메인 검증 후 활성화
+  - [x] **relay DB 관리** (마이그레이션 0005) — relay 여러 개 등록 + 도메인별
+        지정. 해석: 도메인 지정 → default → env MAIL_RELAY_* fallback.
+        password는 쓰기 전용(API 응답에 hasPassword만, 빈 문자열=기존 유지).
+        admin UI `/admin/relay` (CRUD + 도메인별 지정 셀렉트).
+        발송 시점 해석이라 relay 변경에 재기동 불필요.
+        e2e: DB relay(Resend)로 mail-tester 10/10
+  - [x] **DNS 검증** — `/api/admin/domain/{id}/dns`가 MX/SPF/DKIM/DMARC를
+        공용 DNS(1.1.1.1)로 실조회 → 도메인 페이지 "DNS 검증" 버튼이
+        ✓/!/✗ 배지 + 등록할 기대값 표시. DKIM은 DB 개인키에서 공개키를
+        재계산해 DNS 값과 일치까지 비교 (스플릿 DNS 회피를 위해 공용 DNS 직결)
+  - [x] **네이밍 컨벤션** — 복수형 s 금지: DB 테이블 단수(domain/account/alias/
+        relay/...), 컬렉션 변수는 xxxList, API 경로 단수. users→account는
+        Postgres 예약어(user) 회피 겸
 - [ ] **Phase 4** — 프로덕션화 (deliverability, 안티스팸, k8s, 백업)
 
 ## 개발

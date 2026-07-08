@@ -31,11 +31,11 @@ func splitAddress(address string) (local, domain string, err error) {
 func (s *Store) FindDomain(ctx context.Context, name string) (*store.Domain, error) {
 	const q = `
 		SELECT id, name, active, created_at,
-		       COALESCE(dkim_selector, ''), COALESCE(dkim_private_key, '')
+		       COALESCE(dkim_selector, ''), COALESCE(dkim_private_key, ''), relay_id
 		FROM domain WHERE name = $1 AND active`
 	var d store.Domain
 	err := s.pool.QueryRow(ctx, q, name).Scan(
-		&d.ID, &d.Name, &d.Active, &d.CreatedAt, &d.DKIMSelector, &d.DKIMPrivateKey)
+		&d.ID, &d.Name, &d.Active, &d.CreatedAt, &d.DKIMSelector, &d.DKIMPrivateKey, &d.RelayID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

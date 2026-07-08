@@ -6,7 +6,7 @@ import {
   type Alias,
   type AppPassword,
   type Domain,
-  type User,
+  type Account,
 } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
 
@@ -16,7 +16,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const [domainList, accountList, aliasList] = await Promise.all([
     apiFetch<Domain[]>(user.idToken, "/api/admin/domain"),
-    apiFetch<User[]>(user.idToken, `/api/admin/domain/${domainId}/account`),
+    apiFetch<Account[]>(user.idToken, `/api/admin/domain/${domainId}/account`),
     apiFetch<Alias[]>(user.idToken, `/api/admin/domain/${domainId}/alias`),
   ]);
   const domain = (domainList ?? []).find((d) => String(d.id) === domainId);

@@ -1,6 +1,12 @@
 import { Form, useNavigation } from "react-router";
 import type { Route } from "./+types/domain";
-import { ApiError, apiFetch, type DKIMResult, type Domain } from "~/lib/api.server";
+import {
+  ApiError,
+  apiFetch,
+  type DKIMResult,
+  type DnsVerify,
+  type Domain,
+} from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -50,6 +56,13 @@ export const action = async ({ request }: Route.ActionArgs) => {
         });
         return { ok: true as const };
       }
+      case "dns-verify": {
+        const dns = await apiFetch<DnsVerify>(
+          user.idToken,
+          `/api/admin/domain/${form.get("id")}/dns`,
+        );
+        return { ok: true as const, dns };
+      }
       default:
         return { ok: false as const, error: "알 수 없는 요청" };
     }
@@ -86,6 +99,54 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
         </div>
       )}
 
+      {actionData?.ok && "dns" in actionData && actionData.dns && (
+        <div className="rounded-md border border-line bg-bg-1 p-4">
+          <p className="mb-2 text-sm font-medium">
+            DNS 검증 — <span className="font-mono">{actionData.dns.domain}</span>
+          </p>
+          <ul className="flex flex-col gap-1.5">
+            {(
+              [
+                ["MX", actionData.dns.mx],
+                ["SPF", actionData.dns.spf],
+                ["DKIM", actionData.dns.dkim],
+                ["DMARC", actionData.dns.dmarc],
+              ] as const
+            ).map(([label, check]) => (
+              <li key={label} className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                      check.status === "ok"
+                        ? "bg-ok/20 text-ok"
+                        : check.status === "warn"
+                          ? "bg-warn/20 text-warn"
+                          : "bg-bad/20 text-bad"
+                    }`}
+                  >
+                    {check.status === "ok" ? "✓" : check.status === "warn" ? "!" : "✗"} {label}
+                  </span>
+                  {check.found && (
+                    <span className="max-w-lg truncate font-mono text-[10px] text-text-2" title={check.found}>
+                      {check.found}
+                    </span>
+                  )}
+                </div>
+                {check.note && <p className="pl-1 text-[11px] text-text-2">{check.note}</p>}
+                {check.expected && check.status !== "ok" && (
+                  <p
+                    className="break-all rounded bg-bg-0 p-1.5 pl-1 font-mono text-[10px] text-text-1"
+                    title="등록할 값"
+                  >
+                    {check.expected}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <Form method="post" className="flex gap-2">
         <input type="hidden" name="intent" value="create" />
         <input
@@ -115,6 +176,17 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                     {d.name}
                   </a>
                   <div className="flex items-center gap-2">
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="dns-verify" />
+                      <input type="hidden" name="id" value={d.id} />
+                      <button
+                        type="submit"
+                        disabled={busy}
+                        className="rounded px-2 py-1 text-xs bg-bg-3 text-text-2 hover:bg-bg-2"
+                      >
+                        DNS 검증
+                      </button>
+                    </Form>
                     <Form method="post">
                       <input type="hidden" name="intent" value="toggle" />
                       <input type="hidden" name="id" value={d.id} />

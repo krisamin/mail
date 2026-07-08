@@ -43,7 +43,7 @@ func setupServer(t *testing.T) (addr string) {
 	t.Cleanup(st.Close)
 
 	// 테스트 격리
-	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias RESTART IDENTITY CASCADE`)
+	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias, relay RESTART IDENTITY CASCADE`)
 
 	// 시드: 도메인 + 유저 + 앱비밀번호 + INBOX
 	local := testAddr[:strings.LastIndex(testAddr, "@")]

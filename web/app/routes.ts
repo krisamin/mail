@@ -11,6 +11,7 @@ export default [
       index("routes/admin/index.tsx"),
       route("domain", "routes/admin/domain.tsx"),
       route("domain/:domainId/account", "routes/admin/account.tsx"),
+      route("relay", "routes/admin/relay.tsx"),
       route("queue", "routes/admin/queue.tsx"),
     ]),
   ]),

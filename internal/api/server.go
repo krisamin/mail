@@ -23,6 +23,14 @@ type Server struct {
 	store *postgres.Store // AdminStore + FindAccountByID까지 필요해서 구체 타입
 	auth  *Authenticator
 	mux   *http.ServeMux
+	// hostname은 MX 검증 기대값 (MAIL_HOSTNAME). 비어있으면 존재만 확인.
+	hostname string
+}
+
+// WithHostname은 DNS 검증에서 MX 기대값으로 쓸 서버 호스트네임을 지정한다.
+func (s *Server) WithHostname(h string) *Server {
+	s.hostname = h
+	return s
 }
 
 // NewServer는 라우팅을 조립한다.
@@ -51,6 +59,12 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("GET /api/admin/queue", s.handleListQueue)
 	admin.HandleFunc("GET /api/admin/queue/stats", s.handleQueueStats)
 	admin.HandleFunc("POST /api/admin/queue/{id}/retry", s.handleRetryQueue)
+	admin.HandleFunc("GET /api/admin/relay", s.handleListRelay)
+	admin.HandleFunc("POST /api/admin/relay", s.handleCreateRelay)
+	admin.HandleFunc("PUT /api/admin/relay/{id}", s.handleUpdateRelay)
+	admin.HandleFunc("DELETE /api/admin/relay/{id}", s.handleDeleteRelay)
+	admin.HandleFunc("PUT /api/admin/domain/{id}/relay", s.handleSetDomainRelay)
+	admin.HandleFunc("GET /api/admin/domain/{id}/dns", s.handleVerifyDomainDNS)
 
 	s.mux.Handle("/api/admin/", auth.RequireAdmin(admin))
 

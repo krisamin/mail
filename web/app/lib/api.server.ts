@@ -42,9 +42,10 @@ export type Domain = {
   createdAt: string;
   dkimSelector: string;
   dkimPublicTxt?: string;
+  relayId?: number | null;
 };
 
-export type User = {
+export type Account = {
   id: number;
   domainId: number;
   localPart: string;
@@ -84,3 +85,31 @@ export type QueueItem = {
 };
 
 export type DKIMResult = { selector: string; dnsName: string; dnsTxt: string };
+
+export type Relay = {
+  id: number;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  starttls: boolean;
+  isDefault: boolean;
+  active: boolean;
+  createdAt: string;
+  hasPassword: boolean;
+};
+
+export type DnsCheck = {
+  status: "ok" | "warn" | "missing";
+  found: string;
+  expected?: string;
+  note?: string;
+};
+
+export type DnsVerify = {
+  domain: string;
+  mx: DnsCheck;
+  spf: DnsCheck;
+  dkim: DnsCheck;
+  dmarc: DnsCheck;
+};

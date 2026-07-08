@@ -20,7 +20,7 @@ var _ store.AdminStore = (*Store)(nil)
 func (s *Store) ListDomain(ctx context.Context) ([]*store.Domain, error) {
 	const q = `
 		SELECT id, name, active, created_at,
-		       COALESCE(dkim_selector, ''), COALESCE(dkim_private_key, '')
+		       COALESCE(dkim_selector, ''), COALESCE(dkim_private_key, ''), relay_id
 		FROM domain ORDER BY name`
 	rows, err := s.pool.Query(ctx, q)
 	if err != nil {
@@ -32,7 +32,7 @@ func (s *Store) ListDomain(ctx context.Context) ([]*store.Domain, error) {
 	for rows.Next() {
 		var d store.Domain
 		if err := rows.Scan(&d.ID, &d.Name, &d.Active, &d.CreatedAt,
-			&d.DKIMSelector, &d.DKIMPrivateKey); err != nil {
+			&d.DKIMSelector, &d.DKIMPrivateKey, &d.RelayID); err != nil {
 			return nil, err
 		}
 		out = append(out, &d)

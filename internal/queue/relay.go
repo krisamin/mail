@@ -3,10 +3,14 @@ package queue
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/emersion/go-sasl"
 	gosmtp "github.com/emersion/go-smtp"
+
+	"github.com/krisamin/mail/internal/store"
 )
 
 // RelayConfig는 SMTP relay(SES/Postmark/기타 submission 서버) 접속 정보.
@@ -86,4 +90,47 @@ func hostOf(addr string) string {
 		}
 	}
 	return addr
+}
+
+// ── DB 해석 Sender (0005) ───────────────────────────────────
+
+// ResolvingSender는 발송 시점에 발신 도메인의 relay를 DB에서 해석한다.
+// 도메인 지정 relay → default relay → env fallback(있으면) → 오류(재시도).
+// relay를 어드민에서 바꾸면 재기동 없이 다음 발송부터 반영된다.
+type ResolvingSender struct {
+	store    store.Store
+	fallback *RelayConfig // env MAIL_RELAY_* (nil = 없음)
+}
+
+// NewResolvingSender는 DB 해석 발송기를 만든다. fallback은 nil 가능.
+func NewResolvingSender(st store.Store, fallback *RelayConfig) *ResolvingSender {
+	return &ResolvingSender{store: st, fallback: fallback}
+}
+
+var _ Sender = (*ResolvingSender)(nil)
+
+// Send는 relay를 해석한 뒤 RelaySender로 위임한다.
+func (r *ResolvingSender) Send(ctx context.Context, from, rcpt string, raw []byte) error {
+	senderDomain := ""
+	if i := strings.LastIndex(from, "@"); i >= 0 {
+		senderDomain = from[i+1:]
+	}
+	rl, err := r.store.ResolveRelay(ctx, senderDomain)
+	if err == nil {
+		cfg := RelayConfig{
+			Addr:     fmt.Sprintf("%s:%d", rl.Host, rl.Port),
+			Username: rl.Username,
+			Password: rl.Password,
+			StartTLS: rl.StartTLS,
+		}
+		return NewRelaySender(cfg).Send(ctx, from, rcpt, raw)
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		if r.fallback != nil {
+			return NewRelaySender(*r.fallback).Send(ctx, from, rcpt, raw)
+		}
+		// relay가 없음 — 어드민이 곧 추가할 수 있으니 일시 오류로 재시도.
+		return fmt.Errorf("도메인 %q의 relay 미설정 (어드민에서 relay 추가 필요)", senderDomain)
+	}
+	return fmt.Errorf("relay 해석: %w", err)
 }

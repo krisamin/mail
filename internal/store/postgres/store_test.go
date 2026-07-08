@@ -74,7 +74,7 @@ func TestFullFlow(t *testing.T) {
 	ctx := context.Background()
 
 	// 매 실행 깨끗하게 (테스트 격리)
-	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias RESTART IDENTITY CASCADE`)
+	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias, relay RESTART IDENTITY CASCADE`)
 
 	addr := "maro@krisam.in"
 	pass := "super-secret-app-pw"

@@ -1,6 +1,6 @@
 import { Form, Link, redirect, useNavigation } from "react-router";
 import type { Route } from "./+types/account";
-import { ApiError, apiFetch, type Alias, type AppPassword, type User } from "~/lib/api.server";
+import { ApiError, apiFetch, type Alias, type AppPassword, type Account } from "~/lib/api.server";
 import { getUser, isAdmin } from "~/lib/session.server";
 
 // 셀프서비스 — 로그인한 유저 본인의 메일 계정 + 앱 비밀번호 관리.
@@ -12,12 +12,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     throw redirect(`/login?returnTo=${encodeURIComponent("/account")}`);
   }
 
-  let account: User | null = null;
+  let account: Account | null = null;
   let appPasswordList: AppPassword[] = [];
   let aliasList: Alias[] = [];
   let noAccount = false;
   try {
-    account = await apiFetch<User>(user.idToken, "/api/me/account");
+    account = await apiFetch<Account>(user.idToken, "/api/me/account");
     [appPasswordList, aliasList] = await Promise.all([
       apiFetch<AppPassword[]>(user.idToken, "/api/me/app-password").then((r) => r ?? []),
       apiFetch<Alias[]>(user.idToken, "/api/me/alias").then((r) => r ?? []),

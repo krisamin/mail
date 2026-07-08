@@ -34,7 +34,7 @@ func testStore(t *testing.T) *postgres.Store {
 	}
 	t.Cleanup(st.Close)
 	_, _ = st.Pool().Exec(context.Background(),
-		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias RESTART IDENTITY CASCADE`)
+		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias, relay RESTART IDENTITY CASCADE`)
 	return st
 }
 

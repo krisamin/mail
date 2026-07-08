@@ -31,6 +31,7 @@ services:
       - ./internal/store/migrations/0002_outbound_queue.up.sql:/docker-entrypoint-initdb.d/0002_outbound_queue.sql:ro
       - ./internal/store/migrations/0003_dkim_key.up.sql:/docker-entrypoint-initdb.d/0003_dkim_key.sql:ro
       - ./internal/store/migrations/0004_alias.up.sql:/docker-entrypoint-initdb.d/0004_alias.sql:ro
+      - ./internal/store/migrations/0005_relay.up.sql:/docker-entrypoint-initdb.d/0005_relay.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-mail}"]
       interval: 5s

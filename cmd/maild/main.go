@@ -72,11 +72,10 @@ func main() {
 	}()
 
 	// SMTP submission 서버 (AUTH 필수 — 앱 비밀번호로 우리 유저가 제출)
-	// 발송 큐: MAIL_RELAY_ADDR가 설정된 경우에만 외부 도메인 제출 허용 + 워커 기동.
-	relayAddr := os.Getenv("MAIL_RELAY_ADDR")
-	enqueueEnabled := relayAddr != ""
-
-	subSrv := gosmtp.NewServer(smtpbackend.NewSubmissionBackend(st, hostname, enqueueEnabled))
+	// 발송 relay는 DB에서 관리 (0005) — 외부 도메인 제출은 항상 큐로 받고,
+	// 워커가 발송 시점에 relay를 해석한다 (도메인 지정 → default → env fallback).
+	// relay가 하나도 없으면 큐에 쌓인 채 재시도되다가 어드민이 추가하면 나간다.
+	subSrv := gosmtp.NewServer(smtpbackend.NewSubmissionBackend(st, hostname, true))
 	subSrv.Addr = submissionAddr
 	subSrv.Domain = hostname
 	subSrv.ReadTimeout = 60 * time.Second
@@ -86,25 +85,24 @@ func main() {
 	// Phase 2 dev: TLS 없이 평문 AUTH 허용. 프로덕션에선 TLSConfig 필수.
 	subSrv.AllowInsecureAuth = true
 	go func() {
-		log.Printf("maild: SMTP submission 서버 시작 %s (AllowInsecureAuth=dev, 외부발송=%v)",
-			submissionAddr, enqueueEnabled)
+		log.Printf("maild: SMTP submission 서버 시작 %s (AllowInsecureAuth=dev)", submissionAddr)
 		errCh <- subSrv.ListenAndServe()
 	}()
 
-	// 발송 큐 워커 (relay 설정 시에만)
-	if enqueueEnabled {
-		sender := queue.NewRelaySender(queue.RelayConfig{
+	// 발송 큐 워커 — relay는 DB 우선, env MAIL_RELAY_*는 fallback.
+	var fallback *queue.RelayConfig
+	if relayAddr := os.Getenv("MAIL_RELAY_ADDR"); relayAddr != "" {
+		fallback = &queue.RelayConfig{
 			Addr:     relayAddr,
 			Username: os.Getenv("MAIL_RELAY_USERNAME"),
 			Password: os.Getenv("MAIL_RELAY_PASSWORD"),
 			StartTLS: os.Getenv("MAIL_RELAY_STARTTLS") != "false",
-		})
-		worker := queue.NewWorker(st, sender, queue.Config{}).
-			WithSigner(queue.NewDKIMSigner(st))
-		go worker.Run(context.Background())
-	} else {
-		log.Printf("maild: MAIL_RELAY_ADDR 미설정 — 발송 큐 워커 비활성 (외부 도메인 제출 거절)")
+		}
+		log.Printf("maild: env relay fallback 활성 (%s)", relayAddr)
 	}
+	worker := queue.NewWorker(st, queue.NewResolvingSender(st, fallback), queue.Config{}).
+		WithSigner(queue.NewDKIMSigner(st))
+	go worker.Run(context.Background())
 
 	// Admin REST API (Phase 3) — OIDC Bearer 토큰 + admin 그룹 필요
 	apiAddr := env("MAIL_API_ADDR", ":8080")
@@ -119,7 +117,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("OIDC 초기화 실패: %v", err)
 	}
-	apiSrv := &http.Server{Addr: apiAddr, Handler: api.NewServer(st, authn)}
+	apiSrv := &http.Server{Addr: apiAddr, Handler: api.NewServer(st, authn).WithHostname(hostname)}
 	go func() {
 		log.Printf("maild: Admin API 시작 %s (issuer=%q group=%s)",
 			apiAddr, authCfg.IssuerURL, authCfg.AdminGroup)

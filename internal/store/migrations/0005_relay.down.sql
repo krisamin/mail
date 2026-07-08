@@ -1,0 +1,3 @@
+-- 0005 rollback
+ALTER TABLE domain DROP COLUMN IF EXISTS relay_id;
+DROP TABLE IF EXISTS relay;

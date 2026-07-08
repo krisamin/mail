@@ -33,6 +33,24 @@ type Domain struct {
 	// 공개키는 <selector>._domainkey.<name> TXT로 게시.
 	DKIMSelector   string
 	DKIMPrivateKey string // PKCS#8 PEM
+
+	// 발신 relay 지정 (0005). nil = default relay 사용.
+	RelayID *int64
+}
+
+// Relay는 외부 발송용 SMTP relay (Resend, SES, ...).
+// 도메인별 지정(domain.relay_id) → default → env fallback 순으로 해석.
+type Relay struct {
+	ID        int64
+	Name      string // 'resend' 등 표시명
+	Host      string
+	Port      int
+	Username  string
+	Password  string // 평문 (API로는 노출 금지 — 쓰기 전용)
+	StartTLS  bool
+	IsDefault bool
+	Active    bool
+	CreatedAt time.Time
 }
 
 // User는 계정 (local_part@domain). 사람 로그인은 OIDC, 메일앱은 앱 비밀번호.
@@ -180,6 +198,11 @@ type Store interface {
 	MarkOutboundRetry(ctx context.Context, id int64, errMsg string, nextAttempt time.Time) error
 	// MarkOutboundFailed는 영구 실패 처리 (재시도 소진).
 	MarkOutboundFailed(ctx context.Context, id int64, errMsg string) error
+
+	// ResolveRelay는 발신 도메인 이름으로 사용할 relay를 찾는다.
+	// 도메인 지정 relay → default relay → ErrNotFound (호출자가 env fallback).
+	// 비활성 relay는 무시한다.
+	ResolveRelay(ctx context.Context, senderDomain string) (*Relay, error)
 }
 
 // AdminStore는 관리 플레인(Admin API)이 쓰는 확장 인터페이스 (Phase 3).
@@ -219,4 +242,13 @@ type AdminStore interface {
 	RetryOutbound(ctx context.Context, id int64) error
 	// OutboundStats는 상태별 건수.
 	OutboundStats(ctx context.Context) (map[string]int64, error)
+
+	// relay (0005) — password는 쓰기 전용 (List가 돌려주는 값도 API 레이어에서 마스킹)
+	ListRelay(ctx context.Context) ([]*Relay, error)
+	CreateRelay(ctx context.Context, r *Relay) (*Relay, error)
+	// UpdateRelay는 password가 빈 문자열이면 기존 값 유지.
+	UpdateRelay(ctx context.Context, r *Relay) (*Relay, error)
+	DeleteRelay(ctx context.Context, id int64) error
+	// SetDomainRelay는 도메인 발신 relay 지정 (nil = default 사용).
+	SetDomainRelay(ctx context.Context, domainID int64, relayID *int64) error
 }

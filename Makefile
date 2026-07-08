@@ -53,6 +53,19 @@ db-test: ## 통합 테스트 (dev DB 필요 — store/imap/smtp e2e)
 run: ## maild 실행 (IMAP :1143, dev DB 필요)
 	MAIL_DSN="$(MAIL_DSN)" go run ./cmd/maild
 
+.PHONY: seed-dev
+seed-dev: ## dev DB 시드 복원 (db-test가 TRUNCATE한 뒤 실행)
+	docker cp dev/seed.sql mail-postgres-1:/tmp/seed.sql
+	docker exec mail-postgres-1 sh -c 'PGPASSWORD=$(POSTGRES_PASSWORD) psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -f /tmp/seed.sql'
+	@# DKIM 키 복원 (로컬 백업이 있으면)
+	@if [ -f ~/.mail-keys/kirby.so-mail-dkim.pem ]; then \
+		python3 -c "import pathlib; key = pathlib.Path.home().joinpath('.mail-keys/kirby.so-mail-dkim.pem').read_text(); print(f\"UPDATE domain SET dkim_selector='mail', dkim_private_key='{key}' WHERE name='kirby.so';\")" > /tmp/dkim-restore.sql; \
+		docker cp /tmp/dkim-restore.sql mail-postgres-1:/tmp/; \
+		docker exec mail-postgres-1 sh -c 'PGPASSWORD=$(POSTGRES_PASSWORD) psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -f /tmp/dkim-restore.sql'; \
+		rm /tmp/dkim-restore.sql; \
+		echo "kirby.so DKIM 키 복원됨"; \
+	fi
+
 .PHONY: check
 check: build vet ## 커밋 전 검증 (빌드 + vet)
 
