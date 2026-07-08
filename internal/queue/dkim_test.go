@@ -15,7 +15,7 @@ func TestDKIMSignerFromStore(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 
-	seedUser(t, st, "maro@krisam.in", "dkim-pw")
+	seedAccount(t, st, "maro@krisam.in", "dkim-pw")
 
 	// 키 생성 + 도메인에 저장
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -25,7 +25,7 @@ func TestDKIMSignerFromStore(t *testing.T) {
 	der, _ := x509.MarshalPKCS8PrivateKey(key)
 	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 	if _, err := st.Pool().Exec(ctx,
-		`UPDATE domains SET dkim_selector = 'mail', dkim_private_key = $1 WHERE name = 'krisam.in'`,
+		`UPDATE domain SET dkim_selector = 'mail', dkim_private_key = $1 WHERE name = 'krisam.in'`,
 		pemText); err != nil {
 		t.Fatalf("키 저장: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestDKIMSignerFromStore(t *testing.T) {
 	}
 
 	// 3) selector를 지우면 → 통과
-	_, _ = st.Pool().Exec(ctx, `UPDATE domains SET dkim_selector = NULL WHERE name = 'krisam.in'`)
+	_, _ = st.Pool().Exec(ctx, `UPDATE domain SET dkim_selector = NULL WHERE name = 'krisam.in'`)
 	passed2, err := signer(ctx, "maro@krisam.in", raw)
 	if err != nil || !bytes.Equal(passed2, raw) {
 		t.Fatalf("selector 없으면 통과여야: %v", err)

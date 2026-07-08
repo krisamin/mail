@@ -43,7 +43,7 @@ type VerifyResult struct {
 // Authentication-Results 헤더를 만든다. 검증 실패해도 에러가 아니라
 // 결과에 기록만 한다 (거절 정책은 Phase 4).
 func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
-	var results []authres.Result
+	var resultList []authres.Result
 	res := &VerifyResult{}
 
 	// ── SPF (RFC 7208) ──────────────────────────────────────
@@ -53,7 +53,7 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 	}
 	spfResult, _ := spf.CheckHostWithSender(opts.RemoteIP, opts.HeloName, opts.EnvelopeFrom, spfOpts...)
 	res.SPFPass = spfResult == spf.Pass
-	results = append(results, &authres.SPFResult{
+	resultList = append(resultList, &authres.SPFResult{
 		Value: authresValue(string(spfResult)),
 		From:  opts.EnvelopeFrom,
 		Helo:  opts.HeloName,
@@ -64,12 +64,12 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 	if opts.LookupTXT != nil {
 		dkimOpts = &dkim.VerifyOptions{LookupTXT: opts.LookupTXT}
 	}
-	verifications, err := dkim.VerifyWithOptions(bytes.NewReader(raw), dkimOpts)
+	verificationList, err := dkim.VerifyWithOptions(bytes.NewReader(raw), dkimOpts)
 	var dkimDomains []string // pass한 서명 도메인 (DMARC 정렬용)
-	if err != nil && len(verifications) == 0 {
-		results = append(results, &authres.DKIMResult{Value: authres.ResultNone})
+	if err != nil && len(verificationList) == 0 {
+		resultList = append(resultList, &authres.DKIMResult{Value: authres.ResultNone})
 	}
-	for _, v := range verifications {
+	for _, v := range verificationList {
 		value := authres.ResultValue(authres.ResultPass)
 		if v.Err != nil {
 			value = authres.ResultFail
@@ -77,7 +77,7 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 			res.DKIMPass = true
 			dkimDomains = append(dkimDomains, v.Domain)
 		}
-		results = append(results, &authres.DKIMResult{
+		resultList = append(resultList, &authres.DKIMResult{
 			Value:      value,
 			Domain:     v.Domain,
 			Identifier: v.Identifier,
@@ -111,13 +111,13 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 				dmarcValue = authres.ResultFail
 			}
 		}
-		results = append(results, &authres.DMARCResult{
+		resultList = append(resultList, &authres.DMARCResult{
 			Value: dmarcValue,
 			From:  fromDomain,
 		})
 	}
 
-	res.Header = []byte("Authentication-Results: " + authres.Format(opts.Hostname, results) + "\r\n")
+	res.Header = []byte("Authentication-Results: " + authres.Format(opts.Hostname, resultList) + "\r\n")
 	return res
 }
 

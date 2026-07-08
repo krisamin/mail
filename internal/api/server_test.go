@@ -31,7 +31,7 @@ func testServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(st.Close)
 	_, _ = st.Pool().Exec(context.Background(),
-		`TRUNCATE domains, users, app_passwords, mailboxes, messages, message_flags, message_blobs, outbound_queue, aliases RESTART IDENTITY CASCADE`)
+		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias RESTART IDENTITY CASCADE`)
 
 	auth, err := NewAuthenticator(context.Background(), AuthConfig{
 		AdminGroup: "mail-admin", InsecureSkipVerify: true,
@@ -86,7 +86,7 @@ func TestAdminFullFlow(t *testing.T) {
 	srv := testServer(t)
 
 	// 1) 도메인 생성
-	code, dom, _ := call(t, srv, "POST", "/api/admin/domains", map[string]string{"name": "Krisam.IN"})
+	code, dom, _ := call(t, srv, "POST", "/api/admin/domain", map[string]string{"name": "Krisam.IN"})
 	if code != 201 || dom["name"] != "krisam.in" {
 		t.Fatalf("도메인 생성: %d %v", code, dom)
 	}
@@ -94,19 +94,19 @@ func TestAdminFullFlow(t *testing.T) {
 	t.Logf("✔ 도메인 생성 (소문자 정규화): %v", dom["name"])
 
 	// 중복 → 409
-	code, _, _ = call(t, srv, "POST", "/api/admin/domains", map[string]string{"name": "krisam.in"})
+	code, _, _ = call(t, srv, "POST", "/api/admin/domain", map[string]string{"name": "krisam.in"})
 	if code != 409 {
 		t.Fatalf("중복 도메인은 409여야: %d", code)
 	}
 	// 이상한 이름 → 400
-	code, _, _ = call(t, srv, "POST", "/api/admin/domains", map[string]string{"name": "nodot"})
+	code, _, _ = call(t, srv, "POST", "/api/admin/domain", map[string]string{"name": "nodot"})
 	if code != 400 {
 		t.Fatalf("점 없는 도메인은 400이어야: %d", code)
 	}
 	t.Log("✔ 중복 409 / 유효성 400")
 
 	// 2) DKIM 키 생성 — 기본 RSA-2048 (Gmail 호환), ed25519는 옵션
-	code, dkim, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/dkim", domID),
+	code, dkim, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/dkim", domID),
 		map[string]string{"selector": "mail"})
 	if code != 200 {
 		t.Fatalf("DKIM 생성: %d %v", code, dkim)
@@ -118,19 +118,19 @@ func TestAdminFullFlow(t *testing.T) {
 	t.Logf("✔ DKIM RSA-2048 생성(기본): %s = %.40s...", dkim["dnsName"], dnsTxt)
 
 	// ed25519 명시 생성도 동작 (키 교체 = 재생성)
-	code, dkimEd, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/dkim", domID),
+	code, dkimEd, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/dkim", domID),
 		map[string]string{"selector": "mail", "keyType": "ed25519"})
 	if code != 200 || !strings.HasPrefix(dkimEd["dnsTxt"].(string), "v=DKIM1; k=ed25519; p=") {
 		t.Fatalf("ed25519 생성: %d %v", code, dkimEd)
 	}
 	// 잘못된 keyType → 400
-	code, _, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/dkim", domID),
+	code, _, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/dkim", domID),
 		map[string]string{"selector": "mail", "keyType": "dsa"})
 	if code != 400 {
 		t.Fatalf("잘못된 keyType은 400이어야: %d", code)
 	}
 	// 이후 검증은 RSA 기본으로 다시 생성한 상태 기준
-	code, dkim, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/dkim", domID),
+	code, dkim, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/dkim", domID),
 		map[string]string{"selector": "mail"})
 	if code != 200 {
 		t.Fatalf("DKIM 재생성: %d", code)
@@ -139,29 +139,29 @@ func TestAdminFullFlow(t *testing.T) {
 	t.Log("✔ ed25519 옵션 + keyType 유효성 400")
 
 	// 목록에서 공개키 TXT 재계산돼 나오는지 (개인키는 안 내려옴)
-	code, _, domains := call(t, srv, "GET", "/api/admin/domains", nil)
-	if code != 200 || len(domains) != 1 {
-		t.Fatalf("도메인 목록: %d %v", code, domains)
+	code, _, domainList := call(t, srv, "GET", "/api/admin/domain", nil)
+	if code != 200 || len(domainList) != 1 {
+		t.Fatalf("도메인 목록: %d %v", code, domainList)
 	}
-	if domains[0]["dkimPublicTxt"] != dnsTxt {
+	if domainList[0]["dkimPublicTxt"] != dnsTxt {
 		t.Fatal("목록의 TXT가 생성 시 값과 달라")
 	}
-	if _, leaked := domains[0]["dkimPrivateKey"]; leaked {
+	if _, leaked := domainList[0]["dkimPrivateKey"]; leaked {
 		t.Fatal("개인키가 응답에 노출됨!")
 	}
 	t.Log("✔ 목록에 공개 TXT만 노출 (개인키 비노출)")
 
 	// 3) 유저 생성
-	code, user, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/users", domID),
+	code, user, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/account", domID),
 		map[string]string{"localPart": "Maro"})
 	if code != 201 || user["localPart"] != "maro" {
 		t.Fatalf("유저 생성: %d %v", code, user)
 	}
-	userID := int64(user["id"].(float64))
+	accountID := int64(user["id"].(float64))
 	t.Log("✔ 유저 생성 (소문자 정규화 + INBOX 자동)")
 
 	// 4) 앱 비밀번호 발급 — 평문 1회 노출
-	code, pw, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/users/%d/app-passwords", userID),
+	code, pw, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/account/%d/app-password", accountID),
 		map[string]string{"label": "Thunderbird"})
 	if code != 201 {
 		t.Fatalf("앱비번 발급: %d %v", code, pw)
@@ -174,35 +174,35 @@ func TestAdminFullFlow(t *testing.T) {
 
 	// 발급된 비번으로 실제 SMTP/IMAP 인증이 되는지 store로 확인
 	// (프로토콜 레벨은 기존 테스트가 커버 — 여기선 해시 정합만)
-	code, _, pws := call(t, srv, "GET", fmt.Sprintf("/api/admin/users/%d/app-passwords", userID), nil)
-	if code != 200 || len(pws) != 1 || pws[0]["revoked"] != false {
-		t.Fatalf("앱비번 목록: %d %v", code, pws)
+	code, _, passwordList := call(t, srv, "GET", fmt.Sprintf("/api/admin/account/%d/app-password", accountID), nil)
+	if code != 200 || len(passwordList) != 1 || passwordList[0]["revoked"] != false {
+		t.Fatalf("앱비번 목록: %d %v", code, passwordList)
 	}
 
 	// 5) revoke
-	pwID := int64(pws[0]["id"].(float64))
-	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/app-passwords/%d", pwID), nil)
+	pwID := int64(passwordList[0]["id"].(float64))
+	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/app-password/%d", pwID), nil)
 	if code != 204 {
 		t.Fatalf("revoke: %d", code)
 	}
-	code, _, pws = call(t, srv, "GET", fmt.Sprintf("/api/admin/users/%d/app-passwords", userID), nil)
-	if pws[0]["revoked"] != true {
+	code, _, passwordList = call(t, srv, "GET", fmt.Sprintf("/api/admin/account/%d/app-password", accountID), nil)
+	if passwordList[0]["revoked"] != true {
 		t.Fatal("revoke 반영 안 됨")
 	}
 	// 이중 revoke → 404
-	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/app-passwords/%d", pwID), nil)
+	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/app-password/%d", pwID), nil)
 	if code != 404 {
 		t.Fatalf("이중 revoke는 404여야: %d", code)
 	}
 	t.Log("✔ 앱비번 revoke + 이중 revoke 404")
 
 	// 6) 유저/도메인 비활성화
-	code, _, _ = call(t, srv, "PATCH", fmt.Sprintf("/api/admin/users/%d", userID),
+	code, _, _ = call(t, srv, "PATCH", fmt.Sprintf("/api/admin/account/%d", accountID),
 		map[string]bool{"active": false})
 	if code != 200 {
 		t.Fatalf("유저 비활성: %d", code)
 	}
-	code, _, _ = call(t, srv, "PATCH", fmt.Sprintf("/api/admin/domains/%d", domID),
+	code, _, _ = call(t, srv, "PATCH", fmt.Sprintf("/api/admin/domain/%d", domID),
 		map[string]bool{"active": false})
 	if code != 200 {
 		t.Fatalf("도메인 비활성: %d", code)
@@ -215,7 +215,7 @@ func TestQueueEndpoints(t *testing.T) {
 	srv := testServer(t)
 
 	// 시드: 큐에 항목 하나 넣고 failed로
-	code, dom, _ := call(t, srv, "POST", "/api/admin/domains", map[string]string{"name": "q.test"})
+	code, dom, _ := call(t, srv, "POST", "/api/admin/domain", map[string]string{"name": "q.test"})
 	if code != 201 {
 		t.Fatalf("도메인: %d %v", code, dom)
 	}

@@ -50,12 +50,12 @@ func setupServers(t *testing.T) *testEnv {
 	}
 	t.Cleanup(st.Close)
 
-	_, _ = st.Pool().Exec(ctx, `TRUNCATE domains, users, app_passwords, mailboxes, messages, message_flags, message_blobs, outbound_queue, aliases RESTART IDENTITY CASCADE`)
+	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias RESTART IDENTITY CASCADE`)
 
 	// 시드: krisam.in 도메인 + 유저 2명 (maro는 INBOX 있음, shiro는 INBOX 없음 — 자동생성 검증)
 	var domainID int64
 	if err := st.Pool().QueryRow(ctx,
-		`INSERT INTO domains (name) VALUES ('krisam.in') RETURNING id`).Scan(&domainID); err != nil {
+		`INSERT INTO domain (name) VALUES ('krisam.in') RETURNING id`).Scan(&domainID); err != nil {
 		t.Fatalf("도메인 시드: %v", err)
 	}
 	hash, err := postgres.HashPassword(testPass)
@@ -64,19 +64,19 @@ func setupServers(t *testing.T) *testEnv {
 	}
 	for _, addr := range []string{testAddr, testAddr2} {
 		local := addr[:strings.LastIndex(addr, "@")]
-		var userID int64
+		var accountID int64
 		if err := st.Pool().QueryRow(ctx,
-			`INSERT INTO users (domain_id, local_part) VALUES ($1, $2) RETURNING id`,
-			domainID, local).Scan(&userID); err != nil {
+			`INSERT INTO account (domain_id, local_part) VALUES ($1, $2) RETURNING id`,
+			domainID, local).Scan(&accountID); err != nil {
 			t.Fatalf("유저 시드 %s: %v", addr, err)
 		}
 		if _, err := st.Pool().Exec(ctx,
-			`INSERT INTO app_passwords (user_id, label, hash) VALUES ($1, 'e2e', $2)`,
-			userID, hash); err != nil {
+			`INSERT INTO app_password (account_id, label, hash) VALUES ($1, 'e2e', $2)`,
+			accountID, hash); err != nil {
 			t.Fatalf("앱비번 시드: %v", err)
 		}
 		if addr == testAddr {
-			if _, err := st.CreateMailbox(ctx, userID, "INBOX"); err != nil {
+			if _, err := st.CreateMailbox(ctx, accountID, "INBOX"); err != nil {
 				t.Fatalf("INBOX 생성: %v", err)
 			}
 		}
@@ -162,7 +162,7 @@ func readInbox(t *testing.T, imapAddr, user, pass string) []*imapclient.FetchMes
 	}
 	seq := goimap.SeqSet{}
 	seq.AddRange(1, sel.NumMessages)
-	msgs, err := c.Fetch(seq, &goimap.FetchOptions{
+	messageList, err := c.Fetch(seq, &goimap.FetchOptions{
 		Envelope: true, Flags: true, UID: true,
 		BodySection: []*goimap.FetchItemBodySection{{Peek: true}},
 	}).Collect()
@@ -170,7 +170,7 @@ func readInbox(t *testing.T, imapAddr, user, pass string) []*imapclient.FetchMes
 		t.Fatalf("imap fetch: %v", err)
 	}
 	_ = c.Logout().Wait()
-	return msgs
+	return messageList
 }
 
 const e2eMessage = "From: Someone <someone@example.com>\r\n" +
@@ -190,11 +190,11 @@ func TestEndToEndDelivery(t *testing.T) {
 	}
 	t.Log("✔ SMTP 수신 완료")
 
-	msgs := readInbox(t, env.imapAddr, testAddr, testPass)
-	if len(msgs) != 1 {
-		t.Fatalf("INBOX에 1건 있어야: %d", len(msgs))
+	messageList := readInbox(t, env.imapAddr, testAddr, testPass)
+	if len(messageList) != 1 {
+		t.Fatalf("INBOX에 1건 있어야: %d", len(messageList))
 	}
-	m := msgs[0]
+	m := messageList[0]
 	if m.Envelope == nil || m.Envelope.Subject != "e2e delivery" {
 		t.Fatalf("subject 이상: %+v", m.Envelope)
 	}
@@ -253,12 +253,12 @@ func TestMultiRecipientAndInboxAutoCreate(t *testing.T) {
 	}
 
 	for _, addr := range []string{testAddr, testAddr2} {
-		msgs := readInbox(t, env.imapAddr, addr, testPass)
-		if len(msgs) != 1 {
-			t.Fatalf("%s INBOX에 1건 있어야: %d", addr, len(msgs))
+		messageList := readInbox(t, env.imapAddr, addr, testPass)
+		if len(messageList) != 1 {
+			t.Fatalf("%s INBOX에 1건 있어야: %d", addr, len(messageList))
 		}
 		// 수신자별 Received 헤더 확인
-		full := string(msgs[0].BodySection[0].Bytes)
+		full := string(messageList[0].BodySection[0].Bytes)
 		if !strings.Contains(full, "for <"+addr+">") {
 			t.Fatalf("%s용 Received 헤더 아님:\n%.200s", addr, full)
 		}
@@ -294,9 +294,9 @@ func TestNoopSeesNewMail(t *testing.T) {
 	if err := c.Noop().Wait(); err != nil {
 		t.Fatalf("noop: %v", err)
 	}
-	msgs, err := c.Fetch(goimap.SeqSetNum(1), &goimap.FetchOptions{UID: true}).Collect()
-	if err != nil || len(msgs) != 1 {
-		t.Fatalf("NOOP 후 새 메일이 보여야: %v (%d)", err, len(msgs))
+	messageList, err := c.Fetch(goimap.SeqSetNum(1), &goimap.FetchOptions{UID: true}).Collect()
+	if err != nil || len(messageList) != 1 {
+		t.Fatalf("NOOP 후 새 메일이 보여야: %v (%d)", err, len(messageList))
 	}
-	t.Logf("✔ 선택 중인 IMAP 세션이 NOOP 후 SMTP 배달 메일 확인 (uid=%d)", msgs[0].UID)
+	t.Logf("✔ 선택 중인 IMAP 세션이 NOOP 후 SMTP 배달 메일 확인 (uid=%d)", messageList[0].UID)
 }

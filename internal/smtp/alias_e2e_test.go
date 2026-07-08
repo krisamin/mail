@@ -23,10 +23,10 @@ func TestAliasDelivery(t *testing.T) {
 	// 시드: kirby.so 도메인 + 별칭 2개 (maro 유저에게)
 	var kirbyID int64
 	if err := env.store.Pool().QueryRow(ctx,
-		`INSERT INTO domains (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
+		`INSERT INTO domain (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
 		t.Fatalf("kirby.so 시드: %v", err)
 	}
-	maro, err := env.store.FindUserByAddress(ctx, testAddr)
+	maro, err := env.store.FindAccountByAddress(ctx, testAddr)
 	if err != nil {
 		t.Fatalf("maro 조회: %v", err)
 	}
@@ -58,9 +58,9 @@ func TestAliasDelivery(t *testing.T) {
 	}
 
 	// maro INBOX에서 두 통 다 확인
-	msgs := readInbox(t, env.imapAddr, testAddr, testPass)
+	messageList := readInbox(t, env.imapAddr, testAddr, testPass)
 	var subjects []string
-	for _, m := range msgs {
+	for _, m := range messageList {
 		if m.Envelope != nil {
 			subjects = append(subjects, m.Envelope.Subject)
 		}
@@ -90,10 +90,10 @@ func TestInternalRoutingTwoDomains(t *testing.T) {
 	// kirby.so + catch-all(maro)
 	var kirbyID int64
 	if err := env.store.Pool().QueryRow(ctx,
-		`INSERT INTO domains (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
+		`INSERT INTO domain (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
 		t.Fatalf("kirby.so 시드: %v", err)
 	}
-	maro, _ := env.store.FindUserByAddress(ctx, testAddr)
+	maro, _ := env.store.FindAccountByAddress(ctx, testAddr)
 	if _, err := env.store.CreateAlias(ctx, kirbyID, "*", maro.ID); err != nil {
 		t.Fatalf("catch-all: %v", err)
 	}
@@ -130,15 +130,15 @@ func TestInternalRoutingTwoDomains(t *testing.T) {
 	}
 
 	// maro INBOX에 도착 확인 (catch-all이 maro니까)
-	msgs := readInbox(t, env.imapAddr, testAddr, testPass)
+	messageList := readInbox(t, env.imapAddr, testAddr, testPass)
 	found := false
-	for _, m := range msgs {
+	for _, m := range messageList {
 		if m.Envelope != nil && strings.Contains(m.Envelope.Subject, "cross-domain internal") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("내부 배달 안 됨 (%d통)", len(msgs))
+		t.Fatalf("내부 배달 안 됨 (%d통)", len(messageList))
 	}
 	t.Log("✔ krisam.in → kirby.so 제출이 relay 없이 내부 배달 (큐 0건)")
 }
@@ -149,7 +149,7 @@ func TestSubmissionSendAsAlias(t *testing.T) {
 	env, subAddr := setupSubmission(t)
 	ctx := context.Background()
 
-	maro, _ := env.store.FindUserByAddress(ctx, testAddr)
+	maro, _ := env.store.FindAccountByAddress(ctx, testAddr)
 	if _, err := env.store.CreateAlias(ctx, maro.DomainID, "hello", maro.ID); err != nil {
 		t.Fatalf("별칭: %v", err)
 	}

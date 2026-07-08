@@ -34,7 +34,7 @@ func testStore(t *testing.T) *postgres.Store {
 	}
 	t.Cleanup(st.Close)
 	_, _ = st.Pool().Exec(context.Background(),
-		`TRUNCATE domains, users, app_passwords, mailboxes, messages, message_flags, message_blobs, outbound_queue, aliases RESTART IDENTITY CASCADE`)
+		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias RESTART IDENTITY CASCADE`)
 	return st
 }
 
@@ -63,11 +63,11 @@ func (m *mockSender) callCount() int {
 	return len(m.calls)
 }
 
-func queueStatus(t *testing.T, st *postgres.Store, id int64) (status string, attempts int, lastError string) {
+func queueStatus(t *testing.T, st *postgres.Store, id int64) (status string, attemptCount int, lastError string) {
 	t.Helper()
 	err := st.Pool().QueryRow(context.Background(),
-		`SELECT status, attempts, COALESCE(last_error, '') FROM outbound_queue WHERE id = $1`, id).
-		Scan(&status, &attempts, &lastError)
+		`SELECT status, attempt_count, COALESCE(last_error, '') FROM outbound_queue WHERE id = $1`, id).
+		Scan(&status, &attemptCount, &lastError)
 	if err != nil {
 		t.Fatalf("큐 상태 조회: %v", err)
 	}
@@ -96,9 +96,9 @@ func TestQueueSuccess(t *testing.T) {
 		t.Fatalf("sender 2회 호출돼야: %d", sender.callCount())
 	}
 	for _, id := range []int64{1, 2} {
-		status, attempts, _ := queueStatus(t, st, id)
-		if status != store.OutboundSent || attempts != 0 {
-			t.Fatalf("id=%d sent여야: %s attempts=%d", id, status, attempts)
+		status, attemptCount, _ := queueStatus(t, st, id)
+		if status != store.OutboundSent || attemptCount != 0 {
+			t.Fatalf("id=%d sent여야: %s attemptCount=%d", id, status, attemptCount)
 		}
 	}
 	// 재실행 시 due 없음
@@ -125,9 +125,9 @@ func TestQueueRetryBackoff(t *testing.T) {
 	if n, _ := w.ProcessOnce(ctx); n != 1 {
 		t.Fatal("1건 처리해야")
 	}
-	status, attempts, lastErr := queueStatus(t, st, 1)
-	if status != store.OutboundPending || attempts != 1 || !strings.Contains(lastErr, "connection refused") {
-		t.Fatalf("재시도 대기여야: %s attempts=%d err=%q", status, attempts, lastErr)
+	status, attemptCount, lastErr := queueStatus(t, st, 1)
+	if status != store.OutboundPending || attemptCount != 1 || !strings.Contains(lastErr, "connection refused") {
+		t.Fatalf("재시도 대기여야: %s attemptCount=%d err=%q", status, attemptCount, lastErr)
 	}
 
 	// next_attempt_at이 미래 → 당장은 due 아님
@@ -185,19 +185,19 @@ func TestQueueMaxAttempts(t *testing.T) {
 	sender := &mockSender{errs: []error{
 		errors.New("timeout 1"), errors.New("timeout 2"),
 	}}
-	w := NewWorker(st, sender, Config{MaxAttempts: 2, BaseBackoff: time.Minute})
+	w := NewWorker(st, sender, Config{MaxAttemptCount: 2, BaseBackoff: time.Minute})
 
 	// 1차: 일시 오류 → 재시도 대기
 	_, _ = w.ProcessOnce(ctx)
-	// due로 되돌리고 2차: MaxAttempts 도달 → failed
+	// due로 되돌리고 2차: MaxAttemptCount 도달 → failed
 	_, _ = st.Pool().Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = 1`)
 	_, _ = w.ProcessOnce(ctx)
 
-	status, attempts, _ := queueStatus(t, st, 1)
-	if status != store.OutboundFailed || attempts != 2 {
-		t.Fatalf("소진 후 failed여야: %s attempts=%d", status, attempts)
+	status, attemptCount, _ := queueStatus(t, st, 1)
+	if status != store.OutboundFailed || attemptCount != 2 {
+		t.Fatalf("소진 후 failed여야: %s attemptCount=%d", status, attemptCount)
 	}
-	t.Log("✔ MaxAttempts 소진 → failed")
+	t.Log("✔ MaxAttemptCount 소진 → failed")
 }
 
 // TestSubmissionToQueueToRelay: 진짜 end-to-end —
@@ -208,13 +208,13 @@ func TestSubmissionToQueueToRelay(t *testing.T) {
 	ctx := context.Background()
 
 	// 시드: 우리 도메인 krisam.in의 maro + relay 쪽 도메인 external.test의 friend
-	seedUser(t, st, "maro@krisam.in", "queue-test-pw")
-	seedUser(t, st, "friend@external.test", "friend-pw")
+	seedAccount(t, st, "maro@krisam.in", "queue-test-pw")
+	seedAccount(t, st, "friend@external.test", "friend-pw")
 	// external.test를 다시 비활성화해 "외부 도메인"으로 만든다... 대신
 	// 더 단순하게: relay 서버는 별도 store 없이 같은 store의 MX 백엔드를 쓰되,
 	// submission 쪽에서 krisam.in만 로컬로 인식하도록 external.test를 비활성 처리.
 	if _, err := st.Pool().Exec(ctx,
-		`UPDATE domains SET active = false WHERE name = 'external.test'`); err != nil {
+		`UPDATE domain SET active = false WHERE name = 'external.test'`); err != nil {
 		t.Fatalf("도메인 비활성: %v", err)
 	}
 
@@ -329,7 +329,7 @@ func (s *recordingSession) Data(r io.Reader) error {
 func (s *recordingSession) Reset()        {}
 func (s *recordingSession) Logout() error { return nil }
 
-func seedUser(t *testing.T, st *postgres.Store, address, password string) {
+func seedAccount(t *testing.T, st *postgres.Store, address, password string) {
 	t.Helper()
 	ctx := context.Background()
 	local := address[:strings.LastIndex(address, "@")]
@@ -337,16 +337,16 @@ func seedUser(t *testing.T, st *postgres.Store, address, password string) {
 
 	var domainID int64
 	if err := st.Pool().QueryRow(ctx,
-		`INSERT INTO domains (name) VALUES ($1)
+		`INSERT INTO domain (name) VALUES ($1)
 		 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
 		domain).Scan(&domainID); err != nil {
 		t.Fatalf("도메인 시드: %v", err)
 	}
-	var userID int64
+	var accountID int64
 	if err := st.Pool().QueryRow(ctx,
-		`INSERT INTO users (domain_id, local_part) VALUES ($1, $2)
+		`INSERT INTO account (domain_id, local_part) VALUES ($1, $2)
 		 ON CONFLICT (domain_id, local_part) DO UPDATE SET local_part = EXCLUDED.local_part
-		 RETURNING id`, domainID, local).Scan(&userID); err != nil {
+		 RETURNING id`, domainID, local).Scan(&accountID); err != nil {
 		t.Fatalf("유저 시드: %v", err)
 	}
 	hash, err := postgres.HashPassword(password)
@@ -354,8 +354,8 @@ func seedUser(t *testing.T, st *postgres.Store, address, password string) {
 		t.Fatalf("해시: %v", err)
 	}
 	if _, err := st.Pool().Exec(ctx,
-		`INSERT INTO app_passwords (user_id, label, hash) VALUES ($1, 'queue-test', $2)`,
-		userID, hash); err != nil {
+		`INSERT INTO app_password (account_id, label, hash) VALUES ($1, 'queue-test', $2)`,
+		accountID, hash); err != nil {
 		t.Fatalf("앱비번 시드: %v", err)
 	}
 }

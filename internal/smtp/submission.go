@@ -52,11 +52,11 @@ type SubmissionSession struct {
 	remoteAddr string
 	heloName   string
 
-	user     *store.User // 인증 성공 시 채워짐
-	userAddr string      // 인증에 쓴 주소 (envelope from 검증용)
+	user     *store.Account // 인증 성공 시 채워짐
+	accountAddr string      // 인증에 쓴 주소 (envelope from 검증용)
 
 	from     string
-	rcpts    []rcpt   // 로컬 배달 대상
+	rcptList    []rcpt   // 로컬 배달 대상
 	external []string // 외부 도메인 → 발송 큐 대상
 }
 
@@ -92,7 +92,7 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 			return err
 		}
 		s.user = u
-		s.userAddr = strings.ToLower(username)
+		s.accountAddr = strings.ToLower(username)
 		return nil
 	}), nil
 }
@@ -103,7 +103,7 @@ func (s *SubmissionSession) Mail(from string, opts *gosmtp.MailOptions) error {
 	if s.user == nil {
 		return gosmtp.ErrAuthRequired
 	}
-	if strings.ToLower(from) != s.userAddr {
+	if strings.ToLower(from) != s.accountAddr {
 		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 		ok, err := s.backend.store.CanSendAs(ctx, s.user.ID, from)
 		cancel()
@@ -147,7 +147,7 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 				return &gosmtp.SMTPError{
 					Code:         550,
 					EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
-					Message:      "relaying to external domains is disabled",
+					Message:      "relaying to external domainList is disabled",
 				}
 			}
 			s.external = append(s.external, to)
@@ -167,13 +167,13 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 		}
 		return err
 	}
-	s.rcpts = append(s.rcpts, rcpt{address: to, user: u})
+	s.rcptList = append(s.rcptList, rcpt{address: to, user: u})
 	return nil
 }
 
 // Data는 본문을 받아 로컬 수신자에게 배달하고, 외부 수신자는 발송 큐에 넣는다.
 func (s *SubmissionSession) Data(r io.Reader) error {
-	if len(s.rcpts) == 0 && len(s.external) == 0 {
+	if len(s.rcptList) == 0 && len(s.external) == 0 {
 		return &gosmtp.SMTPError{
 			Code:         503,
 			EnhancedCode: gosmtp.EnhancedCode{5, 5, 1},
@@ -195,7 +195,7 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 
 	now := timeNow()
 	delivered := 0
-	for _, rc := range s.rcpts {
+	for _, rc := range s.rcptList {
 		stamped := inbound.receivedHeader(rc.address, now)
 		stamped = append(stamped, raw...)
 		if err := inbound.deliver(rc, stamped, now); err != nil {
@@ -214,7 +214,7 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		err := s.backend.store.EnqueueOutbound(ctx, s.from, s.external, stamped)
 		cancel()
 		if err != nil {
-			log.Printf("submission: 큐 삽입 실패 from=%s rcpts=%v: %v", s.from, s.external, err)
+			log.Printf("submission: 큐 삽입 실패 from=%s rcptList=%v: %v", s.from, s.external, err)
 		} else {
 			enqueued = len(s.external)
 		}
@@ -228,13 +228,13 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		}
 	}
 	log.Printf("submission: 제출 완료 user=%s local=%d/%d queued=%d/%d size=%d",
-		s.userAddr, delivered, len(s.rcpts), enqueued, len(s.external), len(raw))
+		s.accountAddr, delivered, len(s.rcptList), enqueued, len(s.external), len(raw))
 	return nil
 }
 
 func (s *SubmissionSession) Reset() {
 	s.from = ""
-	s.rcpts = nil
+	s.rcptList = nil
 	s.external = nil
 }
 

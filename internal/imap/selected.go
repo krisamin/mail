@@ -87,17 +87,17 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 		entry  snapEntry
 	}
 	var hits []hit
-	ids := map[int64]bool{}
+	idList := map[int64]bool{}
 	s.forEachInSet(numSet, func(seqNum uint32, e snapEntry) bool {
 		hits = append(hits, hit{seqNum, e})
-		ids[e.msgID] = true
+		idList[e.msgID] = true
 		return true
 	})
 	if len(hits) == 0 {
 		return nil
 	}
 
-	metas, err := s.loadMessages(ids)
+	metas, err := s.loadMessages(idList)
 	if err != nil {
 		return err
 	}
@@ -193,16 +193,16 @@ func (s *Session) Store(w *imapserver.FetchWriter, numSet goimap.NumSet, flags *
 		return err
 	}
 
-	ids := map[int64]bool{}
+	idList := map[int64]bool{}
 	s.forEachInSet(numSet, func(_ uint32, e snapEntry) bool {
-		ids[e.msgID] = true
+		idList[e.msgID] = true
 		return true
 	})
-	if len(ids) == 0 {
+	if len(idList) == 0 {
 		return nil
 	}
 
-	metas, err := s.loadMessages(ids)
+	metas, err := s.loadMessages(idList)
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func (s *Session) Copy(numSet goimap.NumSet, destName string) (*goimap.CopyData,
 	if dest.ID == s.mailbox.ID {
 		return nil, &goimap.Error{
 			Type: goimap.StatusResponseTypeNo,
-			Text: "source and destination mailboxes are identical",
+			Text: "source and destination mailboxList are identical",
 		}
 	}
 
@@ -282,11 +282,11 @@ func (s *Session) Search(kind imapserver.NumKind, criteria *goimap.SearchCriteri
 		return nil, err
 	}
 
-	ids := make(map[int64]bool, len(s.snap))
+	idList := make(map[int64]bool, len(s.snap))
 	for _, e := range s.snap {
-		ids[e.msgID] = true
+		idList[e.msgID] = true
 	}
-	metas, err := s.loadMessages(ids)
+	metas, err := s.loadMessages(idList)
 	if err != nil {
 		return nil, err
 	}

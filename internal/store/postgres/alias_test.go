@@ -24,11 +24,11 @@ func aliasTestStore(t *testing.T) *Store {
 	}
 	t.Cleanup(st.Close)
 	_, _ = st.Pool().Exec(context.Background(),
-		`TRUNCATE domains, users, app_passwords, mailboxes, messages, message_flags, message_blobs, outbound_queue, aliases RESTART IDENTITY CASCADE`)
+		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias RESTART IDENTITY CASCADE`)
 	return st
 }
 
-func TestAliases(t *testing.T) {
+func TestAlias(t *testing.T) {
 	st := aliasTestStore(t)
 	ctx := context.Background()
 
@@ -40,11 +40,11 @@ func TestAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("kirby.so: %v", err)
 	}
-	maro, err := st.CreateUser(ctx, krisam.ID, "maro")
+	maro, err := st.CreateAccount(ctx, krisam.ID, "maro")
 	if err != nil {
 		t.Fatalf("maro: %v", err)
 	}
-	guest, err := st.CreateUser(ctx, krisam.ID, "guest")
+	guest, err := st.CreateAccount(ctx, krisam.ID, "guest")
 	if err != nil {
 		t.Fatalf("guest: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestAliases(t *testing.T) {
 
 	// 6) CanSendAs
 	for _, tc := range []struct {
-		userID int64
+		accountID int64
 		addr   string
 		want   bool
 	}{
@@ -110,29 +110,29 @@ func TestAliases(t *testing.T) {
 		{maro.ID, "gyestt@kirby.so", false},  // guest의 정확 별칭 — catch-all 있어도 정확이 우선
 		{maro.ID, "x@nowhere.com", false},    // 외부
 	} {
-		got, err := st.CanSendAs(ctx, tc.userID, tc.addr)
+		got, err := st.CanSendAs(ctx, tc.accountID, tc.addr)
 		if err != nil || got != tc.want {
-			t.Fatalf("CanSendAs(%d, %s) = %v (want %v): %v", tc.userID, tc.addr, got, tc.want, err)
+			t.Fatalf("CanSendAs(%d, %s) = %v (want %v): %v", tc.accountID, tc.addr, got, tc.want, err)
 		}
 	}
 	t.Log("✔ CanSendAs 7케이스")
 
 	// 7) 목록/삭제
-	aliases, err := st.ListUserAliases(ctx, maro.ID)
-	if err != nil || len(aliases) != 2 {
-		t.Fatalf("maro 별칭 2개여야: %v %d", err, len(aliases))
+	aliasList, err := st.ListAccountAlias(ctx, maro.ID)
+	if err != nil || len(aliasList) != 2 {
+		t.Fatalf("maro 별칭 2개여야: %v %d", err, len(aliasList))
 	}
-	if aliases[0].DomainName == "" || aliases[0].UserLocalPart == "" {
+	if aliasList[0].DomainName == "" || aliasList[0].AccountLocalPart == "" {
 		t.Fatal("JOIN 편의 필드가 비어있음")
 	}
-	domainAliases, err := st.ListAliases(ctx, kirby.ID)
+	domainAliases, err := st.ListAlias(ctx, kirby.ID)
 	if err != nil || len(domainAliases) != 2 {
 		t.Fatalf("kirby.so 별칭 2개여야: %v %d", err, len(domainAliases))
 	}
-	if err := st.DeleteAlias(ctx, aliases[0].ID); err != nil {
+	if err := st.DeleteAlias(ctx, aliasList[0].ID); err != nil {
 		t.Fatalf("삭제: %v", err)
 	}
-	if err := st.DeleteAlias(ctx, aliases[0].ID); err != store.ErrNotFound {
+	if err := st.DeleteAlias(ctx, aliasList[0].ID); err != store.ErrNotFound {
 		t.Fatalf("이중 삭제는 NotFound여야: %v", err)
 	}
 	t.Log("✔ 목록(JOIN 필드)/삭제/이중삭제")

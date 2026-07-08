@@ -25,7 +25,7 @@ type Session struct {
 	backend *Backend
 
 	// 인증 후 채워짐
-	user *store.User
+	user *store.Account
 
 	// SELECT 후 채워짐
 	mailbox  *store.Mailbox
@@ -95,13 +95,13 @@ func (s *Session) Select(name string, options *goimap.SelectOptions) (*goimap.Se
 	if err != nil {
 		return nil, mapMailboxErr(err)
 	}
-	msgs, err := s.backend.store.ListMessages(ctx, mbox.ID)
+	messageList, err := s.backend.store.ListMessages(ctx, mbox.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	snap := make([]snapEntry, len(msgs))
-	for i, m := range msgs {
+	snap := make([]snapEntry, len(messageList))
+	for i, m := range messageList {
 		snap[i] = snapEntry{msgID: m.ID, uid: goimap.UID(m.UID)}
 	}
 
@@ -198,13 +198,13 @@ func (s *Session) List(w *imapserver.ListWriter, ref string, patterns []string, 
 		})
 	}
 
-	boxes, err := s.backend.store.ListMailboxes(ctx, s.user.ID)
+	boxList, err := s.backend.store.ListMailbox(ctx, s.user.ID)
 	if err != nil {
 		return err
 	}
 
 	var out []goimap.ListData
-	for _, mbox := range boxes {
+	for _, mbox := range boxList {
 		if options.SelectSubscribed && !mbox.Subscribed {
 			continue
 		}
@@ -341,12 +341,12 @@ func (s *Session) pollChanges(w *imapserver.UpdateWriter, allowExpunge bool) err
 	ctx, cancel := opCtx()
 	defer cancel()
 
-	msgs, err := s.backend.store.ListMessages(ctx, s.mailbox.ID)
+	messageList, err := s.backend.store.ListMessages(ctx, s.mailbox.ID)
 	if err != nil {
 		return err
 	}
-	curByUID := make(map[goimap.UID]*store.Message, len(msgs))
-	for _, m := range msgs {
+	curByUID := make(map[goimap.UID]*store.Message, len(messageList))
+	for _, m := range messageList {
 		curByUID[goimap.UID(m.UID)] = m
 	}
 
@@ -369,7 +369,7 @@ func (s *Session) pollChanges(w *imapserver.UpdateWriter, allowExpunge bool) err
 		inSnap[e.uid] = true
 	}
 	added := false
-	for _, m := range msgs { // ListMessages는 UID 오름차순
+	for _, m := range messageList { // ListMessages는 UID 오름차순
 		uid := goimap.UID(m.UID)
 		if !inSnap[uid] {
 			s.snap = append(s.snap, snapEntry{msgID: m.ID, uid: uid})

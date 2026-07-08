@@ -55,7 +55,7 @@ export type User = {
 export type AppPassword = {
   id: number;
   label: string;
-  scopes: string[];
+  scopeList: string[];
   lastUsed: string | null;
   createdAt: string;
   revoked: boolean;
@@ -66,9 +66,9 @@ export type Alias = {
   domainId: number;
   domainName: string;
   localPart: string; // '*' = catch-all
-  userId: number;
-  userLocalPart: string;
-  userDomainName: string;
+  accountId: number;
+  accountLocalPart: string;
+  accountDomainName: string;
   createdAt: string;
 };
 
@@ -77,7 +77,7 @@ export type QueueItem = {
   from: string;
   rcpt: string;
   status: string;
-  attempts: number;
+  attemptCount: number;
   nextAttemptAt: string;
   lastError: string;
   createdAt: string;

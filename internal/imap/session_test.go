@@ -43,19 +43,19 @@ func setupServer(t *testing.T) (addr string) {
 	t.Cleanup(st.Close)
 
 	// 테스트 격리
-	_, _ = st.Pool().Exec(ctx, `TRUNCATE domains, users, app_passwords, mailboxes, messages, message_flags, message_blobs, outbound_queue, aliases RESTART IDENTITY CASCADE`)
+	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias RESTART IDENTITY CASCADE`)
 
 	// 시드: 도메인 + 유저 + 앱비밀번호 + INBOX
 	local := testAddr[:strings.LastIndex(testAddr, "@")]
 	domain := testAddr[strings.LastIndex(testAddr, "@")+1:]
-	var domainID, userID int64
+	var domainID, accountID int64
 	if err := st.Pool().QueryRow(ctx,
-		`INSERT INTO domains (name) VALUES ($1) RETURNING id`, domain).Scan(&domainID); err != nil {
+		`INSERT INTO domain (name) VALUES ($1) RETURNING id`, domain).Scan(&domainID); err != nil {
 		t.Fatalf("도메인 시드: %v", err)
 	}
 	if err := st.Pool().QueryRow(ctx,
-		`INSERT INTO users (domain_id, local_part) VALUES ($1, $2) RETURNING id`,
-		domainID, local).Scan(&userID); err != nil {
+		`INSERT INTO account (domain_id, local_part) VALUES ($1, $2) RETURNING id`,
+		domainID, local).Scan(&accountID); err != nil {
 		t.Fatalf("유저 시드: %v", err)
 	}
 	hash, err := postgres.HashPassword(testPass)
@@ -63,11 +63,11 @@ func setupServer(t *testing.T) (addr string) {
 		t.Fatalf("해시: %v", err)
 	}
 	if _, err := st.Pool().Exec(ctx,
-		`INSERT INTO app_passwords (user_id, label, hash) VALUES ($1, 'imap-test', $2)`,
-		userID, hash); err != nil {
+		`INSERT INTO app_password (account_id, label, hash) VALUES ($1, 'imap-test', $2)`,
+		accountID, hash); err != nil {
 		t.Fatalf("앱비번 시드: %v", err)
 	}
-	if _, err := st.CreateMailbox(ctx, userID, "INBOX"); err != nil {
+	if _, err := st.CreateMailbox(ctx, accountID, "INBOX"); err != nil {
 		t.Fatalf("INBOX 생성: %v", err)
 	}
 
@@ -119,9 +119,9 @@ func TestIMAPFullFlow(t *testing.T) {
 	t.Log("✔ LOGIN (앱 비밀번호)")
 
 	// 2) LIST — INBOX 보여야
-	boxes, err := c.List("", "*", nil).Collect()
-	if err != nil || len(boxes) != 1 || boxes[0].Mailbox != "INBOX" {
-		t.Fatalf("LIST 이상: %v %+v", err, boxes)
+	boxList, err := c.List("", "*", nil).Collect()
+	if err != nil || len(boxList) != 1 || boxList[0].Mailbox != "INBOX" {
+		t.Fatalf("LIST 이상: %v %+v", err, boxList)
 	}
 	t.Log("✔ LIST: INBOX")
 
@@ -157,14 +157,14 @@ func TestIMAPFullFlow(t *testing.T) {
 
 	// 5) FETCH — envelope + flags + 본문 전문
 	seq := goimap.SeqSetNum(1)
-	msgs, err := c.Fetch(seq, &goimap.FetchOptions{
+	messageList, err := c.Fetch(seq, &goimap.FetchOptions{
 		Envelope: true, Flags: true, RFC822Size: true, UID: true,
 		BodySection: []*goimap.FetchItemBodySection{{}},
 	}).Collect()
-	if err != nil || len(msgs) != 1 {
-		t.Fatalf("FETCH: %v (%d msgs)", err, len(msgs))
+	if err != nil || len(messageList) != 1 {
+		t.Fatalf("FETCH: %v (%d messageList)", err, len(messageList))
 	}
-	m := msgs[0]
+	m := messageList[0]
 	if m.Envelope == nil || m.Envelope.Subject != "IMAP roundtrip" {
 		t.Fatalf("envelope 이상: %+v", m.Envelope)
 	}
@@ -284,9 +284,9 @@ func TestIMAPMultiSession(t *testing.T) {
 	if err := a.Noop().Wait(); err != nil {
 		t.Fatalf("A NOOP: %v", err)
 	}
-	msgs, err := a.Fetch(goimap.SeqSetNum(1), &goimap.FetchOptions{UID: true}).Collect()
-	if err != nil || len(msgs) != 1 {
-		t.Fatalf("A가 B의 메일을 못 봄: %v (%d msgs)", err, len(msgs))
+	messageList, err := a.Fetch(goimap.SeqSetNum(1), &goimap.FetchOptions{UID: true}).Collect()
+	if err != nil || len(messageList) != 1 {
+		t.Fatalf("A가 B의 메일을 못 봄: %v (%d messageList)", err, len(messageList))
 	}
-	t.Logf("✔ 멀티세션: B의 APPEND가 A의 NOOP 이후 seq=1 uid=%d로 보임", msgs[0].UID)
+	t.Logf("✔ 멀티세션: B의 APPEND가 A의 NOOP 이후 seq=1 uid=%d로 보임", messageList[0].UID)
 }

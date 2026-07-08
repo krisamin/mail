@@ -42,7 +42,7 @@ type Config struct {
 	// BatchSize는 한 번에 가져올 최대 항목 수. 기본 10.
 	BatchSize int
 	// MaxAttempts를 넘으면 영구 실패. 기본 6 (백오프 합계 ≈ 2시간).
-	MaxAttempts int
+	MaxAttemptCount int
 	// BaseBackoff는 지수 백오프의 밑. 기본 1분: 1m→2m→4m→8m→16m→32m.
 	BaseBackoff time.Duration
 }
@@ -54,8 +54,8 @@ func (c Config) withDefaults() Config {
 	if c.BatchSize <= 0 {
 		c.BatchSize = 10
 	}
-	if c.MaxAttempts <= 0 {
-		c.MaxAttempts = 6
+	if c.MaxAttemptCount <= 0 {
+		c.MaxAttemptCount = 6
 	}
 	if c.BaseBackoff <= 0 {
 		c.BaseBackoff = time.Minute
@@ -92,8 +92,8 @@ func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.cfg.PollInterval)
 	defer ticker.Stop()
 
-	log.Printf("queue: 발송 워커 시작 (poll=%s batch=%d maxAttempts=%d)",
-		w.cfg.PollInterval, w.cfg.BatchSize, w.cfg.MaxAttempts)
+	log.Printf("queue: 발송 워커 시작 (poll=%s batch=%d maxAttemptCount=%d)",
+		w.cfg.PollInterval, w.cfg.BatchSize, w.cfg.MaxAttemptCount)
 	for {
 		select {
 		case <-ctx.Done():
@@ -139,28 +139,28 @@ func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
 		if err := w.store.MarkOutboundSent(ctx, m.ID); err != nil {
 			log.Printf("queue: sent 마킹 실패 id=%d: %v", m.ID, err)
 		}
-		log.Printf("queue: 발송 완료 id=%d to=%s (attempt %d)", m.ID, m.EnvelopeRcpt, m.Attempts+1)
+		log.Printf("queue: 발송 완료 id=%d to=%s (attempt %d)", m.ID, m.EnvelopeRcpt, m.AttemptCount+1)
 		return
 	}
 
 	// 영구 오류 또는 재시도 소진 → failed
 	var perm *PermanentError
-	if errors.As(err, &perm) || m.Attempts+1 >= w.cfg.MaxAttempts {
+	if errors.As(err, &perm) || m.AttemptCount+1 >= w.cfg.MaxAttemptCount {
 		if merr := w.store.MarkOutboundFailed(ctx, m.ID, err.Error()); merr != nil {
 			log.Printf("queue: failed 마킹 실패 id=%d: %v", m.ID, merr)
 		}
 		log.Printf("queue: 영구 실패 id=%d to=%s: %v (attempt %d/%d)",
-			m.ID, m.EnvelopeRcpt, err, m.Attempts+1, w.cfg.MaxAttempts)
+			m.ID, m.EnvelopeRcpt, err, m.AttemptCount+1, w.cfg.MaxAttemptCount)
 		// TODO(Phase 2-3 후속): 발신자에게 bounce(DSN) 메일 생성
 		return
 	}
 
 	// 일시 오류 → 지수 백오프 재시도
-	backoff := w.cfg.BaseBackoff << m.Attempts // 1m, 2m, 4m, ...
+	backoff := w.cfg.BaseBackoff << m.AttemptCount // 1m, 2m, 4m, ...
 	next := time.Now().Add(backoff)
 	if merr := w.store.MarkOutboundRetry(ctx, m.ID, err.Error(), next); merr != nil {
 		log.Printf("queue: retry 마킹 실패 id=%d: %v", m.ID, merr)
 	}
 	log.Printf("queue: 재시도 예약 id=%d to=%s in %s: %v (attempt %d/%d)",
-		m.ID, m.EnvelopeRcpt, backoff, err, m.Attempts+1, w.cfg.MaxAttempts)
+		m.ID, m.EnvelopeRcpt, backoff, err, m.AttemptCount+1, w.cfg.MaxAttemptCount)
 }

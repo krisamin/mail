@@ -63,7 +63,7 @@ func (b *Backend) NewSession(c *gosmtp.Conn) (gosmtp.Session, error) {
 // rcpt는 검증 통과한 수신자 하나.
 type rcpt struct {
 	address string
-	user    *store.User
+	user    *store.Account
 }
 
 // Session은 SMTP 트랜잭션 하나 (gosmtp.Session 구현).
@@ -73,7 +73,7 @@ type Session struct {
 	heloName   string
 
 	from  string
-	rcpts []rcpt
+	rcptList []rcpt
 }
 
 var _ gosmtp.Session = (*Session)(nil)
@@ -101,13 +101,13 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 		}
 		return err
 	}
-	s.rcpts = append(s.rcpts, rcpt{address: to, user: u})
+	s.rcptList = append(s.rcptList, rcpt{address: to, user: u})
 	return nil
 }
 
 // Data는 본문을 받아 각 수신자의 INBOX에 배달한다.
 func (s *Session) Data(r io.Reader) error {
-	if len(s.rcpts) == 0 {
+	if len(s.rcptList) == 0 {
 		return &gosmtp.SMTPError{
 			Code:         503,
 			EnhancedCode: gosmtp.EnhancedCode{5, 5, 1},
@@ -137,7 +137,7 @@ func (s *Session) Data(r io.Reader) error {
 
 	now := timeNow()
 	delivered := 0
-	for _, rc := range s.rcpts {
+	for _, rc := range s.rcptList {
 		// 수신자별 Received 헤더 prepend (RFC 5321 §4.4 — 배달 추적용)
 		stamped := s.receivedHeader(rc.address, now)
 		stamped = append(stamped, authHeader...)
@@ -157,7 +157,7 @@ func (s *Session) Data(r io.Reader) error {
 			Message:      "delivery failed, try again later",
 		}
 	}
-	log.Printf("smtp: 배달 완료 from=%s rcpts=%d/%d size=%d", s.from, delivered, len(s.rcpts), len(raw))
+	log.Printf("smtp: 배달 완료 from=%s rcptList=%d/%d size=%d", s.from, delivered, len(s.rcptList), len(raw))
 	return nil
 }
 
@@ -206,7 +206,7 @@ func remoteIP(remoteAddr string) net.IP {
 
 func (s *Session) Reset() {
 	s.from = ""
-	s.rcpts = nil
+	s.rcptList = nil
 }
 
 func (s *Session) Logout() error {

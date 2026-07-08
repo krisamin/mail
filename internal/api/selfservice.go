@@ -19,13 +19,13 @@ import (
 // 비밀번호가 본인 소유인지 확인한 후 실행한다 (IDOR 방지).
 
 // resolveMe는 토큰의 email 클레임으로 본인 메일 계정을 찾는다.
-func (s *Server) resolveMe(w http.ResponseWriter, r *http.Request) *store.User {
+func (s *Server) resolveMe(w http.ResponseWriter, r *http.Request) *store.Account {
 	id := IdentityFrom(r.Context())
 	if id == nil || id.Email == "" {
 		writeError(w, http.StatusUnauthorized, "email claim required")
 		return nil
 	}
-	u, err := s.store.FindUserByAddress(r.Context(), strings.ToLower(id.Email))
+	u, err := s.store.FindAccountByAddress(r.Context(), strings.ToLower(id.Email))
 	if err != nil {
 		// 활성 유저 없음 → 메일 계정 미개설
 		writeError(w, http.StatusNotFound, "mail account not found for "+id.Email)
@@ -40,7 +40,7 @@ func (s *Server) handleMeAccount(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	writeJSON(w, http.StatusOK, toUserDTO(u))
+	writeJSON(w, http.StatusOK, toAccountDTO(u))
 }
 
 // handleMeGate는 로그인 게이트 판정용 — 토큰 email의 도메인이 우리
@@ -63,7 +63,7 @@ func (s *Server) handleMeGate(w http.ResponseWriter, r *http.Request) {
 	out := map[string]bool{"domainExists": false, "accountExists": false}
 	if _, err := s.store.FindDomain(r.Context(), domain); err == nil {
 		out["domainExists"] = true
-		if _, err := s.store.FindUserByAddress(r.Context(), email); err == nil {
+		if _, err := s.store.FindAccountByAddress(r.Context(), email); err == nil {
 			out["accountExists"] = true
 		}
 	}
@@ -76,31 +76,31 @@ func (s *Server) handleMeAliases(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	aliases, err := s.store.ListUserAliases(r.Context(), u.ID)
+	aliasList, err := s.store.ListAccountAlias(r.Context(), u.ID)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	out := make([]aliasDTO, 0, len(aliases))
-	for _, a := range aliases {
+	out := make([]aliasDTO, 0, len(aliasList))
+	for _, a := range aliasList {
 		out = append(out, toAliasDTO(a))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleMeListAppPasswords는 본인 앱 비밀번호 목록.
-func (s *Server) handleMeListAppPasswords(w http.ResponseWriter, r *http.Request) {
+// handleMeListAppPassword는 본인 앱 비밀번호 목록.
+func (s *Server) handleMeListAppPassword(w http.ResponseWriter, r *http.Request) {
 	u := s.resolveMe(w, r)
 	if u == nil {
 		return
 	}
-	pws, err := s.store.ListAppPasswords(r.Context(), u.ID)
+	passwordList, err := s.store.ListAppPassword(r.Context(), u.ID)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	out := make([]appPasswordDTO, 0, len(pws))
-	for _, p := range pws {
+	out := make([]appPasswordDTO, 0, len(passwordList))
+	for _, p := range passwordList {
 		out = append(out, toAppPasswordDTO(p))
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -152,13 +152,13 @@ func (s *Server) handleMeRevokeAppPassword(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// 소유권 검증: 본인 목록에 있는 id만 허용
-	pws, err := s.store.ListAppPasswords(r.Context(), u.ID)
+	passwordList, err := s.store.ListAppPassword(r.Context(), u.ID)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
 	owned := false
-	for _, p := range pws {
+	for _, p := range passwordList {
 		if p.ID == id {
 			owned = true
 			break

@@ -57,20 +57,20 @@ func TestSelfService(t *testing.T) {
 	srv := testServer(t)
 
 	// 시드: admin 권한으로 도메인 + 유저 2명 (maro, guest)
-	code, dom, _ := call(t, srv, "POST", "/api/admin/domains", map[string]string{"name": "krisam.in"})
+	code, dom, _ := call(t, srv, "POST", "/api/admin/domain", map[string]string{"name": "krisam.in"})
 	if code != 201 {
 		t.Fatalf("도메인: %d %v", code, dom)
 	}
 	domID := int64(dom["id"].(float64))
 	for _, name := range []string{"maro", "guest"} {
-		if code, u, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domains/%d/users", domID),
+		if code, u, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/account", domID),
 			map[string]string{"localPart": name}); code != 201 {
 			t.Fatalf("유저 %s: %d %v", name, code, u)
 		}
 	}
 
 	// 1) 일반 유저는 admin API 접근 불가 (403)
-	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "GET", "/api/admin/domains", nil)
+	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "GET", "/api/admin/domain", nil)
 	if code != 403 {
 		t.Fatalf("일반 유저의 admin 접근은 403이어야: %d", code)
 	}
@@ -91,7 +91,7 @@ func TestSelfService(t *testing.T) {
 	t.Log("✔ 미개설 계정 404")
 
 	// 3) 본인 앱비번 발급 → 목록 → revoke
-	code, pw, _ := callAs(t, srv, "guest@krisam.in", "", "POST", "/api/me/app-passwords",
+	code, pw, _ := callAs(t, srv, "guest@krisam.in", "", "POST", "/api/me/app-password",
 		map[string]string{"label": "내 폰"})
 	if code != 201 || pw["plaintext"] == nil {
 		t.Fatalf("발급: %d %v", code, pw)
@@ -99,14 +99,14 @@ func TestSelfService(t *testing.T) {
 	guestPwID := int64(pw["appPassword"].(map[string]any)["id"].(float64))
 	t.Logf("✔ 본인 앱비번 발급: %v", pw["plaintext"])
 
-	code, _, pws := callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/app-passwords", nil)
-	if code != 200 || len(pws) != 1 {
-		t.Fatalf("목록: %d %v", code, pws)
+	code, _, passwordList := callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/app-password", nil)
+	if code != 200 || len(passwordList) != 1 {
+		t.Fatalf("목록: %d %v", code, passwordList)
 	}
 
 	// 4) IDOR 방지 — maro가 guest의 비번을 revoke 시도 → 404
 	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "DELETE",
-		fmt.Sprintf("/api/me/app-passwords/%d", guestPwID), nil)
+		fmt.Sprintf("/api/me/app-password/%d", guestPwID), nil)
 	if code != 404 {
 		t.Fatalf("타인 비번 revoke는 404여야 (IDOR): %d", code)
 	}
@@ -114,13 +114,13 @@ func TestSelfService(t *testing.T) {
 
 	// 본인 revoke는 성공
 	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "DELETE",
-		fmt.Sprintf("/api/me/app-passwords/%d", guestPwID), nil)
+		fmt.Sprintf("/api/me/app-password/%d", guestPwID), nil)
 	if code != 204 {
 		t.Fatalf("본인 revoke: %d", code)
 	}
-	code, _, pws = callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/app-passwords", nil)
-	if code != 200 || len(pws) != 1 || pws[0]["revoked"] != true {
-		t.Fatalf("revoke 반영: %d %v", code, pws)
+	code, _, passwordList = callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/app-password", nil)
+	if code != 200 || len(passwordList) != 1 || passwordList[0]["revoked"] != true {
+		t.Fatalf("revoke 반영: %d %v", code, passwordList)
 	}
 	t.Log("✔ 본인 revoke 204 + 반영")
 

@@ -13,14 +13,14 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   let account: User | null = null;
-  let appPasswords: AppPassword[] = [];
-  let aliases: Alias[] = [];
+  let appPasswordList: AppPassword[] = [];
+  let aliasList: Alias[] = [];
   let noAccount = false;
   try {
     account = await apiFetch<User>(user.idToken, "/api/me/account");
-    [appPasswords, aliases] = await Promise.all([
-      apiFetch<AppPassword[]>(user.idToken, "/api/me/app-passwords").then((r) => r ?? []),
-      apiFetch<Alias[]>(user.idToken, "/api/me/aliases").then((r) => r ?? []),
+    [appPasswordList, aliasList] = await Promise.all([
+      apiFetch<AppPassword[]>(user.idToken, "/api/me/app-password").then((r) => r ?? []),
+      apiFetch<Alias[]>(user.idToken, "/api/me/alias").then((r) => r ?? []),
     ]);
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
@@ -34,8 +34,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     email: user.email,
     admin: isAdmin(user),
     account,
-    appPasswords,
-    aliases,
+    appPasswordList,
+    aliasList,
     noAccount,
   };
 };
@@ -51,13 +51,13 @@ export const action = async ({ request }: Route.ActionArgs) => {
       case "create-pw": {
         const result = await apiFetch<{ appPassword: AppPassword; plaintext: string }>(
           user.idToken,
-          "/api/me/app-passwords",
+          "/api/me/app-password",
           { method: "POST", body: { label: String(form.get("label") ?? "") } },
         );
         return { ok: true as const, plaintext: result.plaintext };
       }
       case "revoke-pw": {
-        await apiFetch(user.idToken, `/api/me/app-passwords/${form.get("id")}`, {
+        await apiFetch(user.idToken, `/api/me/app-password/${form.get("id")}`, {
           method: "DELETE",
         });
         return { ok: true as const };
@@ -72,11 +72,11 @@ export const action = async ({ request }: Route.ActionArgs) => {
 };
 
 export default function Account({ loaderData, actionData }: Route.ComponentProps) {
-  const { name, email, admin, account, appPasswords, aliases, noAccount } = loaderData;
+  const { name, email, admin, account, appPasswordList, aliasList, noAccount } = loaderData;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
-  const active = appPasswords.filter((p) => !p.revoked);
-  const revoked = appPasswords.filter((p) => p.revoked);
+  const active = appPasswordList.filter((p) => !p.revoked);
+  const revoked = appPasswordList.filter((p) => p.revoked);
 
   return (
     <div className="min-h-dvh">
@@ -112,11 +112,11 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             <section className="rounded-md border border-line bg-bg-1 p-4">
               <h1 className="text-lg font-bold">내 메일 계정</h1>
               <p className="mt-1 font-mono text-sm text-text-1">{email}</p>
-              {aliases.length > 0 && (
+              {aliasList.length > 0 && (
                 <div className="mt-2">
                   <p className="text-xs text-text-2">이 주소들로도 받고 보낼 수 있어요:</p>
                   <ul className="mt-1 flex flex-wrap gap-1.5">
-                    {aliases.map((a) => (
+                    {aliasList.map((a) => (
                       <li
                         key={a.id}
                         className="rounded bg-bg-3 px-2 py-0.5 font-mono text-xs text-text-1"

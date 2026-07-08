@@ -14,35 +14,35 @@ type aliasDTO struct {
 	DomainID       int64  `json:"domainId"`
 	DomainName     string `json:"domainName"`
 	LocalPart      string `json:"localPart"` // '*' = catch-all
-	UserID         int64  `json:"userId"`
-	UserLocalPart  string `json:"userLocalPart"`
-	UserDomainName string `json:"userDomainName"`
+	AccountID         int64  `json:"accountId"`
+	AccountLocalPart  string `json:"accountLocalPart"`
+	AccountDomainName string `json:"accountDomainName"`
 	CreatedAt      string `json:"createdAt"`
 }
 
 func toAliasDTO(a *store.Alias) aliasDTO {
 	return aliasDTO{
 		ID: a.ID, DomainID: a.DomainID, DomainName: a.DomainName,
-		LocalPart: a.LocalPart, UserID: a.UserID,
-		UserLocalPart: a.UserLocalPart, UserDomainName: a.UserDomainName,
+		LocalPart: a.LocalPart, AccountID: a.AccountID,
+		AccountLocalPart: a.AccountLocalPart, AccountDomainName: a.AccountDomainName,
 		CreatedAt: a.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 
-// handleListAliases는 도메인의 별칭 목록.
-func (s *Server) handleListAliases(w http.ResponseWriter, r *http.Request) {
+// handleListAlias는 도메인의 별칭 목록.
+func (s *Server) handleListAlias(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	aliases, err := s.store.ListAliases(r.Context(), id)
+	aliasList, err := s.store.ListAlias(r.Context(), id)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	out := make([]aliasDTO, 0, len(aliases))
-	for _, a := range aliases {
+	out := make([]aliasDTO, 0, len(aliasList))
+	for _, a := range aliasList {
 		out = append(out, toAliasDTO(a))
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -57,18 +57,18 @@ func (s *Server) handleCreateAlias(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		LocalPart string `json:"localPart"`
-		UserID    int64  `json:"userId"`
+		AccountID    int64  `json:"accountId"`
 	}
-	if err := decodeBody(r, &req); err != nil || req.UserID == 0 {
+	if err := decodeBody(r, &req); err != nil || req.AccountID == 0 {
 		writeError(w, http.StatusBadRequest, "invalid body (localPart, userId required)")
 		return
 	}
 	// 대상 유저 존재 확인
-	if _, err := s.store.FindUserByID(r.Context(), req.UserID); err != nil {
+	if _, err := s.store.FindAccountByID(r.Context(), req.AccountID); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	a, err := s.store.CreateAlias(r.Context(), id, req.LocalPart, req.UserID)
+	a, err := s.store.CreateAlias(r.Context(), id, req.LocalPart, req.AccountID)
 	if err != nil {
 		mapStoreErr(w, err)
 		return

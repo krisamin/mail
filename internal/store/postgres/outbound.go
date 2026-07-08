@@ -9,14 +9,14 @@ import (
 )
 
 // EnqueueOutbound는 수신자별로 발송 항목을 큐에 넣는다 (한 트랜잭션).
-func (s *Store) EnqueueOutbound(ctx context.Context, from string, rcpts []string, raw []byte) error {
+func (s *Store) EnqueueOutbound(ctx context.Context, from string, rcptList []string, raw []byte) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	for _, rcpt := range rcpts {
+	for _, rcpt := range rcptList {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO outbound_queue (envelope_from, envelope_rcpt, raw)
 			 VALUES ($1, $2, $3)`, from, rcpt, raw); err != nil {
@@ -33,7 +33,7 @@ func (s *Store) EnqueueOutbound(ctx context.Context, from string, rcpts []string
 // 단일 워커 전제에선 충분하고, 다중 워커는 잠금 유지 트랜잭션으로 확장.)
 func (s *Store) DueOutbound(ctx context.Context, limit int) ([]*store.OutboundMessage, error) {
 	const q = `
-		SELECT id, envelope_from, envelope_rcpt, raw, status, attempts,
+		SELECT id, envelope_from, envelope_rcpt, raw, status, attempt_count,
 		       next_attempt_at, COALESCE(last_error, ''), created_at
 		FROM outbound_queue
 		WHERE status = 'pending' AND next_attempt_at <= now()
@@ -50,7 +50,7 @@ func (s *Store) DueOutbound(ctx context.Context, limit int) ([]*store.OutboundMe
 	for rows.Next() {
 		var m store.OutboundMessage
 		if err := rows.Scan(&m.ID, &m.EnvelopeFrom, &m.EnvelopeRcpt, &m.Raw,
-			&m.Status, &m.Attempts, &m.NextAttemptAt, &m.LastError, &m.CreatedAt); err != nil {
+			&m.Status, &m.AttemptCount, &m.NextAttemptAt, &m.LastError, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &m)
@@ -71,11 +71,11 @@ func (s *Store) MarkOutboundSent(ctx context.Context, id int64) error {
 	return nil
 }
 
-// MarkOutboundRetry는 실패 기록 + 다음 시도 시각 설정. attempts 증가.
+// MarkOutboundRetry는 실패 기록 + 다음 시도 시각 설정. attemptCount 증가.
 func (s *Store) MarkOutboundRetry(ctx context.Context, id int64, errMsg string, nextAttempt time.Time) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
-		 SET attempts = attempts + 1, last_error = $2, next_attempt_at = $3, updated_at = now()
+		 SET attempt_count = attempt_count + 1, last_error = $2, next_attempt_at = $3, updated_at = now()
 		 WHERE id = $1`, id, errMsg, nextAttempt)
 	if err != nil {
 		return fmt.Errorf("retry 처리: %w", err)
@@ -90,7 +90,7 @@ func (s *Store) MarkOutboundRetry(ctx context.Context, id int64, errMsg string, 
 func (s *Store) MarkOutboundFailed(ctx context.Context, id int64, errMsg string) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
-		 SET status = 'failed', attempts = attempts + 1, last_error = $2, updated_at = now()
+		 SET status = 'failed', attempt_count = attempt_count + 1, last_error = $2, updated_at = now()
 		 WHERE id = $1`, id, errMsg)
 	if err != nil {
 		return fmt.Errorf("failed 처리: %w", err)

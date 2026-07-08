@@ -28,7 +28,7 @@ func testStore(t *testing.T) *Store {
 }
 
 // seedUser는 도메인+유저+앱비밀번호+INBOX를 만든다.
-func seedUser(t *testing.T, s *Store, address, password string) int64 {
+func seedAccount(t *testing.T, s *Store, address, password string) int64 {
 	t.Helper()
 	ctx := context.Background()
 	local := address[:strings.LastIndex(address, "@")]
@@ -36,18 +36,18 @@ func seedUser(t *testing.T, s *Store, address, password string) int64 {
 
 	var domainID int64
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO domains (name) VALUES ($1)
+		`INSERT INTO domain (name) VALUES ($1)
 		 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 		 RETURNING id`, domain).Scan(&domainID)
 	if err != nil {
 		t.Fatalf("도메인 시드: %v", err)
 	}
 
-	var userID int64
+	var accountID int64
 	err = s.pool.QueryRow(ctx,
-		`INSERT INTO users (domain_id, local_part) VALUES ($1, $2)
+		`INSERT INTO account (domain_id, local_part) VALUES ($1, $2)
 		 ON CONFLICT (domain_id, local_part) DO UPDATE SET local_part = EXCLUDED.local_part
-		 RETURNING id`, domainID, local).Scan(&userID)
+		 RETURNING id`, domainID, local).Scan(&accountID)
 	if err != nil {
 		t.Fatalf("유저 시드: %v", err)
 	}
@@ -57,16 +57,16 @@ func seedUser(t *testing.T, s *Store, address, password string) int64 {
 		t.Fatalf("해시: %v", err)
 	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO app_passwords (user_id, label, hash) VALUES ($1, 'test', $2)`,
-		userID, hash)
+		`INSERT INTO app_password (account_id, label, hash) VALUES ($1, 'test', $2)`,
+		accountID, hash)
 	if err != nil {
 		t.Fatalf("앱비번 시드: %v", err)
 	}
 
-	if _, err := s.CreateMailbox(ctx, userID, "INBOX"); err != nil {
+	if _, err := s.CreateMailbox(ctx, accountID, "INBOX"); err != nil {
 		t.Fatalf("INBOX 생성: %v", err)
 	}
-	return userID
+	return accountID
 }
 
 func TestFullFlow(t *testing.T) {
@@ -74,12 +74,12 @@ func TestFullFlow(t *testing.T) {
 	ctx := context.Background()
 
 	// 매 실행 깨끗하게 (테스트 격리)
-	_, _ = s.pool.Exec(ctx, `TRUNCATE domains, users, app_passwords, mailboxes, messages, message_flags, message_blobs, outbound_queue, aliases RESTART IDENTITY CASCADE`)
+	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias RESTART IDENTITY CASCADE`)
 
 	addr := "maro@krisam.in"
 	pass := "super-secret-app-pw"
-	userID := seedUser(t, s, addr, pass)
-	t.Logf("시드 유저 id=%d", userID)
+	accountID := seedAccount(t, s, addr, pass)
+	t.Logf("시드 유저 id=%d", accountID)
 
 	// 1) 인증 성공/실패
 	if _, err := s.AuthenticateAppPassword(ctx, addr, pass); err != nil {
@@ -91,11 +91,11 @@ func TestFullFlow(t *testing.T) {
 	t.Log("✔ 인증 검증 통과")
 
 	// 2) 메일박스 목록 (INBOX 있어야)
-	boxes, err := s.ListMailboxes(ctx, userID)
-	if err != nil || len(boxes) != 1 || boxes[0].Name != "INBOX" {
-		t.Fatalf("메일박스 목록 이상: %v, %+v", err, boxes)
+	boxList, err := s.ListMailbox(ctx, accountID)
+	if err != nil || len(boxList) != 1 || boxList[0].Name != "INBOX" {
+		t.Fatalf("메일박스 목록 이상: %v, %+v", err, boxList)
 	}
-	inbox := boxes[0]
+	inbox := boxList[0]
 	t.Logf("✔ INBOX uid_validity=%d uid_next=%d", inbox.UIDValidity, inbox.UIDNext)
 
 	// 3) 메시지 Append
@@ -132,9 +132,9 @@ func TestFullFlow(t *testing.T) {
 		t.Fatalf("상태: %v", err)
 	}
 	if st.NumMessages != 2 || st.NumUnseen != 1 || st.UIDNext != 3 {
-		t.Fatalf("상태 이상: msgs=%d unseen=%d uidnext=%d", st.NumMessages, st.NumUnseen, st.UIDNext)
+		t.Fatalf("상태 이상: messageList=%d unseen=%d uidnext=%d", st.NumMessages, st.NumUnseen, st.UIDNext)
 	}
-	t.Logf("✔ 상태: msgs=%d unseen=%d uidnext=%d", st.NumMessages, st.NumUnseen, st.UIDNext)
+	t.Logf("✔ 상태: messageList=%d unseen=%d uidnext=%d", st.NumMessages, st.NumUnseen, st.UIDNext)
 
 	// 5) 본문 복원 검증
 	blob, err := s.GetMessageBlob(ctx, msg.ID)
@@ -147,8 +147,8 @@ func TestFullFlow(t *testing.T) {
 	if err := s.SetFlags(ctx, msg2.ID, []string{`\Seen`, `\Flagged`}); err != nil {
 		t.Fatalf("SetFlags: %v", err)
 	}
-	msgs, _ := s.ListMessages(ctx, inbox.ID)
-	for _, m := range msgs {
+	messageList, _ := s.ListMessages(ctx, inbox.ID)
+	for _, m := range messageList {
 		if m.ID == msg2.ID && len(m.Flags) != 2 {
 			t.Fatalf("플래그 교체 실패: %v", m.Flags)
 		}

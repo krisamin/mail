@@ -36,7 +36,7 @@ type Domain struct {
 }
 
 // User는 계정 (local_part@domain). 사람 로그인은 OIDC, 메일앱은 앱 비밀번호.
-type User struct {
+type Account struct {
 	ID          int64
 	DomainID    int64
 	LocalPart   string // 'maro' (in maro@krisam.in)
@@ -49,7 +49,7 @@ type User struct {
 // Mailbox는 IMAP 폴더 (INBOX, Sent, ...).
 type Mailbox struct {
 	ID          int64
-	UserID      int64
+	AccountID      int64
 	Name        string
 	UIDValidity uint32 // 생성 시 고정. 재생성되면 바뀜 → 클라 캐시 무효화
 	UIDNext     uint32 // 다음 부여할 UID
@@ -74,10 +74,10 @@ type Message struct {
 // AppPassword는 메일앱(IMAP/SMTP) 인증용 앱 비밀번호. OAuth로 발급/revoke.
 type AppPassword struct {
 	ID        int64
-	UserID    int64
+	AccountID    int64
 	Label     string // 'Thunderbird 노트북'
 	Hash      string // argon2id
-	Scopes    []string
+	ScopeList    []string
 	LastUsed  *time.Time
 	CreatedAt time.Time
 	RevokedAt *time.Time
@@ -89,13 +89,13 @@ type Alias struct {
 	ID        int64
 	DomainID  int64
 	LocalPart string // '*' = 와일드카드 (그 도메인의 모든 미지정 주소)
-	UserID    int64
+	AccountID    int64
 	CreatedAt time.Time
 
 	// 조회 편의 필드 (JOIN으로 채움)
 	DomainName     string // 별칭의 도메인 이름
-	UserLocalPart  string // 대상 유저의 local_part
-	UserDomainName string // 대상 유저의 도메인 (크로스 도메인 별칭 표시용)
+	AccountLocalPart  string // 대상 유저의 local_part
+	AccountDomainName string // 대상 유저의 도메인 (크로스 도메인 별칭 표시용)
 }
 
 // OutboundStatus는 발송 큐 항목의 상태.
@@ -113,7 +113,7 @@ type OutboundMessage struct {
 	EnvelopeRcpt  string
 	Raw           []byte
 	Status        string
-	Attempts      int
+	AttemptCount      int
 	NextAttemptAt time.Time
 	LastError     string
 	CreatedAt     time.Time
@@ -134,15 +134,15 @@ type MailboxStatus struct {
 // Postgres 구현체가 이걸 만족한다. IMAP/SMTP 백엔드가 소비한다.
 type Store interface {
 	// 인증
-	AuthenticateAppPassword(ctx context.Context, address, password string) (*User, error)
-	FindUserByAddress(ctx context.Context, address string) (*User, error)
+	AuthenticateAppPassword(ctx context.Context, address, password string) (*Account, error)
+	FindAccountByAddress(ctx context.Context, address string) (*Account, error)
 	// ResolveAddress는 배달 대상 유저를 찾는다.
 	// 우선순위: 실제 유저 > 정확 별칭 > 와일드카드(*@domain).
 	// SMTP 수신/submission의 로컬 배달이 이걸 쓴다.
-	ResolveAddress(ctx context.Context, address string) (*User, error)
+	ResolveAddress(ctx context.Context, address string) (*Account, error)
 	// CanSendAs는 유저가 해당 주소로 발신 가능한지 (본인 주소 또는
 	// 본인에게 걸린 별칭 — 와일드카드 별칭 포함).
-	CanSendAs(ctx context.Context, userID int64, address string) (bool, error)
+	CanSendAs(ctx context.Context, accountID int64, address string) (bool, error)
 
 	// 도메인
 	// FindDomain은 활성 도메인을 이름으로 찾는다. 수신/제출 시
@@ -150,11 +150,11 @@ type Store interface {
 	FindDomain(ctx context.Context, name string) (*Domain, error)
 
 	// 메일박스
-	ListMailboxes(ctx context.Context, userID int64) ([]*Mailbox, error)
-	GetMailbox(ctx context.Context, userID int64, name string) (*Mailbox, error)
-	CreateMailbox(ctx context.Context, userID int64, name string) (*Mailbox, error)
-	DeleteMailbox(ctx context.Context, userID int64, name string) error
-	RenameMailbox(ctx context.Context, userID int64, name, newName string) error
+	ListMailbox(ctx context.Context, accountID int64) ([]*Mailbox, error)
+	GetMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error)
+	CreateMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error)
+	DeleteMailbox(ctx context.Context, accountID int64, name string) error
+	RenameMailbox(ctx context.Context, accountID int64, name, newName string) error
 	SetSubscribed(ctx context.Context, mailboxID int64, subscribed bool) error
 	MailboxStatus(ctx context.Context, mailboxID int64) (*MailboxStatus, error)
 
@@ -170,7 +170,7 @@ type Store interface {
 
 	// 발송 큐 (Phase 2-3)
 	// EnqueueOutbound는 수신자별로 발송 항목을 큐에 넣는다.
-	EnqueueOutbound(ctx context.Context, from string, rcpts []string, raw []byte) error
+	EnqueueOutbound(ctx context.Context, from string, rcptList []string, raw []byte) error
 	// DueOutbound는 발송 시각이 지난 pending 항목을 최대 limit개 가져온다.
 	// FOR UPDATE SKIP LOCKED 의미론 — 여러 워커가 떠도 같은 행을 안 잡는다.
 	DueOutbound(ctx context.Context, limit int) ([]*OutboundMessage, error)
@@ -188,29 +188,29 @@ type AdminStore interface {
 	Store
 
 	// 도메인
-	ListDomains(ctx context.Context) ([]*Domain, error)
+	ListDomain(ctx context.Context) ([]*Domain, error)
 	CreateDomain(ctx context.Context, name string) (*Domain, error)
 	SetDomainActive(ctx context.Context, id int64, active bool) error
 	// SetDomainDKIM은 DKIM selector/개인키를 설정한다 (빈 문자열 = 해제).
 	SetDomainDKIM(ctx context.Context, id int64, selector, privateKeyPEM string) error
 
 	// 유저
-	ListUsers(ctx context.Context, domainID int64) ([]*User, error)
-	CreateUser(ctx context.Context, domainID int64, localPart string) (*User, error)
-	SetUserActive(ctx context.Context, id int64, active bool) error
+	ListAccount(ctx context.Context, domainID int64) ([]*Account, error)
+	CreateAccount(ctx context.Context, domainID int64, localPart string) (*Account, error)
+	SetAccountActive(ctx context.Context, id int64, active bool) error
 
 	// 앱 비밀번호 (DD-02: OAuth 로그인 후 발급)
-	ListAppPasswords(ctx context.Context, userID int64) ([]*AppPassword, error)
+	ListAppPassword(ctx context.Context, accountID int64) ([]*AppPassword, error)
 	// CreateAppPassword는 해시를 저장하고 레코드를 돌려준다.
 	// 평문 생성은 호출자(API 레이어) 책임 — 발급 시 1회만 노출.
-	CreateAppPassword(ctx context.Context, userID int64, label, hash string) (*AppPassword, error)
+	CreateAppPassword(ctx context.Context, accountID int64, label, hash string) (*AppPassword, error)
 	RevokeAppPassword(ctx context.Context, id int64) error
 
 	// 별칭 (추가 수신 주소 + 와일드카드)
-	ListAliases(ctx context.Context, domainID int64) ([]*Alias, error)
-	ListUserAliases(ctx context.Context, userID int64) ([]*Alias, error)
+	ListAlias(ctx context.Context, domainID int64) ([]*Alias, error)
+	ListAccountAlias(ctx context.Context, accountID int64) ([]*Alias, error)
 	// CreateAlias는 localPart '*'를 catch-all로 취급한다.
-	CreateAlias(ctx context.Context, domainID int64, localPart string, userID int64) (*Alias, error)
+	CreateAlias(ctx context.Context, domainID int64, localPart string, accountID int64) (*Alias, error)
 	DeleteAlias(ctx context.Context, id int64) error
 
 	// 발송 큐 관리

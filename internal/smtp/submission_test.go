@@ -135,16 +135,16 @@ func TestSubmissionLocalDelivery(t *testing.T) {
 	_ = c.Quit()
 
 	// shiro의 INBOX에서 확인 (IMAP)
-	msgs := readInbox(t, env.imapAddr, testAddr2, testPass)
-	if len(msgs) != 1 {
-		t.Fatalf("shiro INBOX에 1건 있어야: %d", len(msgs))
+	messageList := readInbox(t, env.imapAddr, testAddr2, testPass)
+	if len(messageList) != 1 {
+		t.Fatalf("shiro INBOX에 1건 있어야: %d", len(messageList))
 	}
-	if msgs[0].Envelope.Subject != "submitted mail" {
-		t.Fatalf("subject 이상: %+v", msgs[0].Envelope)
+	if messageList[0].Envelope.Subject != "submitted mail" {
+		t.Fatalf("subject 이상: %+v", messageList[0].Envelope)
 	}
-	full := string(msgs[0].BodySection[0].Bytes)
+	full := string(messageList[0].BodySection[0].Bytes)
 	if !strings.Contains(full, "for <"+testAddr2+">") {
 		t.Fatalf("Received 헤더 없음:\n%.200s", full)
 	}
-	t.Logf("✔ 인증 제출 → 로컬 배달 → IMAP 확인: %q", msgs[0].Envelope.Subject)
+	t.Logf("✔ 인증 제출 → 로컬 배달 → IMAP 확인: %q", messageList[0].Envelope.Subject)
 }

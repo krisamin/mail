@@ -7,7 +7,7 @@ CREATE TABLE outbound_queue (
     envelope_rcpt    TEXT NOT NULL,             -- RCPT TO (이 행의 목적지)
     raw              BYTEA NOT NULL,            -- RFC822 원문 (Received 포함)
     status           TEXT NOT NULL DEFAULT 'pending',  -- pending | sent | failed
-    attempts         INT NOT NULL DEFAULT 0,
+    attempt_count         INT NOT NULL DEFAULT 0,
     next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_error       TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),

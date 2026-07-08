@@ -173,12 +173,12 @@ func (s *Session) loadMessages(msgIDs map[int64]bool) (map[int64]*store.Message,
 	ctx, cancel := opCtx()
 	defer cancel()
 
-	msgs, err := s.backend.store.ListMessages(ctx, s.mailbox.ID)
+	messageList, err := s.backend.store.ListMessages(ctx, s.mailbox.ID)
 	if err != nil {
 		return nil, err
 	}
 	out := make(map[int64]*store.Message, len(msgIDs))
-	for _, m := range msgs {
+	for _, m := range messageList {
 		if msgIDs[m.ID] {
 			out[m.ID] = m
 		}

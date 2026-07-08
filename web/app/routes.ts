@@ -9,8 +9,8 @@ export default [
   ...prefix("admin", [
     layout("routes/admin/layout.tsx", [
       index("routes/admin/index.tsx"),
-      route("domains", "routes/admin/domains.tsx"),
-      route("domains/:domainId/users", "routes/admin/users.tsx"),
+      route("domain", "routes/admin/domain.tsx"),
+      route("domain/:domainId/account", "routes/admin/account.tsx"),
       route("queue", "routes/admin/queue.tsx"),
     ]),
   ]),

@@ -1,5 +1,5 @@
 import { Form, Link, useNavigation } from "react-router";
-import type { Route } from "./+types/users";
+import type { Route } from "./+types/account";
 import {
   ApiError,
   apiFetch,
@@ -14,23 +14,23 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
   const domainId = params.domainId;
 
-  const [domains, users, aliases] = await Promise.all([
-    apiFetch<Domain[]>(user.idToken, "/api/admin/domains"),
-    apiFetch<User[]>(user.idToken, `/api/admin/domains/${domainId}/users`),
-    apiFetch<Alias[]>(user.idToken, `/api/admin/domains/${domainId}/aliases`),
+  const [domainList, accountList, aliasList] = await Promise.all([
+    apiFetch<Domain[]>(user.idToken, "/api/admin/domain"),
+    apiFetch<User[]>(user.idToken, `/api/admin/domain/${domainId}/account`),
+    apiFetch<Alias[]>(user.idToken, `/api/admin/domain/${domainId}/alias`),
   ]);
-  const domain = (domains ?? []).find((d) => String(d.id) === domainId);
+  const domain = (domainList ?? []).find((d) => String(d.id) === domainId);
   if (!domain) throw new Response("도메인을 찾을 수 없어요", { status: 404 });
 
   // 유저별 앱비번 목록 (관리 화면이라 N+1 허용 — 유저 수 적음)
-  const appPasswords: Record<number, AppPassword[]> = {};
+  const appPasswordList: Record<number, AppPassword[]> = {};
   await Promise.all(
-    (users ?? []).map(async (u) => {
-      appPasswords[u.id] =
-        (await apiFetch<AppPassword[]>(user.idToken, `/api/admin/users/${u.id}/app-passwords`)) ?? [];
+    (accountList ?? []).map(async (u) => {
+      appPasswordList[u.id] =
+        (await apiFetch<AppPassword[]>(user.idToken, `/api/admin/account/${u.id}/app-password`)) ?? [];
     }),
   );
-  return { domain, users: users ?? [], aliases: aliases ?? [], appPasswords };
+  return { domain, accountList: accountList ?? [], aliasList: aliasList ?? [], appPasswordList };
 };
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
@@ -41,14 +41,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   try {
     switch (intent) {
       case "create-user": {
-        await apiFetch(user.idToken, `/api/admin/domains/${params.domainId}/users`, {
+        await apiFetch(user.idToken, `/api/admin/domain/${params.domainId}/account`, {
           method: "POST",
           body: { localPart: String(form.get("localPart") ?? "") },
         });
         return { ok: true as const };
       }
       case "toggle-user": {
-        await apiFetch(user.idToken, `/api/admin/users/${form.get("id")}`, {
+        await apiFetch(user.idToken, `/api/admin/account/${form.get("id")}`, {
           method: "PATCH",
           body: { active: form.get("active") === "true" },
         });
@@ -57,29 +57,29 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       case "create-pw": {
         const result = await apiFetch<{ appPassword: AppPassword; plaintext: string }>(
           user.idToken,
-          `/api/admin/users/${form.get("userId")}/app-passwords`,
+          `/api/admin/account/${form.get("accountId")}/app-password`,
           { method: "POST", body: { label: String(form.get("label") ?? "") } },
         );
-        return { ok: true as const, plaintext: result.plaintext, userId: Number(form.get("userId")) };
+        return { ok: true as const, plaintext: result.plaintext, accountId: Number(form.get("accountId")) };
       }
       case "revoke-pw": {
-        await apiFetch(user.idToken, `/api/admin/app-passwords/${form.get("id")}`, {
+        await apiFetch(user.idToken, `/api/admin/app-password/${form.get("id")}`, {
           method: "DELETE",
         });
         return { ok: true as const };
       }
       case "create-alias": {
-        await apiFetch(user.idToken, `/api/admin/domains/${params.domainId}/aliases`, {
+        await apiFetch(user.idToken, `/api/admin/domain/${params.domainId}/alias`, {
           method: "POST",
           body: {
             localPart: String(form.get("localPart") ?? ""),
-            userId: Number(form.get("userId")),
+            accountId: Number(form.get("accountId")),
           },
         });
         return { ok: true as const };
       }
       case "delete-alias": {
-        await apiFetch(user.idToken, `/api/admin/aliases/${form.get("id")}`, {
+        await apiFetch(user.idToken, `/api/admin/alias/${form.get("id")}`, {
           method: "DELETE",
         });
         return { ok: true as const };
@@ -93,15 +93,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 };
 
-export default function Users({ loaderData, actionData }: Route.ComponentProps) {
-  const { domain, users, aliases, appPasswords } = loaderData;
+export default function AccountList({ loaderData, actionData }: Route.ComponentProps) {
+  const { domain, accountList, aliasList, appPasswordList } = loaderData;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center gap-2">
-        <Link to="/admin/domains" className="text-sm text-text-2 hover:text-text-1">
+        <Link to="/admin/domain" className="text-sm text-text-2 hover:text-text-1">
           도메인
         </Link>
         <span className="text-text-2">/</span>
@@ -144,12 +144,12 @@ export default function Users({ loaderData, actionData }: Route.ComponentProps) 
       </Form>
 
       <div className="flex flex-col gap-3">
-        {users.length === 0 ? (
+        {accountList.length === 0 ? (
           <p className="rounded-md border border-line bg-bg-1 px-4 py-6 text-center text-sm text-text-2">
             유저 없음
           </p>
         ) : (
-          users.map((u) => (
+          accountList.map((u) => (
             <div key={u.id} className="rounded-md border border-line bg-bg-1">
               <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
                 <p className="text-sm font-medium">
@@ -177,7 +177,7 @@ export default function Users({ loaderData, actionData }: Route.ComponentProps) 
                   <p className="text-xs text-text-2">앱 비밀번호</p>
                   <Form method="post" className="flex items-center gap-1.5">
                     <input type="hidden" name="intent" value="create-pw" />
-                    <input type="hidden" name="userId" value={u.id} />
+                    <input type="hidden" name="accountId" value={u.id} />
                     <input
                       name="label"
                       placeholder="라벨 (예: Thunderbird)"
@@ -188,9 +188,9 @@ export default function Users({ loaderData, actionData }: Route.ComponentProps) 
                     </button>
                   </Form>
                 </div>
-                {(appPasswords[u.id] ?? []).length > 0 && (
+                {(appPasswordList[u.id] ?? []).length > 0 && (
                   <ul className="divide-y divide-line/50">
-                    {(appPasswords[u.id] ?? []).map((p) => (
+                    {(appPasswordList[u.id] ?? []).map((p) => (
                       <li key={p.id} className="flex items-center justify-between py-1.5">
                         <div className="flex items-center gap-2">
                           <span className={`text-xs ${p.revoked ? "text-muted line-through" : "text-text-1"}`}>
@@ -241,11 +241,11 @@ export default function Users({ loaderData, actionData }: Route.ComponentProps) 
             <span className="text-sm text-text-2">@{domain.name}</span>
             <span className="text-sm text-text-2">→</span>
             <select
-              name="userId"
+              name="accountId"
               required
               className="rounded border border-line bg-bg-0 px-2 py-1 text-sm outline-none"
             >
-              {users.map((u) => (
+              {accountList.map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.localPart}@{domain.name}
                 </option>
@@ -254,7 +254,7 @@ export default function Users({ loaderData, actionData }: Route.ComponentProps) 
           </div>
           <button
             type="submit"
-            disabled={busy || users.length === 0}
+            disabled={busy || accountList.length === 0}
             className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-bg-0 hover:bg-accent-hover disabled:opacity-50"
           >
             연결
@@ -262,11 +262,11 @@ export default function Users({ loaderData, actionData }: Route.ComponentProps) 
         </Form>
 
         <div className="rounded-md border border-line bg-bg-1">
-          {aliases.length === 0 ? (
+          {aliasList.length === 0 ? (
             <p className="px-4 py-4 text-center text-xs text-text-2">별칭 없음</p>
           ) : (
             <ul className="divide-y divide-line">
-              {aliases.map((a) => (
+              {aliasList.map((a) => (
                 <li key={a.id} className="flex items-center justify-between px-4 py-2.5">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-sm text-text-0">
@@ -283,7 +283,7 @@ export default function Users({ loaderData, actionData }: Route.ComponentProps) 
                       </span>
                     )}
                     <span className="text-xs text-text-2">
-                      → {a.userLocalPart}@{a.userDomainName}
+                      → {a.accountLocalPart}@{a.accountDomainName}
                     </span>
                   </div>
                   <Form method="post">

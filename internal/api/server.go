@@ -20,7 +20,7 @@ import (
 
 // Server는 admin REST API.
 type Server struct {
-	store *postgres.Store // AdminStore + FindUserByID까지 필요해서 구체 타입
+	store *postgres.Store // AdminStore + FindAccountByID까지 필요해서 구체 타입
 	auth  *Authenticator
 	mux   *http.ServeMux
 }
@@ -34,20 +34,20 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 
 	admin := http.NewServeMux()
 	admin.HandleFunc("GET /api/admin/me", s.handleMe)
-	admin.HandleFunc("GET /api/admin/domains", s.handleListDomains)
-	admin.HandleFunc("POST /api/admin/domains", s.handleCreateDomain)
-	admin.HandleFunc("PATCH /api/admin/domains/{id}", s.handlePatchDomain)
-	admin.HandleFunc("POST /api/admin/domains/{id}/dkim", s.handleGenerateDKIM)
-	admin.HandleFunc("DELETE /api/admin/domains/{id}/dkim", s.handleClearDKIM)
-	admin.HandleFunc("GET /api/admin/domains/{id}/users", s.handleListUsers)
-	admin.HandleFunc("POST /api/admin/domains/{id}/users", s.handleCreateUser)
-	admin.HandleFunc("GET /api/admin/domains/{id}/aliases", s.handleListAliases)
-	admin.HandleFunc("POST /api/admin/domains/{id}/aliases", s.handleCreateAlias)
-	admin.HandleFunc("DELETE /api/admin/aliases/{id}", s.handleDeleteAlias)
-	admin.HandleFunc("PATCH /api/admin/users/{id}", s.handlePatchUser)
-	admin.HandleFunc("GET /api/admin/users/{id}/app-passwords", s.handleListAppPasswords)
-	admin.HandleFunc("POST /api/admin/users/{id}/app-passwords", s.handleCreateAppPassword)
-	admin.HandleFunc("DELETE /api/admin/app-passwords/{id}", s.handleRevokeAppPassword)
+	admin.HandleFunc("GET /api/admin/domain", s.handleListDomain)
+	admin.HandleFunc("POST /api/admin/domain", s.handleCreateDomain)
+	admin.HandleFunc("PATCH /api/admin/domain/{id}", s.handlePatchDomain)
+	admin.HandleFunc("POST /api/admin/domain/{id}/dkim", s.handleGenerateDKIM)
+	admin.HandleFunc("DELETE /api/admin/domain/{id}/dkim", s.handleClearDKIM)
+	admin.HandleFunc("GET /api/admin/domain/{id}/account", s.handleListAccount)
+	admin.HandleFunc("POST /api/admin/domain/{id}/account", s.handleCreateAccount)
+	admin.HandleFunc("GET /api/admin/domain/{id}/alias", s.handleListAlias)
+	admin.HandleFunc("POST /api/admin/domain/{id}/alias", s.handleCreateAlias)
+	admin.HandleFunc("DELETE /api/admin/alias/{id}", s.handleDeleteAlias)
+	admin.HandleFunc("PATCH /api/admin/account/{id}", s.handlePatchAccount)
+	admin.HandleFunc("GET /api/admin/account/{id}/app-password", s.handleListAppPassword)
+	admin.HandleFunc("POST /api/admin/account/{id}/app-password", s.handleCreateAppPassword)
+	admin.HandleFunc("DELETE /api/admin/app-password/{id}", s.handleRevokeAppPassword)
 	admin.HandleFunc("GET /api/admin/queue", s.handleListQueue)
 	admin.HandleFunc("GET /api/admin/queue/stats", s.handleQueueStats)
 	admin.HandleFunc("POST /api/admin/queue/{id}/retry", s.handleRetryQueue)
@@ -59,10 +59,10 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	me := http.NewServeMux()
 	me.HandleFunc("GET /api/me/account", s.handleMeAccount)
 	me.HandleFunc("GET /api/me/gate", s.handleMeGate)
-	me.HandleFunc("GET /api/me/aliases", s.handleMeAliases)
-	me.HandleFunc("GET /api/me/app-passwords", s.handleMeListAppPasswords)
-	me.HandleFunc("POST /api/me/app-passwords", s.handleMeCreateAppPassword)
-	me.HandleFunc("DELETE /api/me/app-passwords/{id}", s.handleMeRevokeAppPassword)
+	me.HandleFunc("GET /api/me/alias", s.handleMeAliases)
+	me.HandleFunc("GET /api/me/app-password", s.handleMeListAppPassword)
+	me.HandleFunc("POST /api/me/app-password", s.handleMeCreateAppPassword)
+	me.HandleFunc("DELETE /api/me/app-password/{id}", s.handleMeRevokeAppPassword)
 	s.mux.Handle("/api/me/", auth.RequireUser(me))
 	return s
 }
@@ -145,14 +145,14 @@ func toDomainDTO(d *store.Domain) domainDTO {
 	return dto
 }
 
-func (s *Server) handleListDomains(w http.ResponseWriter, r *http.Request) {
-	domains, err := s.store.ListDomains(r.Context())
+func (s *Server) handleListDomain(w http.ResponseWriter, r *http.Request) {
+	domainList, err := s.store.ListDomain(r.Context())
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	out := make([]domainDTO, 0, len(domains))
-	for _, d := range domains {
+	out := make([]domainDTO, 0, len(domainList))
+	for _, d := range domainList {
 		out = append(out, toDomainDTO(d))
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -303,7 +303,7 @@ func dkimPublicTXT(pemText string) (string, error) {
 
 // ── 유저 ────────────────────────────────────────────────────
 
-type userDTO struct {
+type accountDTO struct {
 	ID        int64  `json:"id"`
 	DomainID  int64  `json:"domainId"`
 	LocalPart string `json:"localPart"`
@@ -311,32 +311,32 @@ type userDTO struct {
 	CreatedAt string `json:"createdAt"`
 }
 
-func toUserDTO(u *store.User) userDTO {
-	return userDTO{
+func toAccountDTO(u *store.Account) accountDTO {
+	return accountDTO{
 		ID: u.ID, DomainID: u.DomainID, LocalPart: u.LocalPart, Active: u.Active,
 		CreatedAt: u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 
-func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListAccount(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	users, err := s.store.ListUsers(r.Context(), id)
+	accountList, err := s.store.ListAccount(r.Context(), id)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	out := make([]userDTO, 0, len(users))
-	for _, u := range users {
-		out = append(out, toUserDTO(u))
+	out := make([]accountDTO, 0, len(accountList))
+	for _, u := range accountList {
+		out = append(out, toAccountDTO(u))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
@@ -349,15 +349,15 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	u, err := s.store.CreateUser(r.Context(), id, req.LocalPart)
+	u, err := s.store.CreateAccount(r.Context(), id, req.LocalPart)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toUserDTO(u))
+	writeJSON(w, http.StatusCreated, toAccountDTO(u))
 }
 
-func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
@@ -370,7 +370,7 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body (active required)")
 		return
 	}
-	if err := s.store.SetUserActive(r.Context(), id, *req.Active); err != nil {
+	if err := s.store.SetAccountActive(r.Context(), id, *req.Active); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
@@ -382,7 +382,7 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 type appPasswordDTO struct {
 	ID        int64   `json:"id"`
 	Label     string  `json:"label"`
-	Scopes    []string `json:"scopes"`
+	ScopeList    []string `json:"scopeList"`
 	LastUsed  *string `json:"lastUsed"`
 	CreatedAt string  `json:"createdAt"`
 	Revoked   bool    `json:"revoked"`
@@ -390,7 +390,7 @@ type appPasswordDTO struct {
 
 func toAppPasswordDTO(p *store.AppPassword) appPasswordDTO {
 	dto := appPasswordDTO{
-		ID: p.ID, Label: p.Label, Scopes: p.Scopes,
+		ID: p.ID, Label: p.Label, ScopeList: p.ScopeList,
 		CreatedAt: p.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		Revoked:   p.RevokedAt != nil,
 	}
@@ -401,19 +401,19 @@ func toAppPasswordDTO(p *store.AppPassword) appPasswordDTO {
 	return dto
 }
 
-func (s *Server) handleListAppPasswords(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListAppPassword(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	pws, err := s.store.ListAppPasswords(r.Context(), id)
+	passwordList, err := s.store.ListAppPassword(r.Context(), id)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	out := make([]appPasswordDTO, 0, len(pws))
-	for _, p := range pws {
+	out := make([]appPasswordDTO, 0, len(passwordList))
+	for _, p := range passwordList {
 		out = append(out, toAppPasswordDTO(p))
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -428,7 +428,7 @@ func (s *Server) handleCreateAppPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// 유저 존재 확인 (없는 유저에 비번 만드는 것 방지)
-	if _, err := s.store.FindUserByID(r.Context(), id); err != nil {
+	if _, err := s.store.FindAccountByID(r.Context(), id); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
@@ -495,7 +495,7 @@ type queueDTO struct {
 	From          string `json:"from"`
 	Rcpt          string `json:"rcpt"`
 	Status        string `json:"status"`
-	Attempts      int    `json:"attempts"`
+	AttemptCount      int    `json:"attemptCount"`
 	NextAttemptAt string `json:"nextAttemptAt"`
 	LastError     string `json:"lastError"`
 	CreatedAt     string `json:"createdAt"`
@@ -503,16 +503,16 @@ type queueDTO struct {
 
 func (s *Server) handleListQueue(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
-	msgs, err := s.store.ListOutbound(r.Context(), status, 100)
+	messageList, err := s.store.ListOutbound(r.Context(), status, 100)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	out := make([]queueDTO, 0, len(msgs))
-	for _, m := range msgs {
+	out := make([]queueDTO, 0, len(messageList))
+	for _, m := range messageList {
 		out = append(out, queueDTO{
 			ID: m.ID, From: m.EnvelopeFrom, Rcpt: m.EnvelopeRcpt,
-			Status: m.Status, Attempts: m.Attempts,
+			Status: m.Status, AttemptCount: m.AttemptCount,
 			NextAttemptAt: m.NextAttemptAt.UTC().Format("2006-01-02T15:04:05Z"),
 			LastError:     m.LastError,
 			CreatedAt:     m.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),

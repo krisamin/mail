@@ -104,7 +104,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
                   </div>
                 </div>
                 <div className="flex items-center gap-3 text-[11px] text-text-2">
-                  <span>시도 {m.attempts}회</span>
+                  <span>시도 {m.attemptCount}회</span>
                   <span suppressHydrationWarning>{m.createdAt.replace("T", " ").replace("Z", "")}</span>
                   {m.lastError && (
                     <span className="truncate text-bad" title={m.lastError}>

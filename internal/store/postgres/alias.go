@@ -15,9 +15,9 @@ import (
 
 // ResolveAddress는 배달 대상 유저를 찾는다.
 // 우선순위: 실제 유저 > 정확 별칭 > 와일드카드(*@domain).
-func (s *Store) ResolveAddress(ctx context.Context, address string) (*store.User, error) {
+func (s *Store) ResolveAddress(ctx context.Context, address string) (*store.Account, error) {
 	// 1) 실제 유저
-	u, err := s.FindUserByAddress(ctx, address)
+	u, err := s.FindAccountByAddress(ctx, address)
 	if err == nil {
 		return u, nil
 	}
@@ -34,14 +34,14 @@ func (s *Store) ResolveAddress(ctx context.Context, address string) (*store.User
 	const q = `
 		SELECT u.id, u.domain_id, u.local_part, COALESCE(u.oidc_subject, ''),
 		       u.quota_bytes, u.active, u.created_at
-		FROM aliases a
-		JOIN domains d ON d.id = a.domain_id
-		JOIN users u   ON u.id = a.user_id
+		FROM alias a
+		JOIN domain d ON d.id = a.domain_id
+		JOIN account u   ON u.id = a.account_id
 		WHERE d.name = $1 AND d.active AND u.active
 		  AND (a.local_part = $2 OR a.local_part = '*')
 		ORDER BY (a.local_part = '*') ASC
 		LIMIT 1`
-	var out store.User
+	var out store.Account
 	err = s.pool.QueryRow(ctx, q, domain, local).Scan(
 		&out.ID, &out.DomainID, &out.LocalPart, &out.OIDCSubject,
 		&out.QuotaBytes, &out.Active, &out.CreatedAt)
@@ -56,7 +56,7 @@ func (s *Store) ResolveAddress(ctx context.Context, address string) (*store.User
 
 // CanSendAs는 유저가 주소로 발신 가능한지 — 본인 주소이거나 본인 별칭
 // (와일드카드 별칭이면 그 도메인의 아무 local part나 허용).
-func (s *Store) CanSendAs(ctx context.Context, userID int64, address string) (bool, error) {
+func (s *Store) CanSendAs(ctx context.Context, accountID int64, address string) (bool, error) {
 	u, err := s.ResolveAddress(ctx, address)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -64,24 +64,24 @@ func (s *Store) CanSendAs(ctx context.Context, userID int64, address string) (bo
 		}
 		return false, err
 	}
-	return u.ID == userID, nil
+	return u.ID == accountID, nil
 }
 
 const aliasSelect = `
-	SELECT a.id, a.domain_id, a.local_part, a.user_id, a.created_at,
+	SELECT a.id, a.domain_id, a.local_part, a.account_id, a.created_at,
 	       d.name, u.local_part, ud.name
-	FROM aliases a
-	JOIN domains d ON d.id = a.domain_id
-	JOIN users u   ON u.id = a.user_id
-	JOIN domains ud ON ud.id = u.domain_id`
+	FROM alias a
+	JOIN domain d ON d.id = a.domain_id
+	JOIN account u   ON u.id = a.account_id
+	JOIN domain ud ON ud.id = u.domain_id`
 
 func scanAliases(rows pgx.Rows) ([]*store.Alias, error) {
 	defer rows.Close()
 	var out []*store.Alias
 	for rows.Next() {
 		var a store.Alias
-		if err := rows.Scan(&a.ID, &a.DomainID, &a.LocalPart, &a.UserID,
-			&a.CreatedAt, &a.DomainName, &a.UserLocalPart, &a.UserDomainName); err != nil {
+		if err := rows.Scan(&a.ID, &a.DomainID, &a.LocalPart, &a.AccountID,
+			&a.CreatedAt, &a.DomainName, &a.AccountLocalPart, &a.AccountDomainName); err != nil {
 			return nil, err
 		}
 		out = append(out, &a)
@@ -89,8 +89,8 @@ func scanAliases(rows pgx.Rows) ([]*store.Alias, error) {
 	return out, rows.Err()
 }
 
-// ListAliases는 도메인의 별칭 목록.
-func (s *Store) ListAliases(ctx context.Context, domainID int64) ([]*store.Alias, error) {
+// ListAlias는 도메인의 별칭 목록.
+func (s *Store) ListAlias(ctx context.Context, domainID int64) ([]*store.Alias, error) {
 	rows, err := s.pool.Query(ctx, aliasSelect+` WHERE a.domain_id = $1 ORDER BY a.local_part`, domainID)
 	if err != nil {
 		return nil, fmt.Errorf("별칭 목록: %w", err)
@@ -98,9 +98,9 @@ func (s *Store) ListAliases(ctx context.Context, domainID int64) ([]*store.Alias
 	return scanAliases(rows)
 }
 
-// ListUserAliases는 유저에게 걸린 별칭 목록 (도메인 무관).
-func (s *Store) ListUserAliases(ctx context.Context, userID int64) ([]*store.Alias, error) {
-	rows, err := s.pool.Query(ctx, aliasSelect+` WHERE a.user_id = $1 ORDER BY d.name, a.local_part`, userID)
+// ListAccountAlias는 유저에게 걸린 별칭 목록 (도메인 무관).
+func (s *Store) ListAccountAlias(ctx context.Context, accountID int64) ([]*store.Alias, error) {
+	rows, err := s.pool.Query(ctx, aliasSelect+` WHERE a.account_id = $1 ORDER BY d.name, a.local_part`, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("유저 별칭 목록: %w", err)
 	}
@@ -109,7 +109,7 @@ func (s *Store) ListUserAliases(ctx context.Context, userID int64) ([]*store.Ali
 
 // CreateAlias는 별칭을 만든다. localPart '*'는 catch-all.
 // 실제 유저 주소와 겹치면 거부 (별칭이 유저를 가리는 것 방지).
-func (s *Store) CreateAlias(ctx context.Context, domainID int64, localPart string, userID int64) (*store.Alias, error) {
+func (s *Store) CreateAlias(ctx context.Context, domainID int64, localPart string, accountID int64) (*store.Alias, error) {
 	localPart = strings.ToLower(strings.TrimSpace(localPart))
 	if localPart == "" {
 		return nil, fmt.Errorf("잘못된 별칭: local part 비어있음")
@@ -121,7 +121,7 @@ func (s *Store) CreateAlias(ctx context.Context, domainID int64, localPart strin
 	// 같은 도메인의 실제 유저와 충돌 검사
 	var exists bool
 	if err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM users WHERE domain_id = $1 AND local_part = $2)`,
+		`SELECT EXISTS(SELECT 1 FROM account WHERE domain_id = $1 AND local_part = $2)`,
 		domainID, localPart).Scan(&exists); err != nil {
 		return nil, err
 	}
@@ -131,27 +131,27 @@ func (s *Store) CreateAlias(ctx context.Context, domainID int64, localPart strin
 
 	var a store.Alias
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO aliases (domain_id, local_part, user_id)
+		INSERT INTO alias (domain_id, local_part, account_id)
 		VALUES ($1, $2, $3)
-		RETURNING id, domain_id, local_part, user_id, created_at`,
-		domainID, localPart, userID).Scan(
-		&a.ID, &a.DomainID, &a.LocalPart, &a.UserID, &a.CreatedAt)
+		RETURNING id, domain_id, local_part, account_id, created_at`,
+		domainID, localPart, accountID).Scan(
+		&a.ID, &a.DomainID, &a.LocalPart, &a.AccountID, &a.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("별칭 생성: %w", err)
 	}
 	// 편의 필드 채우기
 	_ = s.pool.QueryRow(ctx, `
 		SELECT d.name, u.local_part, ud.name
-		FROM domains d, users u
-		JOIN domains ud ON ud.id = u.domain_id
+		FROM domain d, account u
+		JOIN domain ud ON ud.id = u.domain_id
 		WHERE d.id = $1 AND u.id = $2`,
-		a.DomainID, a.UserID).Scan(&a.DomainName, &a.UserLocalPart, &a.UserDomainName)
+		a.DomainID, a.AccountID).Scan(&a.DomainName, &a.AccountLocalPart, &a.AccountDomainName)
 	return &a, nil
 }
 
 // DeleteAlias는 별칭을 지운다.
 func (s *Store) DeleteAlias(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM aliases WHERE id = $1`, id)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM alias WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("별칭 삭제: %w", err)
 	}

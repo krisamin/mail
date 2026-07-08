@@ -1,12 +1,12 @@
 import { Form, useNavigation } from "react-router";
-import type { Route } from "./+types/domains";
+import type { Route } from "./+types/domain";
 import { ApiError, apiFetch, type DKIMResult, type Domain } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
-  const domains = await apiFetch<Domain[]>(user.idToken, "/api/admin/domains");
-  return { domains: domains ?? [] };
+  const domainList = await apiFetch<Domain[]>(user.idToken, "/api/admin/domain");
+  return { domainList: domainList ?? [] };
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
@@ -17,14 +17,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
   try {
     switch (intent) {
       case "create": {
-        await apiFetch(user.idToken, "/api/admin/domains", {
+        await apiFetch(user.idToken, "/api/admin/domain", {
           method: "POST",
           body: { name: String(form.get("name") ?? "") },
         });
         return { ok: true as const };
       }
       case "toggle": {
-        await apiFetch(user.idToken, `/api/admin/domains/${form.get("id")}`, {
+        await apiFetch(user.idToken, `/api/admin/domain/${form.get("id")}`, {
           method: "PATCH",
           body: { active: form.get("active") === "true" },
         });
@@ -33,7 +33,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
       case "dkim": {
         const result = await apiFetch<DKIMResult>(
           user.idToken,
-          `/api/admin/domains/${form.get("id")}/dkim`,
+          `/api/admin/domain/${form.get("id")}/dkim`,
           {
             method: "POST",
             body: {
@@ -45,7 +45,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
         return { ok: true as const, dkim: result };
       }
       case "dkim-clear": {
-        await apiFetch(user.idToken, `/api/admin/domains/${form.get("id")}/dkim`, {
+        await apiFetch(user.idToken, `/api/admin/domain/${form.get("id")}/dkim`, {
           method: "DELETE",
         });
         return { ok: true as const };
@@ -59,8 +59,8 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 };
 
-export default function Domains({ loaderData, actionData }: Route.ComponentProps) {
-  const { domains } = loaderData;
+export default function DomainList({ loaderData, actionData }: Route.ComponentProps) {
+  const { domainList } = loaderData;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
@@ -104,14 +104,14 @@ export default function Domains({ loaderData, actionData }: Route.ComponentProps
       </Form>
 
       <div className="rounded-md border border-line bg-bg-1">
-        {domains.length === 0 ? (
+        {domainList.length === 0 ? (
           <p className="px-4 py-6 text-center text-sm text-text-2">도메인 없음</p>
         ) : (
           <ul className="divide-y divide-line">
-            {domains.map((d) => (
+            {domainList.map((d) => (
               <li key={d.id} className="flex flex-col gap-2 px-4 py-3">
                 <div className="flex items-center justify-between">
-                  <a href={`/admin/domains/${d.id}/users`} className="text-sm font-medium hover:text-accent">
+                  <a href={`/admin/domain/${d.id}/account`} className="text-sm font-medium hover:text-accent">
                     {d.name}
                   </a>
                   <div className="flex items-center gap-2">

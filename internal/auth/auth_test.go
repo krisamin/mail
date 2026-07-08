@@ -69,15 +69,15 @@ func TestDKIMSignAndVerify(t *testing.T) {
 		}
 		return nil, fmt.Errorf("no record for %s", domain)
 	}
-	verifications, err := dkim.VerifyWithOptions(bytes.NewReader(signed), &dkim.VerifyOptions{LookupTXT: lookup})
+	verificationList, err := dkim.VerifyWithOptions(bytes.NewReader(signed), &dkim.VerifyOptions{LookupTXT: lookup})
 	if err != nil {
 		t.Fatalf("검증: %v", err)
 	}
-	if len(verifications) != 1 || verifications[0].Err != nil {
-		t.Fatalf("서명 검증 실패: %+v", verifications)
+	if len(verificationList) != 1 || verificationList[0].Err != nil {
+		t.Fatalf("서명 검증 실패: %+v", verificationList)
 	}
-	if verifications[0].Domain != "krisam.in" {
-		t.Fatalf("서명 도메인 이상: %s", verifications[0].Domain)
+	if verificationList[0].Domain != "krisam.in" {
+		t.Fatalf("서명 도메인 이상: %s", verificationList[0].Domain)
 	}
 	t.Log("✔ DKIM 서명 → 검증 왕복 (RSA-2048, relaxed/relaxed)")
 }
@@ -104,9 +104,9 @@ func TestDKIMEd25519(t *testing.T) {
 	lookup := func(domain string) ([]string, error) {
 		return []string{dnsTXT}, nil
 	}
-	verifications, err := dkim.VerifyWithOptions(bytes.NewReader(signed), &dkim.VerifyOptions{LookupTXT: lookup})
-	if err != nil || len(verifications) != 1 || verifications[0].Err != nil {
-		t.Fatalf("Ed25519 검증 실패: %v %+v", err, verifications)
+	verificationList, err := dkim.VerifyWithOptions(bytes.NewReader(signed), &dkim.VerifyOptions{LookupTXT: lookup})
+	if err != nil || len(verificationList) != 1 || verificationList[0].Err != nil {
+		t.Fatalf("Ed25519 검증 실패: %v %+v", err, verificationList)
 	}
 	t.Log("✔ Ed25519 DKIM 서명/검증")
 }
