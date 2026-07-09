@@ -13,6 +13,7 @@ export default [
       route("account", "routes/admin/account.tsx"),
       route("relay", "routes/admin/relay.tsx"),
       route("queue", "routes/admin/queue.tsx"),
+      route("system", "routes/admin/system.tsx"),
     ]),
   ]),
 ] satisfies RouteConfig;

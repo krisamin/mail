@@ -141,8 +141,11 @@ The essentials:
 | `MAIL_OIDC_ISSUER` | OIDC issuer URL (empty = dev mode, no auth) |
 | `MAIL_OIDC_CLIENT_ID` | Audience for token verification |
 | `MAIL_ADMIN_GROUP` | OIDC group granting admin access (default `mail-admin`) |
-| `MAIL_BOOTSTRAP_DOMAIN` | Comma-separated domains ensured on boot (chicken-and-egg for the login gate) |
-| `MAIL_RELAY_*` | Fallback outbound relay (DB-managed relays take precedence) |
+
+Domains and outbound relays are managed entirely in the DB through the
+admin UI — no bootstrap or relay env vars. Anyone can log in via OIDC;
+accounts receive a mailbox only when their email domain is registered
+(retroactively backfilled when the domain is added later).
 
 ## Project layout
 

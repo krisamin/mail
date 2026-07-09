@@ -55,8 +55,10 @@ func (s *Server) handleMeAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMeProvision은 JIT 프로비저닝 — 첫 로그인 때 RR7 콜백이 호출한다.
-// email 도메인이 등록돼 있으면 계정 생성(+primary 주소+INBOX), 이미 있으면
-// email 갱신만 (멱등). 도메인 미등록이면 403 — 콜백이 로그인 자체를 거부한다.
+// 계정이 없으면 생성 (email 도메인이 등록돼 있으면 primary 주소+INBOX까지,
+// 미등록이면 계정만 — 주소 없음 = 메일 사용 불가). 이미 있으면 email
+// 갱신만 (멱등). 도메인 등록 여부와 무관하게 로그인은 항상 허용 —
+// admin은 OIDC 그룹으로 판정되므로 빈 DB에서도 관리 화면 진입이 가능하다.
 func (s *Server) handleMeProvision(w http.ResponseWriter, r *http.Request) {
 	id := IdentityFrom(r.Context())
 	if id == nil || id.Subject == "" {
@@ -69,11 +71,6 @@ func (s *Server) handleMeProvision(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.store.ProvisionAccount(r.Context(), id.Subject, strings.ToLower(id.Email))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			// 도메인 미등록 — 이 서버 유저가 아님
-			writeError(w, http.StatusForbidden, "domain not registered for "+id.Email)
-			return
-		}
 		mapStoreErr(w, err)
 		return
 	}

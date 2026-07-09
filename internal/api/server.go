@@ -25,6 +25,8 @@ type Server struct {
 	mux   *http.ServeMux
 	// hostname은 MX 검증 기대값 (MAIL_HOSTNAME). 비어있으면 존재만 확인.
 	hostname string
+	// systemPortList는 /api/admin/system 점검 대상 (main.go에서 조립).
+	systemPortList []SystemPort
 }
 
 // WithHostname은 DNS 검증에서 MX 기대값으로 쓸 서버 호스트네임을 지정한다.
@@ -67,6 +69,7 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("DELETE /api/admin/relay/{id}", s.handleDeleteRelay)
 	admin.HandleFunc("PUT /api/admin/domain/{id}/relay", s.handleSetDomainRelay)
 	admin.HandleFunc("GET /api/admin/domain/{id}/dns", s.handleVerifyDomainDNS)
+	admin.HandleFunc("GET /api/admin/system", s.handleSystemCheck)
 
 	s.mux.Handle("/api/admin/", auth.RequireAdmin(admin))
 
@@ -187,7 +190,19 @@ func (s *Server) handleCreateDomain(w http.ResponseWriter, r *http.Request) {
 		mapStoreErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toDomainDTO(d))
+	// 소급 프로비저닝: 이 도메인 email로 이미 로그인했던(bare) 계정들에
+	// primary 주소+INBOX 생성. 실패해도 도메인 생성 자체는 유효 — 경고만.
+	// 응답은 domainDTO 필드 + backfilled (flat — 기존 클라이언트 호환).
+	backfilled, backfillErr := s.store.BackfillDomainAddress(r.Context(), d.ID)
+	out := struct {
+		domainDTO
+		Backfilled   int    `json:"backfilled"`
+		BackfillWarn string `json:"backfillWarn,omitempty"`
+	}{domainDTO: toDomainDTO(d), Backfilled: backfilled}
+	if backfillErr != nil {
+		out.BackfillWarn = backfillErr.Error()
+	}
+	writeJSON(w, http.StatusCreated, out)
 }
 
 func (s *Server) handlePatchDomain(w http.ResponseWriter, r *http.Request) {

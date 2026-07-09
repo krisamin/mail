@@ -33,12 +33,12 @@ func TestAddressEndpointsAndProvision(t *testing.T) {
 	if code != 200 || int64(acc2["id"].(float64)) != maroID {
 		t.Fatalf("멱등 프로비저닝: %d %v", code, acc2)
 	}
-	// 미등록 도메인 → 403 (로그인 게이트)
-	code, _, _ = callAs(t, srv, "outsider@example.com", "", "POST", "/api/me/provision", nil)
-	if code != 403 {
-		t.Fatalf("미등록 도메인 프로비저닝은 403이어야: %d", code)
+	// 미등록 도메인 → 200 bare 계정 (로그인 허용, 주소만 없음)
+	code, bare, _ := callAs(t, srv, "outsider@example.com", "", "POST", "/api/me/provision", nil)
+	if code != 200 || bare["email"] != "outsider@example.com" {
+		t.Fatalf("미등록 도메인도 로그인은 돼야: %d %v", code, bare)
 	}
-	t.Log("✔ JIT 프로비저닝 (생성/멱등/미등록 403)")
+	t.Log("✔ JIT 프로비저닝 (생성/멱등/미등록도 bare 계정)")
 
 	// 2) admin이 주소 추가 (정확 + catch-all)
 	code, address, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/address", krisamID),
@@ -90,9 +90,9 @@ func TestAddressEndpointsAndProvision(t *testing.T) {
 	}
 	t.Log("✔ 목록 (admin 도메인별/계정별 + me 본인)")
 
-	// 4) 계정 전체 목록 (admin)
+	// 4) 계정 전체 목록 (admin) — maro + outsider(bare) 2명
 	code, _, accountList := call(t, srv, "GET", "/api/admin/account", nil)
-	if code != 200 || len(accountList) != 1 || accountList[0]["email"] != "maro@krisam.in" {
+	if code != 200 || len(accountList) != 2 {
 		t.Fatalf("계정 목록: %d %v", code, accountList)
 	}
 	t.Log("✔ 계정 전체 목록")

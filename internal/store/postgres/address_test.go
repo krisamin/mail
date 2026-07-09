@@ -62,9 +62,16 @@ func TestAddressModel(t *testing.T) {
 	if err != nil || again.ID != maro.ID {
 		t.Fatalf("멱등 프로비저닝: %v %+v", err, again)
 	}
-	// 미등록 도메인 → ErrNotFound
-	if _, err := st.ProvisionAccount(ctx, "sub-x", "x@example.com"); err != store.ErrNotFound {
-		t.Fatalf("미등록 도메인은 NotFound여야: %v", err)
+	// 미등록 도메인 → bare 계정 (주소/INBOX 없음, 로그인은 허용)
+	bare, err := st.ProvisionAccount(ctx, "sub-x", "x@example.com")
+	if err != nil {
+		t.Fatalf("미등록 도메인도 계정은 생겨야: %v", err)
+	}
+	if addressList, err := st.ListAccountAddress(ctx, bare.ID); err != nil || len(addressList) != 0 {
+		t.Fatalf("bare 계정은 주소가 없어야: %v %+v", err, addressList)
+	}
+	if boxList, err := st.ListMailbox(ctx, bare.ID); err != nil || len(boxList) != 0 {
+		t.Fatalf("bare 계정은 메일함이 없어야: %v %+v", err, boxList)
 	}
 	// 입양: 같은 email의 새 sub (IdP 유저 재생성) → 기존 계정 이어받기
 	adopted, err := st.ProvisionAccount(ctx, "sub-maro-v2", "maro@krisam.in")

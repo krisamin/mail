@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -70,25 +69,6 @@ func main() {
 	// 내장 마이그레이션 — 빈 DB든 기존 DB든 여기서 스키마 수렴 (k8s에선 이거 하나로 끝)
 	if err := migration.Run(context.Background(), st.Pool()); err != nil {
 		log.Fatalf("마이그레이션 실패: %v", err)
-	}
-
-	// 부트스트랩 — 빈 DB엔 도메인이 없어 로그인 게이트가 전부 거부하는 닭-달걀 문제.
-	// MAIL_BOOTSTRAP_DOMAIN="example.com,other.example" 도메인 목록을 보장한다
-	// (이미 있으면 no-op — 멱등). 계정은 JIT 프로비저닝(첫 OIDC 로그인)으로 생긴다.
-	if bootstrap := os.Getenv("MAIL_BOOTSTRAP_DOMAIN"); bootstrap != "" {
-		ctx := context.Background()
-		for _, domainName := range strings.Split(bootstrap, ",") {
-			domainName = strings.ToLower(strings.TrimSpace(domainName))
-			if domainName == "" || !strings.Contains(domainName, ".") {
-				log.Fatalf("MAIL_BOOTSTRAP_DOMAIN 형식 오류: %q", domainName)
-			}
-			if _, err := st.FindDomain(ctx, domainName); err != nil {
-				if _, err := st.CreateDomain(ctx, domainName); err != nil {
-					log.Fatalf("부트스트랩 도메인 생성 실패(%s): %v", domainName, err)
-				}
-				log.Printf("maild: 부트스트랩 도메인 생성 %s", domainName)
-			}
-		}
 	}
 
 	errCh := make(chan error, 4)
@@ -151,19 +131,10 @@ func main() {
 		errCh <- subSrv.ListenAndServe()
 	}()
 
-	// 발송 큐 워커 — relay는 DB 우선, env MAIL_RELAY_*는 fallback.
-	var fallback *queue.RelayConfig
-	if relayAddr := os.Getenv("MAIL_RELAY_ADDR"); relayAddr != "" {
-		fallback = &queue.RelayConfig{
-			Addr:     relayAddr,
-			Username: os.Getenv("MAIL_RELAY_USERNAME"),
-			Password: os.Getenv("MAIL_RELAY_PASSWORD"),
-			StartTLS: os.Getenv("MAIL_RELAY_STARTTLS") != "false",
-		}
-		log.Printf("maild: env relay fallback 활성 (%s)", relayAddr)
-	}
+	// 발송 큐 워커 — relay는 전부 DB에서 관리 (어드민 UI로 추가/변경,
+	// 재기동 불필요). relay 미설정 도메인의 발송은 일시 오류로 재시도된다.
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	worker := queue.NewWorker(st, queue.NewResolvingSender(st, fallback), queue.Config{}).
+	worker := queue.NewWorker(st, queue.NewResolvingSender(st), queue.Config{}).
 		WithSigner(queue.NewDKIMSigner(st))
 	workerDone := make(chan struct{})
 	go func() {
@@ -185,8 +156,12 @@ func main() {
 		log.Fatalf("OIDC 초기화 실패: %v", err)
 	}
 	apiSrv := &http.Server{
-		Addr:    apiAddr,
-		Handler: api.NewServer(st, authn).WithHostname(hostname),
+		Addr: apiAddr,
+		Handler: api.NewServer(st, authn).WithHostname(hostname).WithSystemPort([]api.SystemPort{
+			{Name: "imap", Addr: imapAddr, Kind: "imap", TLS: tlsConfig != nil, Check: true},
+			{Name: "smtp", Addr: smtpAddr, Kind: "smtp", Check: true},
+			{Name: "submission", Addr: submissionAddr, Kind: "smtp", Check: true},
+		}),
 		// slowloris 방어 — 헤더/전체 읽기와 유휴 연결에 상한
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

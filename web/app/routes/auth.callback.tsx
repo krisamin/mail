@@ -20,19 +20,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const tokens = await exchangeCode(code, redirectUri);
   const claims = decodeClaims(tokens.idToken);
 
-  // ── JIT 프로비저닝 겸 로그인 게이트: email 도메인이 이 서버에 등록된
-  // 도메인이면 계정을 만들고(있으면 갱신), 아니면 403 — 세션 자체를 안 만든다.
-  // (Go API가 토큰 검증 + 도메인 조회 + 계정/주소/INBOX 생성)
+  // ── JIT 프로비저닝: 계정을 만들거나 갱신한다 (멱등). 도메인 미등록
+  // email이어도 로그인은 허용 — 계정만 생기고 주소/메일함이 없을 뿐.
+  // admin은 OIDC 그룹으로 판정되므로 빈 DB에서도 관리 화면에 들어갈 수 있다.
+  // (Go API가 토큰 검증 + 계정/주소/INBOX 생성)
   try {
     await apiFetch(tokens.idToken, "/api/me/provision", { method: "POST" });
   } catch (e) {
-    if (e instanceof ApiError && e.status === 403) {
-      const domain = (claims.email ?? "").split("@")[1] ?? "?";
-      throw new Response(
-        `이 메일 서버에 등록되지 않은 도메인이에요: @${domain}`,
-        { status: 403 },
-      );
-    }
     if (e instanceof ApiError) {
       throw new Response(`로그인 확인 실패: ${e.message}`, { status: 403 });
     }

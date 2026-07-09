@@ -95,16 +95,15 @@ func hostOf(addr string) string {
 // ── DB 해석 Sender (0005) ───────────────────────────────────
 
 // ResolvingSender는 발송 시점에 발신 도메인의 relay를 DB에서 해석한다.
-// 도메인 지정 relay → default relay → env fallback(있으면) → 오류(재시도).
+// 도메인 지정 relay → default relay → 오류(재시도).
 // relay를 어드민에서 바꾸면 재기동 없이 다음 발송부터 반영된다.
 type ResolvingSender struct {
-	store    store.Store
-	fallback *RelayConfig // env MAIL_RELAY_* (nil = 없음)
+	store store.Store
 }
 
-// NewResolvingSender는 DB 해석 발송기를 만든다. fallback은 nil 가능.
-func NewResolvingSender(st store.Store, fallback *RelayConfig) *ResolvingSender {
-	return &ResolvingSender{store: st, fallback: fallback}
+// NewResolvingSender는 DB 해석 발송기를 만든다.
+func NewResolvingSender(st store.Store) *ResolvingSender {
+	return &ResolvingSender{store: st}
 }
 
 var _ Sender = (*ResolvingSender)(nil)
@@ -126,9 +125,6 @@ func (r *ResolvingSender) Send(ctx context.Context, from, rcpt string, raw []byt
 		return NewRelaySender(cfg).Send(ctx, from, rcpt, raw)
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		if r.fallback != nil {
-			return NewRelaySender(*r.fallback).Send(ctx, from, rcpt, raw)
-		}
 		// relay가 없음 — 어드민이 곧 추가할 수 있으니 일시 오류로 재시도.
 		return fmt.Errorf("도메인 %q의 relay 미설정 (어드민에서 relay 추가 필요)", senderDomain)
 	}

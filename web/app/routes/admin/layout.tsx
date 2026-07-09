@@ -22,6 +22,7 @@ const navItemList = [
   { to: "/admin/account", label: "계정" },
   { to: "/admin/relay", label: "relay" },
   { to: "/admin/queue", label: "발송 큐" },
+  { to: "/admin/system", label: "시스템" },
 ];
 
 export default function AdminLayout({ loaderData }: Route.ComponentProps) {

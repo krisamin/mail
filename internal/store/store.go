@@ -224,6 +224,9 @@ type AdminStore interface {
 	// 도메인
 	ListDomain(ctx context.Context) ([]*Domain, error)
 	CreateDomain(ctx context.Context, name string) (*Domain, error)
+	// BackfillDomainAddress는 oidc_email이 이 도메인인 기존 사람 계정에
+	// primary 주소+INBOX를 소급 생성한다 (멱등). 생성 수 반환.
+	BackfillDomainAddress(ctx context.Context, domainID int64) (int, error)
 	SetDomainActive(ctx context.Context, id int64, active bool) error
 	// SetDomainDKIM은 DKIM selector/개인키를 설정한다 (빈 문자열 = 해제).
 	SetDomainDKIM(ctx context.Context, id int64, selector, privateKeyPEM string) error
@@ -231,9 +234,9 @@ type AdminStore interface {
 	// 계정 (유저 = OIDC 신원. 사람 계정 생성은 JIT 프로비저닝만)
 	ListAccount(ctx context.Context) ([]*Account, error)
 	// ProvisionAccount는 OIDC sub 기준 JIT 프로비저닝 — 계정이 없으면
-	// 만들고(email 주소를 primary address로 자동 등록 + INBOX), 있으면
-	// oidc_email만 갱신해 돌려준다 (멱등).
-	// email의 도메인이 등록돼 있지 않으면 ErrNotFound.
+	// 만들고, 있으면 oidc_email만 갱신해 돌려준다 (멱등).
+	// email 도메인이 등록돼 있으면 primary 주소+INBOX까지, 미등록이면
+	// 계정만 생성 (주소 없음 = 메일 사용 불가, 도메인 추가 시 backfill).
 	ProvisionAccount(ctx context.Context, subject, email string) (*Account, error)
 	// CreateServiceAccount는 서비스 계정을 만든다 (admin 전용) —
 	// 로그인 불가, 주소+앱비밀번호만. email 주소가 primary로 등록된다.
