@@ -53,12 +53,20 @@ type Relay struct {
 	CreatedAt time.Time
 }
 
+// AccountKind 값 — account.kind 컬럼 (0007).
+const (
+	AccountKindUser    = "user"    // 사람 — OIDC 로그인 (JIT 프로비저닝)
+	AccountKindService = "service" // 시스템 — 로그인 불가, 주소+앱비밀번호만
+)
+
 // Account는 유저 = OIDC 신원 (0006). 주소는 address 테이블에 별도.
 // 사람 로그인은 OIDC(sub 기준 JIT 프로비저닝), 메일앱은 앱 비밀번호.
+// 서비스 계정(0007)은 sub가 'service:<email>' 합성값이라 웹 로그인 불가.
 type Account struct {
 	ID          int64
 	OIDCSubject string // OIDC sub 클레임 (유니크 — 진짜 신원 키)
 	OIDCEmail   string // IdP가 내려준 email (참고/표시용, 로그인 시 갱신)
+	Kind        string // AccountKindUser | AccountKindService
 	QuotaBytes  *int64 // nil = 무제한
 	Active      bool
 	CreatedAt   time.Time
@@ -220,13 +228,16 @@ type AdminStore interface {
 	// SetDomainDKIM은 DKIM selector/개인키를 설정한다 (빈 문자열 = 해제).
 	SetDomainDKIM(ctx context.Context, id int64, selector, privateKeyPEM string) error
 
-	// 계정 (유저 = OIDC 신원. 생성은 JIT 프로비저닝 경로만)
+	// 계정 (유저 = OIDC 신원. 사람 계정 생성은 JIT 프로비저닝만)
 	ListAccount(ctx context.Context) ([]*Account, error)
 	// ProvisionAccount는 OIDC sub 기준 JIT 프로비저닝 — 계정이 없으면
 	// 만들고(email 주소를 primary address로 자동 등록 + INBOX), 있으면
 	// oidc_email만 갱신해 돌려준다 (멱등).
 	// email의 도메인이 등록돼 있지 않으면 ErrNotFound.
 	ProvisionAccount(ctx context.Context, subject, email string) (*Account, error)
+	// CreateServiceAccount는 서비스 계정을 만든다 (admin 전용) —
+	// 로그인 불가, 주소+앱비밀번호만. email 주소가 primary로 등록된다.
+	CreateServiceAccount(ctx context.Context, email string) (*Account, error)
 	SetAccountActive(ctx context.Context, id int64, active bool) error
 
 	// 앱 비밀번호 (DD-02: OAuth 로그인 후 발급)

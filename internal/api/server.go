@@ -51,8 +51,10 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("POST /api/admin/domain/{id}/address", s.handleCreateAddress)
 	admin.HandleFunc("DELETE /api/admin/address/{id}", s.handleDeleteAddress)
 	admin.HandleFunc("GET /api/admin/account", s.handleListAccount)
+	admin.HandleFunc("POST /api/admin/account/service", s.handleCreateServiceAccount)
 	admin.HandleFunc("PATCH /api/admin/account/{id}", s.handlePatchAccount)
 	admin.HandleFunc("GET /api/admin/account/{id}/address", s.handleListAccountAddress)
+	admin.HandleFunc("POST /api/admin/account/{id}/address", s.handleCreateAccountAddress)
 	admin.HandleFunc("GET /api/admin/account/{id}/app-password", s.handleListAppPassword)
 	admin.HandleFunc("POST /api/admin/account/{id}/app-password", s.handleCreateAppPassword)
 	admin.HandleFunc("DELETE /api/admin/app-password/{id}", s.handleRevokeAppPassword)
@@ -321,15 +323,38 @@ type accountDTO struct {
 	ID        int64  `json:"id"`
 	Subject   string `json:"subject"`
 	Email     string `json:"email"`
+	Kind      string `json:"kind"` // 'user' | 'service'
 	Active    bool   `json:"active"`
 	CreatedAt string `json:"createdAt"`
 }
 
 func toAccountDTO(u *store.Account) accountDTO {
 	return accountDTO{
-		ID: u.ID, Subject: u.OIDCSubject, Email: u.OIDCEmail, Active: u.Active,
+		ID: u.ID, Subject: u.OIDCSubject, Email: u.OIDCEmail, Kind: u.Kind, Active: u.Active,
 		CreatedAt: u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
+}
+
+// handleCreateServiceAccount는 서비스 계정 생성 (admin 전용, 0007).
+// 로그인 불가 — 주소+앱비밀번호만 갖는 시스템 계정. body: {email}.
+func (s *Server) handleCreateServiceAccount(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := decodeBody(r, &req); err != nil || strings.TrimSpace(req.Email) == "" {
+		writeError(w, http.StatusBadRequest, "invalid body (email required)")
+		return
+	}
+	u, err := s.store.CreateServiceAccount(r.Context(), req.Email)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusBadRequest, "domain not registered for "+req.Email)
+			return
+		}
+		mapStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toAccountDTO(u))
 }
 
 func (s *Server) handleListAccount(w http.ResponseWriter, r *http.Request) {

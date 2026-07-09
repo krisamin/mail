@@ -67,7 +67,8 @@ func (s *Server) handleListAccountAddress(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleCreateAddress는 주소를 계정에 붙인다. body: {localPart, accountId}.
+// handleCreateAddress는 주소를 계정에 붙인다 (도메인 경로 기준).
+// body: {localPart, accountId}.
 func (s *Server) handleCreateAddress(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -82,12 +83,35 @@ func (s *Server) handleCreateAddress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body (localPart, accountId required)")
 		return
 	}
-	// 대상 계정 존재 확인
-	if _, err := s.store.FindAccountByID(r.Context(), req.AccountID); err != nil {
+	s.createAddress(w, r, id, req.LocalPart, req.AccountID)
+}
+
+// handleCreateAccountAddress는 주소를 계정에 붙인다 (계정 경로 기준 —
+// 계정 페이지의 [local]@[도메인 선택] UX용). body: {localPart, domainId}.
+func (s *Server) handleCreateAccountAddress(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req struct {
+		LocalPart string `json:"localPart"`
+		DomainID  int64  `json:"domainId"`
+	}
+	if err := decodeBody(r, &req); err != nil || req.DomainID == 0 {
+		writeError(w, http.StatusBadRequest, "invalid body (localPart, domainId required)")
+		return
+	}
+	s.createAddress(w, r, req.DomainID, req.LocalPart, id)
+}
+
+// createAddress는 두 핸들러의 공통 본체 — 계정 존재 확인 후 생성.
+func (s *Server) createAddress(w http.ResponseWriter, r *http.Request, domainID int64, localPart string, accountID int64) {
+	if _, err := s.store.FindAccountByID(r.Context(), accountID); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	a, err := s.store.CreateAddress(r.Context(), id, req.LocalPart, req.AccountID)
+	a, err := s.store.CreateAddress(r.Context(), domainID, localPart, accountID)
 	if err != nil {
 		mapStoreErr(w, err)
 		return

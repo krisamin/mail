@@ -106,6 +106,50 @@ func TestAddressEndpointsAndProvision(t *testing.T) {
 	}
 	t.Log("✔ 주소 추가 admin 전용 (일반 유저 403)")
 
+	// 5.5) 계정 기준 주소 추가 — [local]@[도메인 선택] UX 경로
+	code, byAccount, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/account/%d/address", maroID),
+		map[string]any{"localPart": "second", "domainId": kirbyID})
+	if code != 201 || byAccount["localPart"] != "second" || byAccount["domainName"] != "kirby.so" {
+		t.Fatalf("계정 기준 주소 추가: %d %v", code, byAccount)
+	}
+	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/address/%v", byAccount["id"]), nil)
+	if code != 204 {
+		t.Fatalf("계정 기준 주소 삭제: %d", code)
+	}
+	t.Log("✔ 계정 기준 주소 추가 (POST /account/{id}/address)")
+
+	// 5.7) 서비스 계정 — 로그인 불가, 주소+앱비번만
+	code, svc, _ := call(t, srv, "POST", "/api/admin/account/service",
+		map[string]string{"email": "bot@kirby.so"})
+	if code != 201 || svc["kind"] != "service" || svc["email"] != "bot@kirby.so" {
+		t.Fatalf("서비스 계정 생성: %d %v", code, svc)
+	}
+	svcID := int64(svc["id"].(float64))
+	// 미등록 도메인 → 400
+	code, _, _ = call(t, srv, "POST", "/api/admin/account/service",
+		map[string]string{"email": "bot@example.com"})
+	if code != 400 {
+		t.Fatalf("미등록 도메인 서비스 계정은 400이어야: %d", code)
+	}
+	// 점유 주소 → 409
+	code, _, _ = call(t, srv, "POST", "/api/admin/account/service",
+		map[string]string{"email": "maro@krisam.in"})
+	if code != 409 {
+		t.Fatalf("점유 주소 서비스 계정은 409여야: %d", code)
+	}
+	// 같은 email로 OIDC 로그인해도 서비스 계정 입양/로그인 불가 (탈취 방지)
+	code, _, _ = callAs(t, srv, "bot@kirby.so", "", "POST", "/api/me/provision", nil)
+	if code == 200 {
+		t.Fatal("서비스 계정 email로 프로비저닝이 성공하면 안 됨 (탈취)")
+	}
+	// 서비스 계정에도 앱비번 발급 가능
+	code, svcPw, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/account/%d/app-password", svcID),
+		map[string]string{"label": "bot-smtp"})
+	if code != 201 || svcPw["plaintext"] == nil {
+		t.Fatalf("서비스 계정 앱비번: %d %v", code, svcPw)
+	}
+	t.Log("✔ 서비스 계정 (생성/미등록 400/점유 409/탈취 방지/앱비번)")
+
 	// 6) 주소 삭제 — hello 삭제 OK, primary는 catch-all 삭제 후에도 남아있어 OK,
 	// 마지막 일반 주소는 400
 	helloID := int64(address["id"].(float64))

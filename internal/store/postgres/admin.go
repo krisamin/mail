@@ -89,9 +89,9 @@ func (s *Store) SetDomainDKIM(ctx context.Context, id int64, selector, privateKe
 // ListAccount는 전체 계정 목록 (비활성 포함 — 관리 화면용).
 func (s *Store) ListAccount(ctx context.Context) ([]*store.Account, error) {
 	const q = `
-		SELECT id, oidc_subject, COALESCE(oidc_email, ''),
+		SELECT id, oidc_subject, COALESCE(oidc_email, ''), kind,
 		       quota_bytes, active, created_at
-		FROM account ORDER BY oidc_email`
+		FROM account ORDER BY kind, oidc_email`
 	rows, err := s.pool.Query(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("계정 목록: %w", err)
@@ -101,7 +101,7 @@ func (s *Store) ListAccount(ctx context.Context) ([]*store.Account, error) {
 	var out []*store.Account
 	for rows.Next() {
 		var u store.Account
-		if err := rows.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail,
+		if err := rows.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind,
 			&u.QuotaBytes, &u.Active, &u.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -123,13 +123,6 @@ func (s *Store) ProvisionAccount(ctx context.Context, subject, email string) (*s
 	if subject == "" {
 		return nil, fmt.Errorf("잘못된 신원: sub 비어있음")
 	}
-	local, domainName, err := splitAddress(email)
-	if err != nil {
-		return nil, err
-	}
-	if local == "" || local == "*" {
-		return nil, fmt.Errorf("잘못된 주소: %q", email)
-	}
 
 	// 기존 계정 — email만 갱신 (비활성 계정은 로그인 차단이 목적이라 제외)
 	if u, err := s.FindAccountBySubject(ctx, subject); err == nil {
@@ -145,12 +138,14 @@ func (s *Store) ProvisionAccount(ctx context.Context, subject, email string) (*s
 		return nil, err
 	}
 
-	// 입양: 같은 email을 primary로 가진 기존 계정(시드/마이그레이션의
+	// 입양: 같은 email을 primary로 가진 기존 사람 계정(시드/마이그레이션의
 	// placeholder sub, 또는 IdP에서 유저 재생성으로 sub가 바뀐 경우)이
-	// 있으면 sub를 갱신해 이어받는다. 주소가 존재하되 소유 계정의
-	// oidc_email이 다르면(남의 추가 주소) 입양 금지 — 아래 INSERT에서
-	// duplicate로 실패한다.
-	if owner, err := s.FindAccountByAddress(ctx, email); err == nil && owner.OIDCEmail == email {
+	// 있으면 sub를 갱신해 이어받는다. ★서비스 계정은 입양 불가 — IdP에
+	// 같은 email 유저를 만들어도 서비스 계정을 탈취할 수 없다.
+	// 주소가 존재하되 소유 계정의 oidc_email이 다르면(남의 추가 주소)도
+	// 입양 금지 — 아래 INSERT에서 duplicate로 실패한다.
+	if owner, err := s.FindAccountByAddress(ctx, email); err == nil &&
+		owner.OIDCEmail == email && owner.Kind == store.AccountKindUser {
 		if _, err := s.pool.Exec(ctx,
 			`UPDATE account SET oidc_subject = $2 WHERE id = $1`, owner.ID, subject); err != nil {
 			return nil, fmt.Errorf("계정 신원 갱신: %w", err)
@@ -159,6 +154,27 @@ func (s *Store) ProvisionAccount(ctx context.Context, subject, email string) (*s
 		return owner, nil
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
+	}
+
+	return s.createAccountWithAddress(ctx, subject, email, store.AccountKindUser)
+}
+
+// CreateServiceAccount는 서비스 계정을 만든다 (admin 전용, 0007).
+// 로그인 불가(sub='service:<email>' 합성값), 주소+앱비밀번호만.
+func (s *Store) CreateServiceAccount(ctx context.Context, email string) (*store.Account, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	return s.createAccountWithAddress(ctx, "service:"+email, email, store.AccountKindService)
+}
+
+// createAccountWithAddress는 계정 + primary 주소 + INBOX를 한 트랜잭션으로 만든다.
+// email 도메인 미등록이면 ErrNotFound, 주소가 이미 소유돼 있으면 duplicate.
+func (s *Store) createAccountWithAddress(ctx context.Context, subject, email, kind string) (*store.Account, error) {
+	local, domainName, err := splitAddress(email)
+	if err != nil {
+		return nil, err
+	}
+	if local == "" || local == "*" || strings.ContainsAny(local, "@ 	") {
+		return nil, fmt.Errorf("잘못된 주소: %q", email)
 	}
 
 	dom, err := s.FindDomain(ctx, domainName)
@@ -174,10 +190,10 @@ func (s *Store) ProvisionAccount(ctx context.Context, subject, email string) (*s
 
 	var u store.Account
 	err = tx.QueryRow(ctx,
-		`INSERT INTO account (oidc_subject, oidc_email) VALUES ($1, $2)
-		 RETURNING id, oidc_subject, COALESCE(oidc_email, ''), quota_bytes, active, created_at`,
-		subject, email).Scan(
-		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.QuotaBytes, &u.Active, &u.CreatedAt)
+		`INSERT INTO account (oidc_subject, oidc_email, kind) VALUES ($1, $2, $3)
+		 RETURNING id, oidc_subject, COALESCE(oidc_email, ''), kind, quota_bytes, active, created_at`,
+		subject, email, kind).Scan(
+		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("계정 생성: %w", err)
 	}
@@ -340,12 +356,12 @@ func (s *Store) OutboundStats(ctx context.Context) (map[string]int64, error) {
 // FindAccountByID는 계정을 ID로 찾는다 (admin API용).
 func (s *Store) FindAccountByID(ctx context.Context, id int64) (*store.Account, error) {
 	const q = `
-		SELECT id, oidc_subject, COALESCE(oidc_email, ''),
+		SELECT id, oidc_subject, COALESCE(oidc_email, ''), kind,
 		       quota_bytes, active, created_at
 		FROM account WHERE id = $1`
 	var u store.Account
 	err := s.pool.QueryRow(ctx, q, id).Scan(
-		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.QuotaBytes, &u.Active, &u.CreatedAt)
+		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

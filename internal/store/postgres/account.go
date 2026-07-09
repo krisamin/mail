@@ -29,13 +29,13 @@ func splitAddress(address string) (local, domain string, err error) {
 
 // accountSelect는 account 조회 공통 SELECT (0006 — 신원 모델).
 const accountSelect = `
-	SELECT a.id, a.oidc_subject, COALESCE(a.oidc_email, ''),
+	SELECT a.id, a.oidc_subject, COALESCE(a.oidc_email, ''), a.kind,
 	       a.quota_bytes, a.active, a.created_at
 	FROM account a`
 
 func scanAccount(row pgx.Row) (*store.Account, error) {
 	var u store.Account
-	err := row.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.QuotaBytes, &u.Active, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

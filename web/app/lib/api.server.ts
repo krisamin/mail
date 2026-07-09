@@ -49,6 +49,7 @@ export type Account = {
   id: number;
   subject: string;
   email: string;
+  kind: "user" | "service";
   active: boolean;
   createdAt: string;
 };

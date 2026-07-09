@@ -6,17 +6,22 @@ import {
   type Address,
   type AppPassword,
   type Account,
+  type Domain,
 } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
 
 // 계정 관리 — 전체 계정 목록 + 계정별 주소/앱 비밀번호 (admin 전용).
-// 계정은 JIT 프로비저닝(첫 OIDC 로그인)으로 생긴다 — 여기선 생성 불가.
-// 주소 연결은 도메인 페이지(/admin/domain/:id/address)에서.
+// 사람 계정은 JIT 프로비저닝(첫 OIDC 로그인)으로 생기고,
+// 서비스 계정(로그인 불가, 주소+앱비번만)은 여기서 직접 만든다.
+// 주소 추가는 [local part]@[도메인 선택] 으로 계정에 바로 붙인다.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
 
-  const accountList = (await apiFetch<Account[]>(user.idToken, "/api/admin/account")) ?? [];
+  const [accountList, domainList] = await Promise.all([
+    apiFetch<Account[]>(user.idToken, "/api/admin/account").then((r) => r ?? []),
+    apiFetch<Domain[]>(user.idToken, "/api/admin/domain").then((r) => r ?? []),
+  ]);
 
   // 계정별 주소/앱비번 (관리 화면이라 N+1 허용 — 계정 수 적음)
   const addressList: Record<number, Address[]> = {};
@@ -31,7 +36,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       ]);
     }),
   );
-  return { accountList, addressList, appPasswordList };
+  return {
+    accountList,
+    domainList: domainList.filter((d) => d.active),
+    addressList,
+    appPasswordList,
+  };
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
@@ -41,6 +51,31 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   try {
     switch (intent) {
+      case "create-service": {
+        await apiFetch(user.idToken, "/api/admin/account/service", {
+          method: "POST",
+          body: {
+            email: `${String(form.get("localPart") ?? "")}@${String(form.get("domainName") ?? "")}`,
+          },
+        });
+        return { ok: true as const };
+      }
+      case "create-address": {
+        await apiFetch(user.idToken, `/api/admin/account/${form.get("accountId")}/address`, {
+          method: "POST",
+          body: {
+            localPart: String(form.get("localPart") ?? ""),
+            domainId: Number(form.get("domainId")),
+          },
+        });
+        return { ok: true as const };
+      }
+      case "delete-address": {
+        await apiFetch(user.idToken, `/api/admin/address/${form.get("id")}`, {
+          method: "DELETE",
+        });
+        return { ok: true as const };
+      }
       case "toggle-account": {
         await apiFetch(user.idToken, `/api/admin/account/${form.get("id")}`, {
           method: "PATCH",
@@ -62,12 +97,6 @@ export const action = async ({ request }: Route.ActionArgs) => {
         });
         return { ok: true as const };
       }
-      case "delete-address": {
-        await apiFetch(user.idToken, `/api/admin/address/${form.get("id")}`, {
-          method: "DELETE",
-        });
-        return { ok: true as const };
-      }
       default:
         return { ok: false as const, error: "알 수 없는 요청" };
     }
@@ -78,7 +107,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
 };
 
 export default function AccountList({ loaderData, actionData }: Route.ComponentProps) {
-  const { accountList, addressList, appPasswordList } = loaderData;
+  const { accountList, domainList, addressList, appPasswordList } = loaderData;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
@@ -87,8 +116,8 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
       <div>
         <h1 className="text-xl font-bold">계정</h1>
         <p className="mt-0.5 text-xs text-text-2">
-          계정은 유저가 처음 로그인할 때 자동으로 생겨요 (OIDC 신원 기준). 주소 연결은 각 도메인
-          페이지에서.
+          사람 계정은 첫 로그인 때 자동으로 생겨요 (OIDC 신원 기준). 서비스 계정은 로그인 없이
+          주소·앱 비밀번호만 갖는 시스템용이에요.
         </p>
       </div>
 
@@ -107,18 +136,59 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
         </div>
       )}
 
+      {/* ── 서비스 계정 생성 ─────────────────────────────── */}
+      <Form method="post" className="flex gap-2">
+        <input type="hidden" name="intent" value="create-service" />
+        <div className="flex flex-1 items-center gap-1 rounded-md border border-line bg-bg-1 px-3">
+          <input
+            name="localPart"
+            required
+            placeholder="bot"
+            className="flex-1 bg-transparent py-2 text-sm outline-none"
+          />
+          <span className="text-sm text-text-2">@</span>
+          <select
+            name="domainName"
+            required
+            className="rounded border border-line bg-bg-0 px-2 py-1 text-sm outline-none"
+          >
+            {domainList.map((d) => (
+              <option key={d.id} value={d.name}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="submit"
+          disabled={busy || domainList.length === 0}
+          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-bg-0 hover:bg-accent-hover disabled:opacity-50"
+        >
+          서비스 계정 추가
+        </button>
+      </Form>
+
       <div className="flex flex-col gap-3">
         {accountList.length === 0 ? (
           <p className="rounded-md border border-line bg-bg-1 px-4 py-6 text-center text-sm text-text-2">
-            계정 없음 — 유저가 로그인하면 여기 나타나요.
+            계정 없음 — 유저가 로그인하거나 서비스 계정을 만들면 여기 나타나요.
           </p>
         ) : (
           accountList.map((u) => (
             <div key={u.id} className="rounded-md border border-line bg-bg-1">
               <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-                <div>
-                  <p className="text-sm font-medium">{u.email}</p>
-                  <p className="font-mono text-[10px] text-text-2">sub: {u.subject}</p>
+                <div className="flex items-center gap-2">
+                  <div>
+                    <p className="text-sm font-medium">{u.email}</p>
+                    {u.kind === "user" && (
+                      <p className="font-mono text-[10px] text-text-2">sub: {u.subject}</p>
+                    )}
+                  </div>
+                  {u.kind === "service" && (
+                    <span className="rounded bg-accent-soft px-1.5 py-0.5 text-[10px] text-accent">
+                      서비스
+                    </span>
+                  )}
                 </div>
                 <Form method="post">
                   <input type="hidden" name="intent" value="toggle-account" />
@@ -136,11 +206,10 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                 </Form>
               </div>
 
+              {/* ── 주소: 목록 + [local]@[도메인] 추가 ─────────── */}
               <div className="flex flex-col gap-2 px-4 py-3">
                 <p className="text-xs text-text-2">주소</p>
-                {(addressList[u.id] ?? []).length === 0 ? (
-                  <p className="text-xs text-muted">주소 없음</p>
-                ) : (
+                {(addressList[u.id] ?? []).length > 0 && (
                   <ul className="flex flex-wrap gap-1.5">
                     {(addressList[u.id] ?? []).map((a) => (
                       <li
@@ -165,6 +234,31 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                     ))}
                   </ul>
                 )}
+                <Form method="post" className="flex items-center gap-1.5">
+                  <input type="hidden" name="intent" value="create-address" />
+                  <input type="hidden" name="accountId" value={u.id} />
+                  <input
+                    name="localPart"
+                    required
+                    placeholder="hello 또는 *"
+                    className="w-32 rounded border border-line bg-bg-0 px-2 py-0.5 text-xs outline-none focus:border-accent"
+                  />
+                  <span className="text-xs text-text-2">@</span>
+                  <select
+                    name="domainId"
+                    required
+                    className="rounded border border-line bg-bg-0 px-2 py-0.5 text-xs outline-none"
+                  >
+                    {domainList.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="submit" disabled={busy} className="text-xs text-accent hover:underline">
+                    추가
+                  </button>
+                </Form>
               </div>
 
               <div className="flex flex-col gap-2 border-t border-line px-4 py-3">
