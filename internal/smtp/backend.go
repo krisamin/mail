@@ -32,8 +32,12 @@ type Backend struct {
 	store    store.Store
 	hostname string // Received 헤더에 박을 서버 이름
 	// verifyInbound가 true면 수신 메일에 SPF/DKIM/DMARC 검증을 돌려
-	// Authentication-Results 헤더를 붙인다 (Phase 2-4. 기록만, 거절 안 함).
+	// Authentication-Results 헤더를 붙인다 (기록).
 	verifyInbound bool
+	// enforceDMARC가 true면 발신 도메인의 DMARC 정책을 집행한다:
+	// 판정 fail + p=reject → 550 거절, p=quarantine → Junk 폴더 배달.
+	// p=none이거나 레코드 없으면 기록만 (기존 동작).
+	enforceDMARC bool
 }
 
 // NewBackend는 store 위에 수신 백엔드를 만든다.
@@ -44,6 +48,13 @@ func NewBackend(st store.Store, hostname string) *Backend {
 // WithInboundVerification은 수신 SPF/DKIM/DMARC 검증을 켠다.
 func (b *Backend) WithInboundVerification() *Backend {
 	b.verifyInbound = true
+	return b
+}
+
+// WithDMARCEnforcement는 DMARC 정책 집행을 켠다 (검증도 함께 켜짐).
+func (b *Backend) WithDMARCEnforcement() *Backend {
+	b.verifyInbound = true
+	b.enforceDMARC = true
 	return b
 }
 
@@ -106,6 +117,8 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 }
 
 // Data는 본문을 받아 각 수신자의 INBOX에 배달한다.
+// DMARC 집행이 켜져 있으면: fail+p=reject → 550 거절,
+// fail+p=quarantine → Junk 폴더 배달.
 func (s *Session) Data(r io.Reader) error {
 	if len(s.rcptList) == 0 {
 		return &gosmtp.SMTPError{
@@ -120,8 +133,9 @@ func (s *Session) Data(r io.Reader) error {
 		return err
 	}
 
-	// SPF/DKIM/DMARC 검증 → Authentication-Results (Phase 2-4: 기록만)
+	// SPF/DKIM/DMARC 검증 → Authentication-Results 기록 + 정책 판단
 	var authHeader []byte
+	folder := "INBOX"
 	if s.backend.verifyInbound {
 		ip := remoteIP(s.remoteAddr)
 		vr := auth.VerifyInbound(raw, auth.VerifyOptions{
@@ -131,8 +145,24 @@ func (s *Session) Data(r io.Reader) error {
 			Hostname:     s.backend.hostname,
 		})
 		authHeader = vr.Header
-		log.Printf("smtp: 인증 검증 from=%s ip=%s spf=%v dkim=%v dmarc=%v",
-			s.from, ip, vr.SPFPass, vr.DKIMPass, vr.DMARCPass)
+		log.Printf("smtp: 인증 검증 from=%s ip=%s spf=%v dkim=%v dmarc=%v policy=%s",
+			s.from, ip, vr.SPFPass, vr.DKIMPass, vr.DMARCPass, vr.DMARCPolicy)
+
+		// DMARC 정책 집행 — 발신 도메인이 공표한 정책을 따른다.
+		if s.backend.enforceDMARC && vr.DMARCEvaluated && !vr.DMARCPass {
+			switch vr.DMARCPolicy {
+			case "reject":
+				log.Printf("smtp: DMARC reject from=%s ip=%s", s.from, ip)
+				return &gosmtp.SMTPError{
+					Code:         550,
+					EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
+					Message:      "rejected by sender domain DMARC policy",
+				}
+			case "quarantine":
+				folder = "Junk"
+				log.Printf("smtp: DMARC quarantine → Junk from=%s ip=%s", s.from, ip)
+			}
+		}
 	}
 
 	now := timeNow()
@@ -143,7 +173,7 @@ func (s *Session) Data(r io.Reader) error {
 		stamped = append(stamped, authHeader...)
 		stamped = append(stamped, raw...)
 
-		if err := s.deliver(rc, stamped, now); err != nil {
+		if err := s.deliver(rc, folder, stamped, now); err != nil {
 			log.Printf("smtp: 배달 실패 to=%s from=%s: %v", rc.address, s.from, err)
 			continue
 		}
@@ -157,25 +187,25 @@ func (s *Session) Data(r io.Reader) error {
 			Message:      "delivery failed, try again later",
 		}
 	}
-	log.Printf("smtp: 배달 완료 from=%s rcptList=%d/%d size=%d", s.from, delivered, len(s.rcptList), len(raw))
+	log.Printf("smtp: 배달 완료 from=%s rcptList=%d/%d folder=%s size=%d", s.from, delivered, len(s.rcptList), folder, len(raw))
 	return nil
 }
 
-// deliver는 수신자의 INBOX에 메시지를 저장한다. INBOX 없으면 생성.
-func (s *Session) deliver(rc rcpt, raw []byte, now time.Time) error {
+// deliver는 수신자의 지정 폴더에 메시지를 저장한다. 폴더 없으면 생성.
+func (s *Session) deliver(rc rcpt, folder string, raw []byte, now time.Time) error {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
-	inbox, err := s.backend.store.GetMailbox(ctx, rc.user.ID, "INBOX")
+	box, err := s.backend.store.GetMailbox(ctx, rc.user.ID, folder)
 	if errors.Is(err, store.ErrNotFound) {
-		inbox, err = s.backend.store.CreateMailbox(ctx, rc.user.ID, "INBOX")
+		box, err = s.backend.store.CreateMailbox(ctx, rc.user.ID, folder)
 	}
 	if err != nil {
-		return fmt.Errorf("INBOX 확보: %w", err)
+		return fmt.Errorf("%s 확보: %w", folder, err)
 	}
 
 	// 새 메일은 플래그 없음 (= unseen)
-	_, err = s.backend.store.AppendMessage(ctx, inbox.ID, raw, nil, now)
+	_, err = s.backend.store.AppendMessage(ctx, box.ID, raw, nil, now)
 	if err != nil {
 		return fmt.Errorf("append: %w", err)
 	}

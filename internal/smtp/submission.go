@@ -10,6 +10,7 @@ import (
 	"github.com/emersion/go-sasl"
 	gosmtp "github.com/emersion/go-smtp"
 
+	"github.com/krisamin/mail/internal/guard"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -25,12 +26,17 @@ type SubmissionBackend struct {
 	// enqueueEnabled가 false면 외부 도메인 수신자를 거절한다
 	// (발송 큐 워커가 안 도는 구성 — dev에서 relay 미설정일 때).
 	enqueueEnabled bool
+	// limiter는 인증 브루트포스 방어 (IP 단위).
+	limiter *guard.Limiter
 }
 
 // NewSubmissionBackend는 submission 백엔드를 만든다.
 // enqueueEnabled: 외부 도메인 수신자를 발송 큐에 넣을지 여부.
 func NewSubmissionBackend(st store.Store, hostname string, enqueueEnabled bool) *SubmissionBackend {
-	return &SubmissionBackend{store: st, hostname: hostname, enqueueEnabled: enqueueEnabled}
+	return &SubmissionBackend{
+		store: st, hostname: hostname, enqueueEnabled: enqueueEnabled,
+		limiter: guard.NewLimiter(),
+	}
 }
 
 // NewSession은 연결마다 불린다.
@@ -69,6 +75,7 @@ func (s *SubmissionSession) AuthMechanisms() []string {
 }
 
 // Auth는 SASL 서버를 돌려준다. PLAIN = 주소 + 앱 비밀번호.
+// IP 단위 브루트포스 방어: 반복 실패 시 일정 시간 차단.
 func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 	if mech != sasl.Plain {
 		return nil, gosmtp.ErrAuthUnsupported
@@ -77,12 +84,26 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 		if identity != "" && identity != username {
 			return errors.New("identity not supported")
 		}
+		ip := remoteIP(s.remoteAddr)
+		ipKey := ""
+		if ip != nil {
+			ipKey = ip.String()
+		}
+		if !s.backend.limiter.Allow(ipKey) {
+			return &gosmtp.SMTPError{
+				Code:         421,
+				EnhancedCode: gosmtp.EnhancedCode{4, 7, 0},
+				Message:      "too many failed attempts, try again later",
+			}
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 		defer cancel()
 
 		u, err := s.backend.store.AuthenticateAppPassword(ctx, username, password)
 		if err != nil {
 			if errors.Is(err, store.ErrAuthFailed) || errors.Is(err, store.ErrNotFound) {
+				s.backend.limiter.Fail(ipKey)
 				return &gosmtp.SMTPError{
 					Code:         535,
 					EnhancedCode: gosmtp.EnhancedCode{5, 7, 8},
@@ -91,6 +112,7 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 			}
 			return err
 		}
+		s.backend.limiter.Success(ipKey)
 		s.user = u
 		s.accountAddr = strings.ToLower(username)
 		return nil
@@ -198,7 +220,7 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 	for _, rc := range s.rcptList {
 		stamped := inbound.receivedHeader(rc.address, now)
 		stamped = append(stamped, raw...)
-		if err := inbound.deliver(rc, stamped, now); err != nil {
+		if err := inbound.deliver(rc, "INBOX", stamped, now); err != nil {
 			log.Printf("submission: 배달 실패 to=%s from=%s: %v", rc.address, s.from, err)
 			continue
 		}

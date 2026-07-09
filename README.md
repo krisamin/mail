@@ -30,7 +30,11 @@ routing, multi-tenancy, and the management plane are implemented here.
   no restart needed to change relays.
 - **DKIM / SPF / DMARC** — per-domain DKIM signing (RSA-2048 / Ed25519, keys
   generated in the admin UI with the DNS TXT value handed to you), inbound
-  SPF/DKIM/DMARC verification recorded as `Authentication-Results`.
+  SPF/DKIM/DMARC verification recorded as `Authentication-Results`, and
+  optional DMARC policy enforcement (`p=reject` → 550, `p=quarantine` → Junk).
+- **Hardened by default** — IP-based brute-force protection on IMAP/SMTP
+  auth, HTTP timeouts, graceful shutdown (SIGTERM-safe for rolling updates),
+  optional TLS on protocol ports, timing-safe argon2id app passwords.
 - **DNS self-check** — one click queries public DNS (1.1.1.1) for
   MX/SPF/DKIM/DMARC and diffs against expected values.
 - **Admin UI + self-service** — React Router v7 management console (domains,
@@ -132,6 +136,8 @@ The essentials:
 |---|---|
 | `MAIL_DSN` | PostgreSQL connection string |
 | `MAIL_HOSTNAME` | Server name for EHLO/Received headers |
+| `MAIL_TLS_CERT` / `MAIL_TLS_KEY` | TLS for protocol ports (IMAP implicit TLS, SMTP STARTTLS). Empty = plaintext behind a proxy |
+| `MAIL_DMARC_ENFORCE` | `true` = honor sender DMARC policy (reject → 550, quarantine → Junk) |
 | `MAIL_OIDC_ISSUER` | OIDC issuer URL (empty = dev mode, no auth) |
 | `MAIL_OIDC_CLIENT_ID` | Audience for token verification |
 | `MAIL_ADMIN_GROUP` | OIDC group granting admin access (default `mail-admin`) |

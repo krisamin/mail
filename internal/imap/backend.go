@@ -12,10 +12,12 @@ package imap
 
 import (
 	"context"
+	"net"
 	"time"
 
 	"github.com/emersion/go-imap/v2/imapserver"
 
+	"github.com/krisamin/mail/internal/guard"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -24,17 +26,24 @@ const opTimeout = 30 * time.Second
 
 // Backend는 store를 감싸는 IMAP 세션 팩토리.
 type Backend struct {
-	store store.Store
+	store   store.Store
+	limiter *guard.Limiter // 인증 브루트포스 방어 (IP 단위)
 }
 
 // NewBackend는 store 위에 IMAP 백엔드를 만든다.
 func NewBackend(st store.Store) *Backend {
-	return &Backend{store: st}
+	return &Backend{store: st, limiter: guard.NewLimiter()}
 }
 
 // NewSession은 imapserver.Options.NewSession에 꽂는 콜백.
-func (b *Backend) NewSession(_ *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
-	return &Session{backend: b}, nil, nil
+func (b *Backend) NewSession(c *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
+	remoteIP := ""
+	if c != nil && c.NetConn() != nil {
+		if host, _, err := net.SplitHostPort(c.NetConn().RemoteAddr().String()); err == nil {
+			remoteIP = host
+		}
+	}
+	return &Session{backend: b, remoteIP: remoteIP}, nil, nil
 }
 
 // opCtx는 명령 단위 컨텍스트를 만든다.

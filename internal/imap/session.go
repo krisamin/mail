@@ -22,7 +22,8 @@ type snapEntry struct {
 
 // Session은 imapserver.Session 구현체. 연결 하나당 하나.
 type Session struct {
-	backend *Backend
+	backend  *Backend
+	remoteIP string // 브루트포스 방어 키
 
 	// 인증 후 채워짐
 	user *store.Account
@@ -70,17 +71,27 @@ func (s *Session) Close() error {
 // ── Not authenticated ───────────────────────────────────────
 
 // Login은 주소+앱 비밀번호 인증 (DD-02: 메일앱은 앱 비밀번호).
+// IP 단위 브루트포스 방어: 반복 실패 시 일정 시간 차단.
 func (s *Session) Login(username, password string) error {
+	if !s.backend.limiter.Allow(s.remoteIP) {
+		return &goimap.Error{
+			Type: goimap.StatusResponseTypeNo,
+			Text: "too many failed attempts, try again later",
+		}
+	}
+
 	ctx, cancel := opCtx()
 	defer cancel()
 
 	u, err := s.backend.store.AuthenticateAppPassword(ctx, username, password)
 	if err != nil {
 		if errors.Is(err, store.ErrAuthFailed) || errors.Is(err, store.ErrNotFound) {
+			s.backend.limiter.Fail(s.remoteIP)
 			return imapserver.ErrAuthFailed
 		}
 		return err
 	}
+	s.backend.limiter.Success(s.remoteIP)
 	s.user = u
 	return nil
 }

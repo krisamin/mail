@@ -186,7 +186,59 @@ func TestVerifyInboundDKIMFail(t *testing.T) {
 	if !strings.Contains(string(vr.Header), "dkim=fail") {
 		t.Fatalf("dkim=fail이어야: %s", vr.Header)
 	}
-	t.Logf("✔ 변조 감지: %s", strings.TrimSpace(string(vr.Header)))
+	// 정책 집행 판단용 필드 — p=reject 레코드가 읽혔어야 한다
+	if !vr.DMARCEvaluated || vr.DMARCPolicy != "reject" {
+		t.Fatalf("DMARC 정책 판독 실패: evaluated=%v policy=%q", vr.DMARCEvaluated, vr.DMARCPolicy)
+	}
+	if vr.DMARCPass {
+		t.Fatal("변조 메일이 DMARC pass면 안 됨")
+	}
+	t.Logf("✔ 변조 감지 + 정책 판독 (p=%s): %s", vr.DMARCPolicy, strings.TrimSpace(string(vr.Header)))
+}
+
+// TestVerifyInboundQuarantinePolicy: p=quarantine 판독.
+func TestVerifyInboundQuarantinePolicy(t *testing.T) {
+	pemText, dnsTXT := genRSAKey(t)
+	signer, _ := ParsePrivateKey(pemText)
+	signed, _ := SignDKIM([]byte(testMessage), "krisam.in", "mail", signer)
+	tampered := bytes.Replace(signed, []byte("sign me please"), []byte("tampered body!!"), 1)
+
+	lookup := func(domain string) ([]string, error) {
+		switch domain {
+		case "mail._domainkey.krisam.in":
+			return []string{dnsTXT}, nil
+		case "_dmarc.krisam.in":
+			return []string{"v=DMARC1; p=quarantine"}, nil
+		}
+		return nil, fmt.Errorf("no record")
+	}
+	vr := VerifyInbound(tampered, VerifyOptions{
+		RemoteIP:     net.ParseIP("192.0.2.1"),
+		HeloName:     "sender.test",
+		EnvelopeFrom: "maro@krisam.in",
+		Hostname:     "mx.krisam.in",
+		LookupTXT:    lookup,
+	})
+	if !vr.DMARCEvaluated || vr.DMARCPolicy != "quarantine" || vr.DMARCPass {
+		t.Fatalf("quarantine 판독 실패: evaluated=%v policy=%q pass=%v",
+			vr.DMARCEvaluated, vr.DMARCPolicy, vr.DMARCPass)
+	}
+	t.Log("✔ p=quarantine 판독 (→ Junk 배달 대상)")
+}
+
+// TestVerifyInboundNoDMARCRecord: 레코드 없으면 집행 안 함.
+func TestVerifyInboundNoDMARCRecord(t *testing.T) {
+	vr := VerifyInbound([]byte(testMessage), VerifyOptions{
+		RemoteIP:     net.ParseIP("192.0.2.1"),
+		HeloName:     "sender.test",
+		EnvelopeFrom: "maro@krisam.in",
+		Hostname:     "mx.krisam.in",
+		LookupTXT:    func(string) ([]string, error) { return nil, fmt.Errorf("no record") },
+	})
+	if vr.DMARCEvaluated {
+		t.Fatal("레코드 없는데 evaluated=true")
+	}
+	t.Log("✔ DMARC 레코드 없음 → 집행 대상 아님")
 }
 
 // TestHeaderFromDomain: From 헤더 도메인 추출.

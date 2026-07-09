@@ -33,10 +33,15 @@ type VerifyOptions struct {
 type VerifyResult struct {
 	// Header는 메시지 앞에 붙일 Authentication-Results 헤더 (CRLF 포함).
 	Header []byte
-	// SPFPass / DKIMPass / DMARCPass — Phase 4 정책 판단용 요약.
+	// SPFPass / DKIMPass / DMARCPass — 정책 판단용 요약.
 	SPFPass   bool
 	DKIMPass  bool
 	DMARCPass bool
+	// DMARCEvaluated는 발신 도메인에 DMARC 레코드가 있어 판정이 이뤄졌는지.
+	DMARCEvaluated bool
+	// DMARCPolicy는 발신 도메인이 공표한 정책 ("none"|"quarantine"|"reject").
+	// DMARCEvaluated가 true일 때만 의미 있다.
+	DMARCPolicy string
 }
 
 // VerifyInbound는 수신 메일의 SPF/DKIM/DMARC를 검증하고
@@ -94,6 +99,8 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 		}
 		record, err := dmarc.LookupWithOptions(fromDomain, lookupOpts)
 		if err == nil && record != nil {
+			res.DMARCEvaluated = true
+			res.DMARCPolicy = string(record.Policy)
 			// SPF 정렬: envelope from 도메인 vs From 헤더 도메인
 			spfAligned := res.SPFPass && domainAligned(envelopeDomain(opts.EnvelopeFrom), fromDomain)
 			// DKIM 정렬: pass한 서명 도메인 vs From 헤더 도메인
