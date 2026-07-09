@@ -22,7 +22,9 @@ let discoveryCache: Discovery | null = null;
 
 const discover = async (): Promise<Discovery> => {
   if (discoveryCache) return discoveryCache;
-  const res = await fetch(`${ISSUER}/.well-known/openid-configuration`);
+  // Authentik 등은 issuer가 슬래시로 끝남 — 이중 슬래시 방지
+  const base = ISSUER.replace(/\/$/, "");
+  const res = await fetch(`${base}/.well-known/openid-configuration`);
   if (!res.ok) throw new Error(`OIDC discovery 실패: ${res.status}`);
   discoveryCache = (await res.json()) as Discovery;
   return discoveryCache;
