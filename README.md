@@ -55,7 +55,7 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
 - [x] **Phase 0** — 프로토콜 감 잡기 (go-smtp 수신 스파이크) → `spikes/smtp-recv`
 - [x] **Phase 1** — 저장 엔진 (Postgres 스키마 + IMAP 백엔드)
   - [x] store 도메인 타입 + 인터페이스 (`internal/store`)
-  - [x] Postgres 스키마 마이그레이션 (`internal/store/migrations`, up/down 검증)
+  - [x] Postgres 스키마 마이그레이션 (`internal/store/migration`, up/down 검증)
   - [x] Postgres 구현체 (인증/메일박스/메시지) + 통합 테스트 PASS
   - [x] go-imap v2 `imapserver.Session`을 store 위에서 구현 (`internal/imap`, DD-06 세션 스냅샷)
         — imapclient 통합테스트로 LOGIN→LIST→SELECT→APPEND→FETCH→STORE→SEARCH→COPY→EXPUNGE 왕복 PASS

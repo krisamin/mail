@@ -4,6 +4,13 @@
 const ISSUER = process.env.MAIL_OIDC_ISSUER ?? "http://localhost:8480/realms/mail";
 const CLIENT_ID = process.env.MAIL_OIDC_CLIENT_ID ?? "mail-web";
 const CLIENT_SECRET = process.env.MAIL_OIDC_CLIENT_SECRET ?? "mail-web-dev-secret";
+// dev Keycloak은 client-level mapper로 클레임을 붙여서 openid만으로 충분.
+// Authentik 등 실 IdP는 email/groups 클레임에 "openid profile email" 필요.
+const SCOPE = process.env.MAIL_OIDC_SCOPE ?? "openid";
+
+/** 리버스 프록시 뒤에선 요청 origin이 http로 보임 — 프로덕션은 env로 고정. */
+export const publicOrigin = (request: Request): string =>
+  process.env.MAIL_PUBLIC_ORIGIN ?? new URL(request.url).origin;
 
 type Discovery = {
   authorization_endpoint: string;
@@ -28,9 +35,9 @@ export const buildAuthorizeUrl = async (redirectUri: string, state: string): Pro
     response_type: "code",
     client_id: CLIENT_ID,
     redirect_uri: redirectUri,
-    // 클레임(groups/email/username)은 client-level protocol mapper로 붙음 —
-    // profile/email 스코프에 의존하지 않는다 (dev Keycloak realm이 최소 구성이라).
-    scope: "openid",
+    // 클레임(groups/email/username)은 IdP 설정에 따라 scope가 달라짐 —
+    // dev Keycloak은 "openid"(client mapper), Authentik은 "openid profile email".
+    scope: SCOPE,
     state,
   });
   return `${d.authorization_endpoint}?${params}`;

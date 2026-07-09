@@ -1,7 +1,7 @@
 import { redirect } from "react-router";
 import type { Route } from "./+types/auth.callback";
 import { apiFetch, ApiError } from "~/lib/api.server";
-import { decodeClaims, exchangeCode } from "~/lib/oidc.server";
+import { decodeClaims, exchangeCode, publicOrigin } from "~/lib/oidc.server";
 import { getSession, sessionStorage, type SessionUser } from "~/lib/session.server";
 
 // IdP 콜백: state 대조 → code 교환 → 도메인 게이트 → 세션에 유저 저장
@@ -16,7 +16,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     throw new Response("잘못된 인증 응답", { status: 400 });
   }
 
-  const redirectUri = `${url.origin}/auth/callback`;
+  const redirectUri = `${publicOrigin(request)}/auth/callback`;
   const tokens = await exchangeCode(code, redirectUri);
   const claims = decodeClaims(tokens.idToken);
 

@@ -1,0 +1,8 @@
+web
+tmp
+spikes
+dev
+docs
+.env
+.git
+docker-compose.yml

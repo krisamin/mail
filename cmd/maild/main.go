@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-imap/v2/imapserver"
@@ -18,6 +19,7 @@ import (
 	imapbackend "github.com/krisamin/mail/internal/imap"
 	"github.com/krisamin/mail/internal/queue"
 	smtpbackend "github.com/krisamin/mail/internal/smtp"
+	"github.com/krisamin/mail/internal/store/migration"
 	"github.com/krisamin/mail/internal/store/postgres"
 )
 
@@ -44,6 +46,39 @@ func main() {
 		log.Fatalf("store 연결 실패: %v", err)
 	}
 	defer st.Close()
+
+	// 내장 마이그레이션 — 빈 DB든 기존 DB든 여기서 스키마 수렴 (k8s에선 이거 하나로 끝)
+	if err := migration.Run(context.Background(), st.Pool()); err != nil {
+		log.Fatalf("마이그레이션 실패: %v", err)
+	}
+
+	// 부트스트랩 — 빈 DB엔 도메인이 없어 로그인 게이트가 전부 거부하는 닭-달걀 문제.
+	// MAIL_BOOTSTRAP_ADDRESS="maro@kirby.so,maro@krisam.in" 같은 주소 목록을
+	// 도메인+계정으로 보장한다 (이미 있으면 no-op — 멱등).
+	if bootstrap := os.Getenv("MAIL_BOOTSTRAP_ADDRESS"); bootstrap != "" {
+		ctx := context.Background()
+		for _, address := range strings.Split(bootstrap, ",") {
+			address = strings.ToLower(strings.TrimSpace(address))
+			at := strings.LastIndex(address, "@")
+			if at <= 0 || at == len(address)-1 {
+				log.Fatalf("MAIL_BOOTSTRAP_ADDRESS 형식 오류: %q", address)
+			}
+			localPart, domainName := address[:at], address[at+1:]
+			dom, err := st.FindDomain(ctx, domainName)
+			if err != nil {
+				if dom, err = st.CreateDomain(ctx, domainName); err != nil {
+					log.Fatalf("부트스트랩 도메인 생성 실패(%s): %v", domainName, err)
+				}
+				log.Printf("maild: 부트스트랩 도메인 생성 %s", domainName)
+			}
+			if _, err := st.FindAccountByAddress(ctx, address); err != nil {
+				if _, err := st.CreateAccount(ctx, dom.ID, localPart); err != nil {
+					log.Fatalf("부트스트랩 계정 생성 실패(%s): %v", address, err)
+				}
+				log.Printf("maild: 부트스트랩 계정 생성 %s", address)
+			}
+		}
+	}
 
 	errCh := make(chan error, 2)
 

@@ -1,12 +1,12 @@
 import { redirect } from "react-router";
 import type { Route } from "./+types/login";
-import { buildAuthorizeUrl } from "~/lib/oidc.server";
+import { buildAuthorizeUrl, publicOrigin } from "~/lib/oidc.server";
 import { getSession, sessionStorage } from "~/lib/session.server";
 
 // /login → IdP authorize로 리다이렉트 (state는 세션에 저장)
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
-  const redirectUri = `${url.origin}/auth/callback`;
+  const redirectUri = `${publicOrigin(request)}/auth/callback`;
   const state = crypto.randomUUID();
 
   const session = await getSession(request);
