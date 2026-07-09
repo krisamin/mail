@@ -47,7 +47,7 @@ export default function AdminIndex({ loaderData }: Route.ComponentProps) {
             {domainList.map((d) => (
               <li key={d.id} className="flex items-center justify-between px-4 py-2.5">
                 <Link
-                  to={`/admin/domain/${d.id}/account`}
+                  to={`/admin/domain/${d.id}/address`}
                   className="text-sm text-text-0 hover:text-accent"
                 >
                   {d.name}

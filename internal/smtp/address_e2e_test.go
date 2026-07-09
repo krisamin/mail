@@ -9,32 +9,35 @@ import (
 	gosmtp "github.com/emersion/go-smtp"
 )
 
-// 별칭 + 멀티도메인 내부 라우팅 e2e.
+// 추가 주소 + 멀티도메인 내부 라우팅 e2e.
 //
 // 마로 시나리오: 서버에 krisam.in과 kirby.so가 둘 다 있으면
 // 둘 사이 메일은 relay(Resend)를 안 거치고 내부 배달돼야 한다.
-// 여기에 별칭(hello@)과 catch-all(*@kirby.so)까지 검증.
+// 여기에 추가 주소(hello@)와 catch-all(*@kirby.so)까지 검증.
 
-// TestAliasDelivery: MX 수신 경로에서 별칭/와일드카드로 배달.
+// TestAliasDelivery: MX 수신 경로에서 추가 주소/와일드카드로 배달.
 func TestAliasDelivery(t *testing.T) {
 	env := setupServers(t)
 	ctx := context.Background()
 
-	// 시드: kirby.so 도메인 + 별칭 2개 (maro 유저에게)
-	var kirbyID int64
+	// 시드: kirby.so 도메인 + 추가 주소 2개 (maro 계정에)
+	var kirbyID, krisamID int64
 	if err := env.store.Pool().QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
 		t.Fatalf("kirby.so 시드: %v", err)
+	}
+	if err := env.store.Pool().QueryRow(ctx,
+		`SELECT id FROM domain WHERE name = 'krisam.in'`).Scan(&krisamID); err != nil {
+		t.Fatalf("krisam.in 조회: %v", err)
 	}
 	maro, err := env.store.FindAccountByAddress(ctx, testAddr)
 	if err != nil {
 		t.Fatalf("maro 조회: %v", err)
 	}
-	var krisamID int64 = maro.DomainID
-	if _, err := env.store.CreateAlias(ctx, krisamID, "hello", maro.ID); err != nil {
-		t.Fatalf("정확 별칭: %v", err)
+	if _, err := env.store.CreateAddress(ctx, krisamID, "hello", maro.ID); err != nil {
+		t.Fatalf("추가 주소: %v", err)
 	}
-	if _, err := env.store.CreateAlias(ctx, kirbyID, "*", maro.ID); err != nil {
+	if _, err := env.store.CreateAddress(ctx, kirbyID, "*", maro.ID); err != nil {
 		t.Fatalf("catch-all: %v", err)
 	}
 
@@ -94,7 +97,7 @@ func TestInternalRoutingTwoDomains(t *testing.T) {
 		t.Fatalf("kirby.so 시드: %v", err)
 	}
 	maro, _ := env.store.FindAccountByAddress(ctx, testAddr)
-	if _, err := env.store.CreateAlias(ctx, kirbyID, "*", maro.ID); err != nil {
+	if _, err := env.store.CreateAddress(ctx, kirbyID, "*", maro.ID); err != nil {
 		t.Fatalf("catch-all: %v", err)
 	}
 
@@ -143,15 +146,20 @@ func TestInternalRoutingTwoDomains(t *testing.T) {
 	t.Log("✔ krisam.in → kirby.so 제출이 relay 없이 내부 배달 (큐 0건)")
 }
 
-// TestSubmissionSendAsAlias: 별칭 주소를 envelope from으로 발신 가능,
-// 남의 별칭은 553.
+// TestSubmissionSendAsAlias: 소유한 추가 주소를 envelope from으로 발신 가능,
+// 남의 주소는 553.
 func TestSubmissionSendAsAlias(t *testing.T) {
 	env, subAddr := setupSubmission(t)
 	ctx := context.Background()
 
+	var krisamID int64
+	if err := env.store.Pool().QueryRow(ctx,
+		`SELECT id FROM domain WHERE name = 'krisam.in'`).Scan(&krisamID); err != nil {
+		t.Fatalf("krisam.in 조회: %v", err)
+	}
 	maro, _ := env.store.FindAccountByAddress(ctx, testAddr)
-	if _, err := env.store.CreateAlias(ctx, maro.DomainID, "hello", maro.ID); err != nil {
-		t.Fatalf("별칭: %v", err)
+	if _, err := env.store.CreateAddress(ctx, krisamID, "hello", maro.ID); err != nil {
+		t.Fatalf("추가 주소: %v", err)
 	}
 
 	// maro가 hello@krisam.in으로 발신 → 허용

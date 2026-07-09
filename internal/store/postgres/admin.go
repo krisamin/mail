@@ -84,24 +84,24 @@ func (s *Store) SetDomainDKIM(ctx context.Context, id int64, selector, privateKe
 	return nil
 }
 
-// ── 유저 ────────────────────────────────────────────────────
+// ── 계정 ────────────────────────────────────────────────────
 
-// ListAccount는 도메인의 유저 목록 (비활성 포함).
-func (s *Store) ListAccount(ctx context.Context, domainID int64) ([]*store.Account, error) {
+// ListAccount는 전체 계정 목록 (비활성 포함 — 관리 화면용).
+func (s *Store) ListAccount(ctx context.Context) ([]*store.Account, error) {
 	const q = `
-		SELECT id, domain_id, local_part, COALESCE(oidc_subject, ''),
+		SELECT id, oidc_subject, COALESCE(oidc_email, ''),
 		       quota_bytes, active, created_at
-		FROM account WHERE domain_id = $1 ORDER BY local_part`
-	rows, err := s.pool.Query(ctx, q, domainID)
+		FROM account ORDER BY oidc_email`
+	rows, err := s.pool.Query(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("유저 목록: %w", err)
+		return nil, fmt.Errorf("계정 목록: %w", err)
 	}
 	defer rows.Close()
 
 	var out []*store.Account
 	for rows.Next() {
 		var u store.Account
-		if err := rows.Scan(&u.ID, &u.DomainID, &u.LocalPart, &u.OIDCSubject,
+		if err := rows.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail,
 			&u.QuotaBytes, &u.Active, &u.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -110,11 +110,60 @@ func (s *Store) ListAccount(ctx context.Context, domainID int64) ([]*store.Accou
 	return out, rows.Err()
 }
 
-// CreateAccount는 새 유저를 만든다. local part 소문자 정규화 + INBOX 자동 생성.
-func (s *Store) CreateAccount(ctx context.Context, domainID int64, localPart string) (*store.Account, error) {
-	localPart = strings.ToLower(strings.TrimSpace(localPart))
-	if localPart == "" || strings.ContainsAny(localPart, "@ \t") {
-		return nil, fmt.Errorf("잘못된 local part: %q", localPart)
+// ProvisionAccount는 OIDC sub 기준 JIT 프로비저닝 (멱등).
+//   - sub로 기존 계정 찾으면: oidc_email 갱신 후 반환 (주소는 안 건드림 —
+//     IdP에서 email이 바뀌어도 기존 주소는 admin이 관리)
+//   - 없으면: email 도메인이 등록돼 있어야 계정 생성 + email을 primary
+//     address로 등록 + INBOX 생성. 도메인 미등록이면 ErrNotFound.
+//   - email 주소가 이미 다른 계정 소유면 duplicate 에러 (충돌 —
+//     admin이 정리해야 하는 상태).
+func (s *Store) ProvisionAccount(ctx context.Context, subject, email string) (*store.Account, error) {
+	subject = strings.TrimSpace(subject)
+	email = strings.ToLower(strings.TrimSpace(email))
+	if subject == "" {
+		return nil, fmt.Errorf("잘못된 신원: sub 비어있음")
+	}
+	local, domainName, err := splitAddress(email)
+	if err != nil {
+		return nil, err
+	}
+	if local == "" || local == "*" {
+		return nil, fmt.Errorf("잘못된 주소: %q", email)
+	}
+
+	// 기존 계정 — email만 갱신 (비활성 계정은 로그인 차단이 목적이라 제외)
+	if u, err := s.FindAccountBySubject(ctx, subject); err == nil {
+		if u.OIDCEmail != email {
+			if _, err := s.pool.Exec(ctx,
+				`UPDATE account SET oidc_email = $2 WHERE id = $1`, u.ID, email); err != nil {
+				return nil, fmt.Errorf("계정 email 갱신: %w", err)
+			}
+			u.OIDCEmail = email
+		}
+		return u, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+
+	// 입양: 같은 email을 primary로 가진 기존 계정(시드/마이그레이션의
+	// placeholder sub, 또는 IdP에서 유저 재생성으로 sub가 바뀐 경우)이
+	// 있으면 sub를 갱신해 이어받는다. 주소가 존재하되 소유 계정의
+	// oidc_email이 다르면(남의 추가 주소) 입양 금지 — 아래 INSERT에서
+	// duplicate로 실패한다.
+	if owner, err := s.FindAccountByAddress(ctx, email); err == nil && owner.OIDCEmail == email {
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE account SET oidc_subject = $2 WHERE id = $1`, owner.ID, subject); err != nil {
+			return nil, fmt.Errorf("계정 신원 갱신: %w", err)
+		}
+		owner.OIDCSubject = subject
+		return owner, nil
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+
+	dom, err := s.FindDomain(ctx, domainName)
+	if err != nil {
+		return nil, err // 도메인 미등록 → ErrNotFound (로그인 게이트가 거부)
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -125,15 +174,22 @@ func (s *Store) CreateAccount(ctx context.Context, domainID int64, localPart str
 
 	var u store.Account
 	err = tx.QueryRow(ctx,
-		`INSERT INTO account (domain_id, local_part) VALUES ($1, $2)
-		 RETURNING id, domain_id, local_part, COALESCE(oidc_subject, ''), quota_bytes, active, created_at`,
-		domainID, localPart).Scan(
-		&u.ID, &u.DomainID, &u.LocalPart, &u.OIDCSubject, &u.QuotaBytes, &u.Active, &u.CreatedAt)
+		`INSERT INTO account (oidc_subject, oidc_email) VALUES ($1, $2)
+		 RETURNING id, oidc_subject, COALESCE(oidc_email, ''), quota_bytes, active, created_at`,
+		subject, email).Scan(
+		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.QuotaBytes, &u.Active, &u.CreatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("유저 생성: %w", err)
+		return nil, fmt.Errorf("계정 생성: %w", err)
 	}
 
-	// INBOX 기본 생성 (수신 경로의 자동 생성과 별개로, 처음부터 있는 게 자연스러움)
+	// primary 주소 등록 — 이미 다른 계정 소유면 여기서 duplicate로 실패
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO address (domain_id, local_part, account_id) VALUES ($1, $2, $3)`,
+		dom.ID, local, u.ID); err != nil {
+		return nil, fmt.Errorf("주소 등록: %w", err)
+	}
+
+	// INBOX 기본 생성
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO mailbox (account_id, name, uid_validity, uid_next, subscribed)
 		 VALUES ($1, 'INBOX', $2, 1, true)`, u.ID, newUIDValidity()); err != nil {
@@ -281,20 +337,20 @@ func (s *Store) OutboundStats(ctx context.Context) (map[string]int64, error) {
 	return out, rows.Err()
 }
 
-// FindAccountByID는 유저를 ID로 찾는다 (admin API용).
+// FindAccountByID는 계정을 ID로 찾는다 (admin API용).
 func (s *Store) FindAccountByID(ctx context.Context, id int64) (*store.Account, error) {
 	const q = `
-		SELECT id, domain_id, local_part, COALESCE(oidc_subject, ''),
+		SELECT id, oidc_subject, COALESCE(oidc_email, ''),
 		       quota_bytes, active, created_at
 		FROM account WHERE id = $1`
 	var u store.Account
 	err := s.pool.QueryRow(ctx, q, id).Scan(
-		&u.ID, &u.DomainID, &u.LocalPart, &u.OIDCSubject, &u.QuotaBytes, &u.Active, &u.CreatedAt)
+		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.QuotaBytes, &u.Active, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("유저 조회: %w", err)
+		return nil, fmt.Errorf("계정 조회: %w", err)
 	}
 	return &u, nil
 }

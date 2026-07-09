@@ -27,6 +27,24 @@ func splitAddress(address string) (local, domain string, err error) {
 	return address[:at], address[at+1:], nil
 }
 
+// accountSelect는 account 조회 공통 SELECT (0006 — 신원 모델).
+const accountSelect = `
+	SELECT a.id, a.oidc_subject, COALESCE(a.oidc_email, ''),
+	       a.quota_bytes, a.active, a.created_at
+	FROM account a`
+
+func scanAccount(row pgx.Row) (*store.Account, error) {
+	var u store.Account
+	err := row.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.QuotaBytes, &u.Active, &u.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("계정 조회: %w", err)
+	}
+	return &u, nil
+}
+
 // FindDomain은 활성 도메인을 이름으로 찾는다.
 func (s *Store) FindDomain(ctx context.Context, name string) (*store.Domain, error) {
 	const q = `
@@ -45,34 +63,28 @@ func (s *Store) FindDomain(ctx context.Context, name string) (*store.Domain, err
 	return &d, nil
 }
 
-// FindAccountByAddress는 이메일 주소로 활성 유저를 찾는다.
+// FindAccountByAddress는 주소(정확 매칭 — 와일드카드 제외)를 소유한
+// 활성 계정을 찾는다. IMAP/SMTP 로그인, 셀프서비스 매핑용.
 func (s *Store) FindAccountByAddress(ctx context.Context, address string) (*store.Account, error) {
-	local, domain, err := splitAddress(address)
+	local, domain, err := splitAddress(strings.ToLower(address))
 	if err != nil {
 		return nil, err
 	}
-	const q = `
-		SELECT u.id, u.domain_id, u.local_part, COALESCE(u.oidc_subject, ''),
-		       u.quota_bytes, u.active, u.created_at
-		FROM account u
-		JOIN domain d ON d.id = u.domain_id
-		WHERE u.local_part = $1 AND d.name = $2 AND u.active AND d.active`
-	var u store.Account
-	err = s.pool.QueryRow(ctx, q, local, domain).Scan(
-		&u.ID, &u.DomainID, &u.LocalPart, &u.OIDCSubject,
-		&u.QuotaBytes, &u.Active, &u.CreatedAt,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("유저 조회: %w", err)
-	}
-	return &u, nil
+	const q = accountSelect + `
+		JOIN address ad ON ad.account_id = a.id
+		JOIN domain d ON d.id = ad.domain_id
+		WHERE ad.local_part = $1 AND d.name = $2 AND a.active AND d.active`
+	return scanAccount(s.pool.QueryRow(ctx, q, local, domain))
+}
+
+// FindAccountBySubject는 OIDC sub로 활성 계정을 찾는다 (웹 로그인 신원).
+func (s *Store) FindAccountBySubject(ctx context.Context, subject string) (*store.Account, error) {
+	const q = accountSelect + ` WHERE a.oidc_subject = $1 AND a.active`
+	return scanAccount(s.pool.QueryRow(ctx, q, subject))
 }
 
 // AuthenticateAppPassword는 주소+앱비밀번호로 인증한다.
-// 해당 유저의 revoke 안 된 앱 비밀번호들과 argon2id 비교.
+// 해당 계정의 revoke 안 된 앱 비밀번호들과 argon2id 비교.
 func (s *Store) AuthenticateAppPassword(ctx context.Context, address, password string) (*store.Account, error) {
 	u, err := s.FindAccountByAddress(ctx, address)
 	if err != nil {

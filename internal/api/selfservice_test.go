@@ -56,15 +56,13 @@ func callAs(t *testing.T, srv *httptest.Server, email, groups, method, path stri
 func TestSelfService(t *testing.T) {
 	srv := testServer(t)
 
-	// 시드: admin 권한으로 도메인 + 유저 2명 (maro, guest)
+	// 시드: admin 권한으로 도메인 + JIT 프로비저닝으로 유저 2명 (maro, guest)
 	code, dom, _ := call(t, srv, "POST", "/api/admin/domain", map[string]string{"name": "krisam.in"})
 	if code != 201 {
 		t.Fatalf("도메인: %d %v", code, dom)
 	}
-	domID := int64(dom["id"].(float64))
 	for _, name := range []string{"maro", "guest"} {
-		if code, u, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/account", domID),
-			map[string]string{"localPart": name}); code != 201 {
+		if code, u, _ := callAs(t, srv, name+"@krisam.in", "", "POST", "/api/me/provision", nil); code != 200 {
 			t.Fatalf("유저 %s: %d %v", name, code, u)
 		}
 	}
@@ -78,17 +76,17 @@ func TestSelfService(t *testing.T) {
 
 	// 2) 본인 계정 조회
 	code, acc, _ := callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/account", nil)
-	if code != 200 || acc["localPart"] != "guest" {
+	if code != 200 || acc["email"] != "guest@krisam.in" {
 		t.Fatalf("본인 계정: %d %v", code, acc)
 	}
-	t.Log("✔ /api/me/account — email 클레임 → 메일 계정 매핑")
+	t.Log("✔ /api/me/account — sub 클레임 → 계정 매핑")
 
-	// 메일 계정 없는 유저 → 404
+	// 프로비저닝 안 된 유저 → 404
 	code, _, _ = callAs(t, srv, "nobody@krisam.in", "", "GET", "/api/me/account", nil)
 	if code != 404 {
-		t.Fatalf("계정 없는 유저는 404여야: %d", code)
+		t.Fatalf("미프로비저닝 유저는 404여야: %d", code)
 	}
-	t.Log("✔ 미개설 계정 404")
+	t.Log("✔ 미프로비저닝 계정 404")
 
 	// 3) 본인 앱비번 발급 → 목록 → revoke
 	code, pw, _ := callAs(t, srv, "guest@krisam.in", "", "POST", "/api/me/app-password",
@@ -124,9 +122,9 @@ func TestSelfService(t *testing.T) {
 	}
 	t.Log("✔ 본인 revoke 204 + 반영")
 
-	// 5) 대소문자 이메일 정규화 (Guest@Krisam.IN → guest)
+	// 5) 대소문자 이메일 정규화 (Guest@Krisam.IN → guest 계정)
 	code, acc, _ = callAs(t, srv, "Guest@Krisam.IN", "", "GET", "/api/me/account", nil)
-	if code != 200 || acc["localPart"] != "guest" {
+	if code != 200 || acc["email"] != "guest@krisam.in" {
 		t.Fatalf("대소문자 정규화: %d %v", code, acc)
 	}
 	t.Log("✔ email 대소문자 정규화")

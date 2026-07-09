@@ -14,7 +14,7 @@ func TestRelay(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias, relay RESTART IDENTITY CASCADE`)
+	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	// 시드: 도메인 2개
 	var krisamID, kirbyID int64

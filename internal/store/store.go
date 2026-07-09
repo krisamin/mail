@@ -53,12 +53,12 @@ type Relay struct {
 	CreatedAt time.Time
 }
 
-// User는 계정 (local_part@domain). 사람 로그인은 OIDC, 메일앱은 앱 비밀번호.
+// Account는 유저 = OIDC 신원 (0006). 주소는 address 테이블에 별도.
+// 사람 로그인은 OIDC(sub 기준 JIT 프로비저닝), 메일앱은 앱 비밀번호.
 type Account struct {
 	ID          int64
-	DomainID    int64
-	LocalPart   string // 'maro' (in maro@krisam.in)
-	OIDCSubject string // OIDC sub 클레임 (비어있을 수 있음)
+	OIDCSubject string // OIDC sub 클레임 (유니크 — 진짜 신원 키)
+	OIDCEmail   string // IdP가 내려준 email (참고/표시용, 로그인 시 갱신)
 	QuotaBytes  *int64 // nil = 무제한
 	Active      bool
 	CreatedAt   time.Time
@@ -101,19 +101,18 @@ type AppPassword struct {
 	RevokedAt *time.Time
 }
 
-// Alias는 유저의 추가 수신 주소. local_part '*'는 도메인 catch-all.
-// 예: hello@krisam.in → maro, *@kirby.so → maro.
-type Alias struct {
+// Address는 계정 소유의 메일 주소. local_part '*'는 도메인 catch-all.
+// 유저의 모든 수신/발신 주소가 여기 산다 (0006 — 기존 계정주소+별칭 통합).
+type Address struct {
 	ID        int64
 	DomainID  int64
 	LocalPart string // '*' = 와일드카드 (그 도메인의 모든 미지정 주소)
-	AccountID    int64
+	AccountID int64
 	CreatedAt time.Time
 
 	// 조회 편의 필드 (JOIN으로 채움)
-	DomainName     string // 별칭의 도메인 이름
-	AccountLocalPart  string // 대상 유저의 local_part
-	AccountDomainName string // 대상 유저의 도메인 (크로스 도메인 별칭 표시용)
+	DomainName   string // 주소의 도메인 이름
+	AccountEmail string // 소유 계정의 oidc_email (표시용)
 }
 
 // OutboundStatus는 발송 큐 항목의 상태.
@@ -153,13 +152,17 @@ type MailboxStatus struct {
 type Store interface {
 	// 인증
 	AuthenticateAppPassword(ctx context.Context, address, password string) (*Account, error)
+	// FindAccountByAddress는 주소를 소유한 활성 계정을 찾는다 (정확 매칭만 —
+	// 와일드카드 제외. IMAP/SMTP 로그인과 셀프서비스 매핑용).
 	FindAccountByAddress(ctx context.Context, address string) (*Account, error)
-	// ResolveAddress는 배달 대상 유저를 찾는다.
-	// 우선순위: 실제 유저 > 정확 별칭 > 와일드카드(*@domain).
+	// FindAccountBySubject는 OIDC sub로 활성 계정을 찾는다 (웹 로그인 신원).
+	FindAccountBySubject(ctx context.Context, subject string) (*Account, error)
+	// ResolveAddress는 배달 대상 계정을 찾는다.
+	// 우선순위: 정확 주소 > 와일드카드(*@domain).
 	// SMTP 수신/submission의 로컬 배달이 이걸 쓴다.
 	ResolveAddress(ctx context.Context, address string) (*Account, error)
-	// CanSendAs는 유저가 해당 주소로 발신 가능한지 (본인 주소 또는
-	// 본인에게 걸린 별칭 — 와일드카드 별칭 포함).
+	// CanSendAs는 계정이 해당 주소로 발신 가능한지 (소유 주소 —
+	// 와일드카드 주소 포함).
 	CanSendAs(ctx context.Context, accountID int64, address string) (bool, error)
 
 	// 도메인
@@ -217,9 +220,13 @@ type AdminStore interface {
 	// SetDomainDKIM은 DKIM selector/개인키를 설정한다 (빈 문자열 = 해제).
 	SetDomainDKIM(ctx context.Context, id int64, selector, privateKeyPEM string) error
 
-	// 유저
-	ListAccount(ctx context.Context, domainID int64) ([]*Account, error)
-	CreateAccount(ctx context.Context, domainID int64, localPart string) (*Account, error)
+	// 계정 (유저 = OIDC 신원. 생성은 JIT 프로비저닝 경로만)
+	ListAccount(ctx context.Context) ([]*Account, error)
+	// ProvisionAccount는 OIDC sub 기준 JIT 프로비저닝 — 계정이 없으면
+	// 만들고(email 주소를 primary address로 자동 등록 + INBOX), 있으면
+	// oidc_email만 갱신해 돌려준다 (멱등).
+	// email의 도메인이 등록돼 있지 않으면 ErrNotFound.
+	ProvisionAccount(ctx context.Context, subject, email string) (*Account, error)
 	SetAccountActive(ctx context.Context, id int64, active bool) error
 
 	// 앱 비밀번호 (DD-02: OAuth 로그인 후 발급)
@@ -229,12 +236,14 @@ type AdminStore interface {
 	CreateAppPassword(ctx context.Context, accountID int64, label, hash string) (*AppPassword, error)
 	RevokeAppPassword(ctx context.Context, id int64) error
 
-	// 별칭 (추가 수신 주소 + 와일드카드)
-	ListAlias(ctx context.Context, domainID int64) ([]*Alias, error)
-	ListAccountAlias(ctx context.Context, accountID int64) ([]*Alias, error)
-	// CreateAlias는 localPart '*'를 catch-all로 취급한다.
-	CreateAlias(ctx context.Context, domainID int64, localPart string, accountID int64) (*Alias, error)
-	DeleteAlias(ctx context.Context, id int64) error
+	// 주소 (계정 소유 메일 주소 + 와일드카드 — admin만 추가/삭제)
+	ListAddress(ctx context.Context, domainID int64) ([]*Address, error)
+	ListAccountAddress(ctx context.Context, accountID int64) ([]*Address, error)
+	// CreateAddress는 localPart '*'를 catch-all로 취급한다.
+	CreateAddress(ctx context.Context, domainID int64, localPart string, accountID int64) (*Address, error)
+	// DeleteAddress는 주소를 지운다. 계정의 마지막 일반 주소는 지울 수 없다
+	// (수신/로그인 매핑이 사라지는 것 방지).
+	DeleteAddress(ctx context.Context, id int64) error
 
 	// 발송 큐 관리
 	ListOutbound(ctx context.Context, status string, limit int) ([]*OutboundMessage, error)

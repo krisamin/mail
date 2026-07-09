@@ -1,53 +1,47 @@
-import { Form, Link, useNavigation } from "react-router";
+import { Form, useNavigation } from "react-router";
 import type { Route } from "./+types/account";
 import {
   ApiError,
   apiFetch,
-  type Alias,
+  type Address,
   type AppPassword,
-  type Domain,
   type Account,
 } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
 
-export const loader = async ({ request, params }: Route.LoaderArgs) => {
+// 계정 관리 — 전체 계정 목록 + 계정별 주소/앱 비밀번호 (admin 전용).
+// 계정은 JIT 프로비저닝(첫 OIDC 로그인)으로 생긴다 — 여기선 생성 불가.
+// 주소 연결은 도메인 페이지(/admin/domain/:id/address)에서.
+
+export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
-  const domainId = params.domainId;
 
-  const [domainList, accountList, aliasList] = await Promise.all([
-    apiFetch<Domain[]>(user.idToken, "/api/admin/domain"),
-    apiFetch<Account[]>(user.idToken, `/api/admin/domain/${domainId}/account`),
-    apiFetch<Alias[]>(user.idToken, `/api/admin/domain/${domainId}/alias`),
-  ]);
-  const domain = (domainList ?? []).find((d) => String(d.id) === domainId);
-  if (!domain) throw new Response("도메인을 찾을 수 없어요", { status: 404 });
+  const accountList = (await apiFetch<Account[]>(user.idToken, "/api/admin/account")) ?? [];
 
-  // 유저별 앱비번 목록 (관리 화면이라 N+1 허용 — 유저 수 적음)
+  // 계정별 주소/앱비번 (관리 화면이라 N+1 허용 — 계정 수 적음)
+  const addressList: Record<number, Address[]> = {};
   const appPasswordList: Record<number, AppPassword[]> = {};
   await Promise.all(
-    (accountList ?? []).map(async (u) => {
-      appPasswordList[u.id] =
-        (await apiFetch<AppPassword[]>(user.idToken, `/api/admin/account/${u.id}/app-password`)) ?? [];
+    accountList.map(async (u) => {
+      [addressList[u.id], appPasswordList[u.id]] = await Promise.all([
+        apiFetch<Address[]>(user.idToken, `/api/admin/account/${u.id}/address`).then((r) => r ?? []),
+        apiFetch<AppPassword[]>(user.idToken, `/api/admin/account/${u.id}/app-password`).then(
+          (r) => r ?? [],
+        ),
+      ]);
     }),
   );
-  return { domain, accountList: accountList ?? [], aliasList: aliasList ?? [], appPasswordList };
+  return { accountList, addressList, appPasswordList };
 };
 
-export const action = async ({ request, params }: Route.ActionArgs) => {
+export const action = async ({ request }: Route.ActionArgs) => {
   const user = (await getUser(request))!;
   const form = await request.formData();
   const intent = form.get("intent");
 
   try {
     switch (intent) {
-      case "create-user": {
-        await apiFetch(user.idToken, `/api/admin/domain/${params.domainId}/account`, {
-          method: "POST",
-          body: { localPart: String(form.get("localPart") ?? "") },
-        });
-        return { ok: true as const };
-      }
-      case "toggle-user": {
+      case "toggle-account": {
         await apiFetch(user.idToken, `/api/admin/account/${form.get("id")}`, {
           method: "PATCH",
           body: { active: form.get("active") === "true" },
@@ -68,18 +62,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         });
         return { ok: true as const };
       }
-      case "create-alias": {
-        await apiFetch(user.idToken, `/api/admin/domain/${params.domainId}/alias`, {
-          method: "POST",
-          body: {
-            localPart: String(form.get("localPart") ?? ""),
-            accountId: Number(form.get("accountId")),
-          },
-        });
-        return { ok: true as const };
-      }
-      case "delete-alias": {
-        await apiFetch(user.idToken, `/api/admin/alias/${form.get("id")}`, {
+      case "delete-address": {
+        await apiFetch(user.idToken, `/api/admin/address/${form.get("id")}`, {
           method: "DELETE",
         });
         return { ok: true as const };
@@ -94,18 +78,18 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 };
 
 export default function AccountList({ loaderData, actionData }: Route.ComponentProps) {
-  const { domain, accountList, aliasList, appPasswordList } = loaderData;
+  const { accountList, addressList, appPasswordList } = loaderData;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-2">
-        <Link to="/admin/domain" className="text-sm text-text-2 hover:text-text-1">
-          도메인
-        </Link>
-        <span className="text-text-2">/</span>
-        <h1 className="text-xl font-bold">{domain.name}</h1>
+      <div>
+        <h1 className="text-xl font-bold">계정</h1>
+        <p className="mt-0.5 text-xs text-text-2">
+          계정은 유저가 처음 로그인할 때 자동으로 생겨요 (OIDC 신원 기준). 주소 연결은 각 도메인
+          페이지에서.
+        </p>
       </div>
 
       {actionData && !actionData.ok && (
@@ -123,41 +107,21 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
         </div>
       )}
 
-      <Form method="post" className="flex gap-2">
-        <input type="hidden" name="intent" value="create-user" />
-        <div className="flex flex-1 items-center gap-1 rounded-md border border-line bg-bg-1 px-3">
-          <input
-            name="localPart"
-            required
-            placeholder="maro"
-            className="flex-1 bg-transparent py-2 text-sm outline-none"
-          />
-          <span className="text-sm text-text-2">@{domain.name}</span>
-        </div>
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-bg-0 hover:bg-accent-hover disabled:opacity-50"
-        >
-          추가
-        </button>
-      </Form>
-
       <div className="flex flex-col gap-3">
         {accountList.length === 0 ? (
           <p className="rounded-md border border-line bg-bg-1 px-4 py-6 text-center text-sm text-text-2">
-            유저 없음
+            계정 없음 — 유저가 로그인하면 여기 나타나요.
           </p>
         ) : (
           accountList.map((u) => (
             <div key={u.id} className="rounded-md border border-line bg-bg-1">
               <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-                <p className="text-sm font-medium">
-                  {u.localPart}
-                  <span className="text-text-2">@{domain.name}</span>
-                </p>
+                <div>
+                  <p className="text-sm font-medium">{u.email}</p>
+                  <p className="font-mono text-[10px] text-text-2">sub: {u.subject}</p>
+                </div>
                 <Form method="post">
-                  <input type="hidden" name="intent" value="toggle-user" />
+                  <input type="hidden" name="intent" value="toggle-account" />
                   <input type="hidden" name="id" value={u.id} />
                   <input type="hidden" name="active" value={String(!u.active)} />
                   <button
@@ -173,6 +137,37 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
               </div>
 
               <div className="flex flex-col gap-2 px-4 py-3">
+                <p className="text-xs text-text-2">주소</p>
+                {(addressList[u.id] ?? []).length === 0 ? (
+                  <p className="text-xs text-muted">주소 없음</p>
+                ) : (
+                  <ul className="flex flex-wrap gap-1.5">
+                    {(addressList[u.id] ?? []).map((a) => (
+                      <li
+                        key={a.id}
+                        className="flex items-center gap-1.5 rounded bg-bg-3 px-2 py-0.5 font-mono text-xs text-text-1"
+                      >
+                        {a.localPart === "*" ? <span className="text-warn">*</span> : a.localPart}@
+                        {a.domainName}
+                        <Form method="post" className="inline">
+                          <input type="hidden" name="intent" value="delete-address" />
+                          <input type="hidden" name="id" value={a.id} />
+                          <button
+                            type="submit"
+                            disabled={busy}
+                            className="text-[10px] text-bad hover:underline"
+                            title="주소 삭제"
+                          >
+                            ×
+                          </button>
+                        </Form>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2 border-t border-line px-4 py-3">
                 <div className="flex items-center justify-between">
                   <p className="text-xs text-text-2">앱 비밀번호</p>
                   <Form method="post" className="flex items-center gap-1.5">
@@ -218,87 +213,6 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
           ))
         )}
       </div>
-
-      {/* ── 별칭 (추가 수신 주소 + catch-all) ─────────────────── */}
-      <section className="flex flex-col gap-3">
-        <div>
-          <h2 className="text-sm font-medium text-text-1">별칭</h2>
-          <p className="mt-0.5 text-xs text-text-2">
-            추가 수신 주소를 유저에게 연결해요. local part에 <code className="rounded bg-bg-3 px-1">*</code>를
-            넣으면 catch-all (이 도메인의 모든 미지정 주소).
-          </p>
-        </div>
-
-        <Form method="post" className="flex gap-2">
-          <input type="hidden" name="intent" value="create-alias" />
-          <div className="flex flex-1 items-center gap-1 rounded-md border border-line bg-bg-1 px-3">
-            <input
-              name="localPart"
-              required
-              placeholder="hello 또는 *"
-              className="flex-1 bg-transparent py-2 text-sm outline-none"
-            />
-            <span className="text-sm text-text-2">@{domain.name}</span>
-            <span className="text-sm text-text-2">→</span>
-            <select
-              name="accountId"
-              required
-              className="rounded border border-line bg-bg-0 px-2 py-1 text-sm outline-none"
-            >
-              {accountList.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.localPart}@{domain.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <button
-            type="submit"
-            disabled={busy || accountList.length === 0}
-            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-bg-0 hover:bg-accent-hover disabled:opacity-50"
-          >
-            연결
-          </button>
-        </Form>
-
-        <div className="rounded-md border border-line bg-bg-1">
-          {aliasList.length === 0 ? (
-            <p className="px-4 py-4 text-center text-xs text-text-2">별칭 없음</p>
-          ) : (
-            <ul className="divide-y divide-line">
-              {aliasList.map((a) => (
-                <li key={a.id} className="flex items-center justify-between px-4 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm text-text-0">
-                      {a.localPart === "*" ? (
-                        <span className="text-warn">*</span>
-                      ) : (
-                        a.localPart
-                      )}
-                      <span className="text-text-2">@{a.domainName}</span>
-                    </span>
-                    {a.localPart === "*" && (
-                      <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] text-warn">
-                        catch-all
-                      </span>
-                    )}
-                    <span className="text-xs text-text-2">
-                      → {a.accountLocalPart}@{a.accountDomainName}
-                    </span>
-                  </div>
-                  <Form method="post">
-                    <input type="hidden" name="intent" value="delete-alias" />
-                    <input type="hidden" name="id" value={a.id} />
-                    <button type="submit" disabled={busy} className="text-[10px] text-bad hover:underline">
-                      삭제
-                    </button>
-                  </Form>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
     </div>
   );
 }

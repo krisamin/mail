@@ -43,9 +43,9 @@ func setupServer(t *testing.T) (addr string) {
 	t.Cleanup(st.Close)
 
 	// 테스트 격리
-	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias, relay RESTART IDENTITY CASCADE`)
+	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
-	// 시드: 도메인 + 유저 + 앱비밀번호 + INBOX
+	// 시드: 도메인 + 계정 + 주소 + 앱비밀번호 + INBOX (0006 모델)
 	local := testAddr[:strings.LastIndex(testAddr, "@")]
 	domain := testAddr[strings.LastIndex(testAddr, "@")+1:]
 	var domainID, accountID int64
@@ -54,9 +54,14 @@ func setupServer(t *testing.T) (addr string) {
 		t.Fatalf("도메인 시드: %v", err)
 	}
 	if err := st.Pool().QueryRow(ctx,
-		`INSERT INTO account (domain_id, local_part) VALUES ($1, $2) RETURNING id`,
-		domainID, local).Scan(&accountID); err != nil {
-		t.Fatalf("유저 시드: %v", err)
+		`INSERT INTO account (oidc_subject, oidc_email) VALUES ('test:' || $1::text, $1) RETURNING id`,
+		testAddr).Scan(&accountID); err != nil {
+		t.Fatalf("계정 시드: %v", err)
+	}
+	if _, err := st.Pool().Exec(ctx,
+		`INSERT INTO address (domain_id, local_part, account_id) VALUES ($1, $2, $3)`,
+		domainID, local, accountID); err != nil {
+		t.Fatalf("주소 시드: %v", err)
 	}
 	hash, err := postgres.HashPassword(testPass)
 	if err != nil {

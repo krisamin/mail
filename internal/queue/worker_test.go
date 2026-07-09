@@ -34,7 +34,7 @@ func testStore(t *testing.T) *postgres.Store {
 	}
 	t.Cleanup(st.Close)
 	_, _ = st.Pool().Exec(context.Background(),
-		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias, relay RESTART IDENTITY CASCADE`)
+		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 	return st
 }
 
@@ -344,10 +344,15 @@ func seedAccount(t *testing.T, st *postgres.Store, address, password string) {
 	}
 	var accountID int64
 	if err := st.Pool().QueryRow(ctx,
-		`INSERT INTO account (domain_id, local_part) VALUES ($1, $2)
-		 ON CONFLICT (domain_id, local_part) DO UPDATE SET local_part = EXCLUDED.local_part
-		 RETURNING id`, domainID, local).Scan(&accountID); err != nil {
-		t.Fatalf("유저 시드: %v", err)
+		`INSERT INTO account (oidc_subject, oidc_email) VALUES ('test:' || $1::text, $1)
+		 ON CONFLICT (oidc_subject) DO UPDATE SET oidc_email = EXCLUDED.oidc_email
+		 RETURNING id`, address).Scan(&accountID); err != nil {
+		t.Fatalf("계정 시드: %v", err)
+	}
+	if _, err := st.Pool().Exec(ctx,
+		`INSERT INTO address (domain_id, local_part, account_id) VALUES ($1, $2, $3)
+		 ON CONFLICT (domain_id, local_part) DO NOTHING`, domainID, local, accountID); err != nil {
+		t.Fatalf("주소 시드: %v", err)
 	}
 	hash, err := postgres.HashPassword(password)
 	if err != nil {

@@ -27,7 +27,7 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
-// seedUser는 도메인+유저+앱비밀번호+INBOX를 만든다.
+// seedAccount는 도메인+계정+주소+앱비밀번호+INBOX를 만든다 (0006 모델).
 func seedAccount(t *testing.T, s *Store, address, password string) int64 {
 	t.Helper()
 	ctx := context.Background()
@@ -45,11 +45,17 @@ func seedAccount(t *testing.T, s *Store, address, password string) int64 {
 
 	var accountID int64
 	err = s.pool.QueryRow(ctx,
-		`INSERT INTO account (domain_id, local_part) VALUES ($1, $2)
-		 ON CONFLICT (domain_id, local_part) DO UPDATE SET local_part = EXCLUDED.local_part
-		 RETURNING id`, domainID, local).Scan(&accountID)
+		`INSERT INTO account (oidc_subject, oidc_email) VALUES ('test:' || $1::text, $1)
+		 ON CONFLICT (oidc_subject) DO UPDATE SET oidc_email = EXCLUDED.oidc_email
+		 RETURNING id`, address).Scan(&accountID)
 	if err != nil {
-		t.Fatalf("유저 시드: %v", err)
+		t.Fatalf("계정 시드: %v", err)
+	}
+
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO address (domain_id, local_part, account_id) VALUES ($1, $2, $3)
+		 ON CONFLICT (domain_id, local_part) DO NOTHING`, domainID, local, accountID); err != nil {
+		t.Fatalf("주소 시드: %v", err)
 	}
 
 	hash, err := HashPassword(password)
@@ -74,7 +80,7 @@ func TestFullFlow(t *testing.T) {
 	ctx := context.Background()
 
 	// 매 실행 깨끗하게 (테스트 격리)
-	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias, relay RESTART IDENTITY CASCADE`)
+	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	addr := "maro@krisam.in"
 	pass := "super-secret-app-pw"

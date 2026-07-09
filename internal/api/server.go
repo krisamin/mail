@@ -47,12 +47,12 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("PATCH /api/admin/domain/{id}", s.handlePatchDomain)
 	admin.HandleFunc("POST /api/admin/domain/{id}/dkim", s.handleGenerateDKIM)
 	admin.HandleFunc("DELETE /api/admin/domain/{id}/dkim", s.handleClearDKIM)
-	admin.HandleFunc("GET /api/admin/domain/{id}/account", s.handleListAccount)
-	admin.HandleFunc("POST /api/admin/domain/{id}/account", s.handleCreateAccount)
-	admin.HandleFunc("GET /api/admin/domain/{id}/alias", s.handleListAlias)
-	admin.HandleFunc("POST /api/admin/domain/{id}/alias", s.handleCreateAlias)
-	admin.HandleFunc("DELETE /api/admin/alias/{id}", s.handleDeleteAlias)
+	admin.HandleFunc("GET /api/admin/domain/{id}/address", s.handleListDomainAddress)
+	admin.HandleFunc("POST /api/admin/domain/{id}/address", s.handleCreateAddress)
+	admin.HandleFunc("DELETE /api/admin/address/{id}", s.handleDeleteAddress)
+	admin.HandleFunc("GET /api/admin/account", s.handleListAccount)
 	admin.HandleFunc("PATCH /api/admin/account/{id}", s.handlePatchAccount)
+	admin.HandleFunc("GET /api/admin/account/{id}/address", s.handleListAccountAddress)
 	admin.HandleFunc("GET /api/admin/account/{id}/app-password", s.handleListAppPassword)
 	admin.HandleFunc("POST /api/admin/account/{id}/app-password", s.handleCreateAppPassword)
 	admin.HandleFunc("DELETE /api/admin/app-password/{id}", s.handleRevokeAppPassword)
@@ -69,11 +69,11 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	s.mux.Handle("/api/admin/", auth.RequireAdmin(admin))
 
 	// 셀프서비스 — 로그인한 유저 본인 계정 (그룹 불필요).
-	// OIDC email 클레임 → 메일 계정 매핑. 소유권 검증 필수.
+	// OIDC sub 클레임 → 계정 매핑 (JIT 프로비저닝). 소유권 검증 필수.
 	me := http.NewServeMux()
 	me.HandleFunc("GET /api/me/account", s.handleMeAccount)
-	me.HandleFunc("GET /api/me/gate", s.handleMeGate)
-	me.HandleFunc("GET /api/me/alias", s.handleMeAliases)
+	me.HandleFunc("POST /api/me/provision", s.handleMeProvision)
+	me.HandleFunc("GET /api/me/address", s.handleMeAddress)
 	me.HandleFunc("GET /api/me/app-password", s.handleMeListAppPassword)
 	me.HandleFunc("POST /api/me/app-password", s.handleMeCreateAppPassword)
 	me.HandleFunc("DELETE /api/me/app-password/{id}", s.handleMeRevokeAppPassword)
@@ -315,30 +315,25 @@ func dkimPublicTXT(pemText string) (string, error) {
 	}
 }
 
-// ── 유저 ────────────────────────────────────────────────────
+// ── 계정 ────────────────────────────────────────────────────
 
 type accountDTO struct {
 	ID        int64  `json:"id"`
-	DomainID  int64  `json:"domainId"`
-	LocalPart string `json:"localPart"`
+	Subject   string `json:"subject"`
+	Email     string `json:"email"`
 	Active    bool   `json:"active"`
 	CreatedAt string `json:"createdAt"`
 }
 
 func toAccountDTO(u *store.Account) accountDTO {
 	return accountDTO{
-		ID: u.ID, DomainID: u.DomainID, LocalPart: u.LocalPart, Active: u.Active,
+		ID: u.ID, Subject: u.OIDCSubject, Email: u.OIDCEmail, Active: u.Active,
 		CreatedAt: u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 
 func (s *Server) handleListAccount(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	accountList, err := s.store.ListAccount(r.Context(), id)
+	accountList, err := s.store.ListAccount(r.Context())
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -348,27 +343,6 @@ func (s *Server) handleListAccount(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toAccountDTO(u))
 	}
 	writeJSON(w, http.StatusOK, out)
-}
-
-func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	var req struct {
-		LocalPart string `json:"localPart"`
-	}
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	u, err := s.store.CreateAccount(r.Context(), id, req.LocalPart)
-	if err != nil {
-		mapStoreErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, toAccountDTO(u))
 }
 
 func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {

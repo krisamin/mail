@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -8,33 +9,43 @@ import (
 	"github.com/krisamin/mail/internal/store/postgres"
 )
 
-// 셀프서비스 API (/api/me/*) — 로그인한 유저가 "본인" 메일 계정과
+// 셀프서비스 API (/api/me/*) — 로그인한 유저가 "본인" 계정과
 // 앱 비밀번호를 관리한다. admin 그룹 불필요.
 //
-// 계정 매핑: OIDC email 클레임 == 메일 주소 (DD-02 전제 — IdP가
-// krisam.in 주소를 email로 내려준다). 매핑되는 메일 계정이 없으면
-// 404 — 아직 관리자가 계정을 안 만들어준 상태.
+// 계정 매핑: OIDC sub 클레임 == 계정 신원 (0006). 계정은 첫 로그인 때
+// JIT 프로비저닝(/api/me/provision)으로 생긴다 — email 도메인이 서버에
+// 등록된 경우만. 주소 추가/삭제는 admin 전용.
 //
-// 소유권: 목록/발급은 본인 userID로만 조회하고, revoke는 대상
+// 소유권: 목록/발급은 본인 계정으로만 조회하고, revoke는 대상
 // 비밀번호가 본인 소유인지 확인한 후 실행한다 (IDOR 방지).
 
-// resolveMe는 토큰의 email 클레임으로 본인 메일 계정을 찾는다.
+// resolveMe는 토큰의 sub 클레임으로 본인 계정을 찾는다.
+// sub 매칭 실패 시 email 소유 주소로도 시도한다 (프로비저닝 이전 조회 대비).
 func (s *Server) resolveMe(w http.ResponseWriter, r *http.Request) *store.Account {
 	id := IdentityFrom(r.Context())
-	if id == nil || id.Email == "" {
-		writeError(w, http.StatusUnauthorized, "email claim required")
+	if id == nil || id.Subject == "" {
+		writeError(w, http.StatusUnauthorized, "sub claim required")
 		return nil
 	}
-	u, err := s.store.FindAccountByAddress(r.Context(), strings.ToLower(id.Email))
-	if err != nil {
-		// 활성 유저 없음 → 메일 계정 미개설
-		writeError(w, http.StatusNotFound, "mail account not found for "+id.Email)
+	u, err := s.store.FindAccountBySubject(r.Context(), id.Subject)
+	if err == nil {
+		return u
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		mapStoreErr(w, err)
 		return nil
 	}
-	return u
+	if id.Email != "" {
+		if u, err := s.store.FindAccountByAddress(r.Context(), strings.ToLower(id.Email)); err == nil {
+			return u
+		}
+	}
+	// 계정 없음 → 아직 프로비저닝 안 된 상태
+	writeError(w, http.StatusNotFound, "account not provisioned for "+id.Subject)
+	return nil
 }
 
-// handleMeAccount는 본인 메일 계정 요약.
+// handleMeAccount는 본인 계정 요약.
 func (s *Server) handleMeAccount(w http.ResponseWriter, r *http.Request) {
 	u := s.resolveMe(w, r)
 	if u == nil {
@@ -43,47 +54,46 @@ func (s *Server) handleMeAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toAccountDTO(u))
 }
 
-// handleMeGate는 로그인 게이트 판정용 — 토큰 email의 도메인이 우리
-// 서버에 등록돼 있는지. RR7 콜백이 이걸로 로그인 허용/거부를 결정한다
-// (도메인 없으면 거부, 도메인 있는데 계정만 없으면 로그인은 허용).
-func (s *Server) handleMeGate(w http.ResponseWriter, r *http.Request) {
+// handleMeProvision은 JIT 프로비저닝 — 첫 로그인 때 RR7 콜백이 호출한다.
+// email 도메인이 등록돼 있으면 계정 생성(+primary 주소+INBOX), 이미 있으면
+// email 갱신만 (멱등). 도메인 미등록이면 403 — 콜백이 로그인 자체를 거부한다.
+func (s *Server) handleMeProvision(w http.ResponseWriter, r *http.Request) {
 	id := IdentityFrom(r.Context())
-	if id == nil || id.Email == "" {
-		writeError(w, http.StatusUnauthorized, "email claim required")
+	if id == nil || id.Subject == "" {
+		writeError(w, http.StatusUnauthorized, "sub claim required")
 		return
 	}
-	email := strings.ToLower(id.Email)
-	at := strings.LastIndex(email, "@")
-	if at < 0 {
-		writeError(w, http.StatusBadRequest, "invalid email claim")
+	if id.Email == "" {
+		writeError(w, http.StatusBadRequest, "email claim required")
 		return
 	}
-	domain := email[at+1:]
-
-	out := map[string]bool{"domainExists": false, "accountExists": false}
-	if _, err := s.store.FindDomain(r.Context(), domain); err == nil {
-		out["domainExists"] = true
-		if _, err := s.store.FindAccountByAddress(r.Context(), email); err == nil {
-			out["accountExists"] = true
+	u, err := s.store.ProvisionAccount(r.Context(), id.Subject, strings.ToLower(id.Email))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// 도메인 미등록 — 이 서버 유저가 아님
+			writeError(w, http.StatusForbidden, "domain not registered for "+id.Email)
+			return
 		}
+		mapStoreErr(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, toAccountDTO(u))
 }
 
-// handleMeAliases는 본인에게 걸린 별칭 목록 (발신 가능 주소 안내용).
-func (s *Server) handleMeAliases(w http.ResponseWriter, r *http.Request) {
+// handleMeAddress는 본인 소유 주소 목록 (수신/발신 가능 주소 안내용).
+func (s *Server) handleMeAddress(w http.ResponseWriter, r *http.Request) {
 	u := s.resolveMe(w, r)
 	if u == nil {
 		return
 	}
-	aliasList, err := s.store.ListAccountAlias(r.Context(), u.ID)
+	addressList, err := s.store.ListAccountAddress(r.Context(), u.ID)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	out := make([]aliasDTO, 0, len(aliasList))
-	for _, a := range aliasList {
-		out = append(out, toAliasDTO(a))
+	out := make([]addressDTO, 0, len(addressList))
+	for _, a := range addressList {
+		out = append(out, toAddressDTO(a))
 	}
 	writeJSON(w, http.StatusOK, out)
 }

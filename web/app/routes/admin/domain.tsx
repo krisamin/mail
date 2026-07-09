@@ -172,7 +172,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
             {domainList.map((d) => (
               <li key={d.id} className="flex flex-col gap-2 px-4 py-3">
                 <div className="flex items-center justify-between">
-                  <a href={`/admin/domain/${d.id}/account`} className="text-sm font-medium hover:text-accent">
+                  <a href={`/admin/domain/${d.id}/address`} className="text-sm font-medium hover:text-accent">
                     {d.name}
                   </a>
                   <div className="flex items-center gap-2">

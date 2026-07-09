@@ -101,8 +101,8 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
         발송 큐/relay를 안 거치고 직접 배달 (TestInternalRoutingTwoDomains,
         큐 0건 검증)
   - [x] **로그인 게이트** — OIDC email의 도메인이 서버에 등록돼 있어야 로그인
-        (콜백에서 /api/me/gate 판정, 미등록 도메인 403 + 세션 미생성. outsider
-        e2e 검증). 도메인은 있고 계정만 없으면 로그인 허용 + 미개설 안내
+        (0006부터 콜백에서 /api/me/provision이 게이트 겸 JIT 프로비저닝.
+        미등록 도메인 403 + 세션 미생성. outsider e2e 검증)
   - [x] **relay 결정: Resend** — smtp.resend.com:587, user='resend', pw=API키
         (.env.example 참고). Resend 대시보드 도메인 검증 후 활성화
   - [x] **relay DB 관리** (마이그레이션 0005) — relay 여러 개 등록 + 도메인별
@@ -118,6 +118,14 @@ B. 관리 플레인     ← 저장·큐·라우팅·멀티테넌시·OAuth·Admi
   - [x] **네이밍 컨벤션** — 복수형 s 금지: DB 테이블 단수(domain/account/alias/
         relay/...), 컬렉션 변수는 xxxList, API 경로 단수. users→account는
         Postgres 예약어(user) 회피 겸
+  - [x] **계정=신원 모델** (마이그레이션 0006) — account는 OIDC sub 기준
+        신원(oidc_subject 유니크), 메일 주소는 address 테이블로 분리
+        (기존 계정주소+별칭 통합, `*` catch-all 포함). 첫 로그인 때 JIT
+        프로비저닝(`POST /api/me/provision` — 계정+primary 주소+INBOX 자동,
+        멱등)이 로그인 게이트 겸임(미등록 도메인 403). **주소 추가/삭제는
+        admin 전용** (`/api/admin/domain/{id}/address`), 마지막 일반 주소
+        삭제 방어. 해석 우선순위: 정확 주소 > 와일드카드. 부트스트랩은
+        MAIL_BOOTSTRAP_DOMAIN(도메인만)으로 단순화
 - [ ] **Phase 4** — 프로덕션화 (deliverability, 안티스팸, k8s, 백업)
 
 ## 개발

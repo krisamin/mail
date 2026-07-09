@@ -53,29 +53,20 @@ func main() {
 	}
 
 	// 부트스트랩 — 빈 DB엔 도메인이 없어 로그인 게이트가 전부 거부하는 닭-달걀 문제.
-	// MAIL_BOOTSTRAP_ADDRESS="maro@kirby.so,maro@krisam.in" 같은 주소 목록을
-	// 도메인+계정으로 보장한다 (이미 있으면 no-op — 멱등).
-	if bootstrap := os.Getenv("MAIL_BOOTSTRAP_ADDRESS"); bootstrap != "" {
+	// MAIL_BOOTSTRAP_DOMAIN="kirby.so,krisam.in" 도메인 목록을 보장한다
+	// (이미 있으면 no-op — 멱등). 계정은 JIT 프로비저닝(첫 OIDC 로그인)으로 생긴다.
+	if bootstrap := os.Getenv("MAIL_BOOTSTRAP_DOMAIN"); bootstrap != "" {
 		ctx := context.Background()
-		for _, address := range strings.Split(bootstrap, ",") {
-			address = strings.ToLower(strings.TrimSpace(address))
-			at := strings.LastIndex(address, "@")
-			if at <= 0 || at == len(address)-1 {
-				log.Fatalf("MAIL_BOOTSTRAP_ADDRESS 형식 오류: %q", address)
+		for _, domainName := range strings.Split(bootstrap, ",") {
+			domainName = strings.ToLower(strings.TrimSpace(domainName))
+			if domainName == "" || !strings.Contains(domainName, ".") {
+				log.Fatalf("MAIL_BOOTSTRAP_DOMAIN 형식 오류: %q", domainName)
 			}
-			localPart, domainName := address[:at], address[at+1:]
-			dom, err := st.FindDomain(ctx, domainName)
-			if err != nil {
-				if dom, err = st.CreateDomain(ctx, domainName); err != nil {
+			if _, err := st.FindDomain(ctx, domainName); err != nil {
+				if _, err := st.CreateDomain(ctx, domainName); err != nil {
 					log.Fatalf("부트스트랩 도메인 생성 실패(%s): %v", domainName, err)
 				}
 				log.Printf("maild: 부트스트랩 도메인 생성 %s", domainName)
-			}
-			if _, err := st.FindAccountByAddress(ctx, address); err != nil {
-				if _, err := st.CreateAccount(ctx, dom.ID, localPart); err != nil {
-					log.Fatalf("부트스트랩 계정 생성 실패(%s): %v", address, err)
-				}
-				log.Printf("maild: 부트스트랩 계정 생성 %s", address)
 			}
 		}
 	}

@@ -1,10 +1,11 @@
 import { Form, Link, redirect, useNavigation } from "react-router";
 import type { Route } from "./+types/account";
-import { ApiError, apiFetch, type Alias, type AppPassword, type Account } from "~/lib/api.server";
+import { ApiError, apiFetch, type Address, type AppPassword, type Account } from "~/lib/api.server";
 import { getUser, isAdmin } from "~/lib/session.server";
 
 // 셀프서비스 — 로그인한 유저 본인의 메일 계정 + 앱 비밀번호 관리.
-// admin 그룹 불필요. Go API가 email 클레임으로 본인 계정을 매핑한다.
+// admin 그룹 불필요. Go API가 sub 클레임으로 본인 계정을 매핑한다.
+// 계정은 첫 로그인 때 JIT 프로비저닝으로 생기고, 주소 추가는 admin 전용.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = await getUser(request);
@@ -14,17 +15,17 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   let account: Account | null = null;
   let appPasswordList: AppPassword[] = [];
-  let aliasList: Alias[] = [];
+  let addressList: Address[] = [];
   let noAccount = false;
   try {
     account = await apiFetch<Account>(user.idToken, "/api/me/account");
-    [appPasswordList, aliasList] = await Promise.all([
+    [appPasswordList, addressList] = await Promise.all([
       apiFetch<AppPassword[]>(user.idToken, "/api/me/app-password").then((r) => r ?? []),
-      apiFetch<Alias[]>(user.idToken, "/api/me/alias").then((r) => r ?? []),
+      apiFetch<Address[]>(user.idToken, "/api/me/address").then((r) => r ?? []),
     ]);
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
-      noAccount = true; // 관리자가 아직 메일 계정을 안 만들어준 상태
+      noAccount = true; // 프로비저닝 전 상태 (정상 로그인이면 없을 일)
     } else {
       throw e;
     }
@@ -35,7 +36,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     admin: isAdmin(user),
     account,
     appPasswordList,
-    aliasList,
+    addressList,
     noAccount,
   };
 };
@@ -72,7 +73,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
 };
 
 export default function Account({ loaderData, actionData }: Route.ComponentProps) {
-  const { name, email, admin, account, appPasswordList, aliasList, noAccount } = loaderData;
+  const { name, email, admin, account, appPasswordList, addressList, noAccount } = loaderData;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
   const active = appPasswordList.filter((p) => !p.revoked);
@@ -105,18 +106,18 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             <p className="text-sm text-text-1">
               <span className="font-mono">{email}</span> 에 연결된 메일 계정이 아직 없어요.
             </p>
-            <p className="mt-1 text-xs text-text-2">관리자에게 계정 개설을 요청해 주세요.</p>
+            <p className="mt-1 text-xs text-text-2">다시 로그인하면 자동으로 만들어져요.</p>
           </div>
         ) : (
           <>
             <section className="rounded-md border border-line bg-bg-1 p-4">
               <h1 className="text-lg font-bold">내 메일 계정</h1>
               <p className="mt-1 font-mono text-sm text-text-1">{email}</p>
-              {aliasList.length > 0 && (
+              {addressList.length > 0 && (
                 <div className="mt-2">
-                  <p className="text-xs text-text-2">이 주소들로도 받고 보낼 수 있어요:</p>
+                  <p className="text-xs text-text-2">내 메일 주소 — 이 주소들로 받고 보낼 수 있어요:</p>
                   <ul className="mt-1 flex flex-wrap gap-1.5">
-                    {aliasList.map((a) => (
+                    {addressList.map((a) => (
                       <li
                         key={a.id}
                         className="rounded bg-bg-3 px-2 py-0.5 font-mono text-xs text-text-1"
@@ -125,6 +126,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
                       </li>
                     ))}
                   </ul>
+                  <p className="mt-1.5 text-xs text-text-2">주소 추가는 관리자에게 요청해 주세요.</p>
                 </div>
               )}
               <p className="mt-2 text-xs text-text-2">

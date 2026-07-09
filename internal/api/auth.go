@@ -74,13 +74,20 @@ func IdentityFrom(ctx context.Context) *Identity {
 }
 
 // authenticate는 Bearer 토큰을 검증해 Identity를 돌려준다.
-// InsecureSkipVerify 모드에선 테스트 헤더(X-Test-Email/X-Test-Groups)로
+// InsecureSkipVerify 모드에선 테스트 헤더(X-Test-Sub/X-Test-Email/X-Test-Groups)로
 // 신원을 지정할 수 있다 (미지정 시 admin 취급 — 기존 테스트 호환).
 func (a *Authenticator) authenticate(r *http.Request) (*Identity, int, string) {
 	if a.cfg.InsecureSkipVerify {
 		id := &Identity{Subject: "test", Email: "test@localhost", Groups: []string{a.cfg.AdminGroup}}
+		if sub := r.Header.Get("X-Test-Sub"); sub != "" {
+			id.Subject = sub
+		}
 		if e := r.Header.Get("X-Test-Email"); e != "" {
 			id.Email = e
+			// sub 미지정이면 email 기반 파생 — 유저별 신원 분리 유지
+			if r.Header.Get("X-Test-Sub") == "" {
+				id.Subject = "test:" + strings.ToLower(e)
+			}
 		}
 		if g, ok := r.Header["X-Test-Groups"]; ok {
 			id.Groups = nil

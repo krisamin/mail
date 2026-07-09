@@ -47,8 +47,8 @@ export type Domain = {
 
 export type Account = {
   id: number;
-  domainId: number;
-  localPart: string;
+  subject: string;
+  email: string;
   active: boolean;
   createdAt: string;
 };
@@ -62,14 +62,13 @@ export type AppPassword = {
   revoked: boolean;
 };
 
-export type Alias = {
+export type Address = {
   id: number;
   domainId: number;
   domainName: string;
   localPart: string; // '*' = catch-all
   accountId: number;
-  accountLocalPart: string;
-  accountDomainName: string;
+  accountEmail: string;
   createdAt: string;
 };
 

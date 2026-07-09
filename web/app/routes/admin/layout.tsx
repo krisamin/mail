@@ -19,6 +19,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 const navItemList = [
   { to: "/admin", label: "대시보드", end: true },
   { to: "/admin/domain", label: "도메인" },
+  { to: "/admin/account", label: "계정" },
   { to: "/admin/relay", label: "relay" },
   { to: "/admin/queue", label: "발송 큐" },
 ];

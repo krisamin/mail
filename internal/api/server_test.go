@@ -31,7 +31,7 @@ func testServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(st.Close)
 	_, _ = st.Pool().Exec(context.Background(),
-		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias, relay RESTART IDENTITY CASCADE`)
+		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	auth, err := NewAuthenticator(context.Background(), AuthConfig{
 		AdminGroup: "mail-admin", InsecureSkipVerify: true,
@@ -151,14 +151,13 @@ func TestAdminFullFlow(t *testing.T) {
 	}
 	t.Log("✔ 목록에 공개 TXT만 노출 (개인키 비노출)")
 
-	// 3) 유저 생성
-	code, user, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/account", domID),
-		map[string]string{"localPart": "Maro"})
-	if code != 201 || user["localPart"] != "maro" {
-		t.Fatalf("유저 생성: %d %v", code, user)
+	// 3) 유저 — JIT 프로비저닝으로 생성 (admin의 직접 생성 API는 없음)
+	code, user, _ := callAs(t, srv, "maro@krisam.in", "", "POST", "/api/me/provision", nil)
+	if code != 200 || user["email"] != "maro@krisam.in" {
+		t.Fatalf("유저 프로비저닝: %d %v", code, user)
 	}
 	accountID := int64(user["id"].(float64))
-	t.Log("✔ 유저 생성 (소문자 정규화 + INBOX 자동)")
+	t.Log("✔ 유저 JIT 프로비저닝 (주소 + INBOX 자동)")
 
 	// 4) 앱 비밀번호 발급 — 평문 1회 노출
 	code, pw, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/account/%d/app-password", accountID),

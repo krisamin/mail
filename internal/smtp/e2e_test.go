@@ -50,9 +50,9 @@ func setupServers(t *testing.T) *testEnv {
 	}
 	t.Cleanup(st.Close)
 
-	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, alias, relay RESTART IDENTITY CASCADE`)
+	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
-	// 시드: krisam.in 도메인 + 유저 2명 (maro는 INBOX 있음, shiro는 INBOX 없음 — 자동생성 검증)
+	// 시드: krisam.in 도메인 + 계정 2명 (maro는 INBOX 있음, shiro는 INBOX 없음 — 자동생성 검증)
 	var domainID int64
 	if err := st.Pool().QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('krisam.in') RETURNING id`).Scan(&domainID); err != nil {
@@ -66,9 +66,14 @@ func setupServers(t *testing.T) *testEnv {
 		local := addr[:strings.LastIndex(addr, "@")]
 		var accountID int64
 		if err := st.Pool().QueryRow(ctx,
-			`INSERT INTO account (domain_id, local_part) VALUES ($1, $2) RETURNING id`,
-			domainID, local).Scan(&accountID); err != nil {
-			t.Fatalf("유저 시드 %s: %v", addr, err)
+			`INSERT INTO account (oidc_subject, oidc_email) VALUES ('test:' || $1::text, $1) RETURNING id`,
+			addr).Scan(&accountID); err != nil {
+			t.Fatalf("계정 시드 %s: %v", addr, err)
+		}
+		if _, err := st.Pool().Exec(ctx,
+			`INSERT INTO address (domain_id, local_part, account_id) VALUES ($1, $2, $3)`,
+			domainID, local, accountID); err != nil {
+			t.Fatalf("주소 시드 %s: %v", addr, err)
 		}
 		if _, err := st.Pool().Exec(ctx,
 			`INSERT INTO app_password (account_id, label, hash) VALUES ($1, 'e2e', $2)`,

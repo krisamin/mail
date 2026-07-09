@@ -58,21 +58,26 @@ func Run(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	// baseline: 이력은 없는데 스키마는 있음 → initdb 훅 시절 DB 승계
+	// baseline: 이력은 없는데 스키마는 있음 → initdb 훅 시절 DB 승계.
+	// ★baseline 대상은 훅 시절에 존재했던 0001~0005로 고정 — 이후 추가된
+	// 마이그레이션(0006+)까지 "적용됨" 처리하면 실제로는 스킵돼 버린다.
 	if len(appliedMap) == 0 {
 		var domainExists *string
 		if err := conn.QueryRow(ctx, `SELECT to_regclass('public.domain')::text`).Scan(&domainExists); err != nil {
 			return fmt.Errorf("migration: baseline 감지: %w", err)
 		}
 		if domainExists != nil {
-			for _, name := range nameList {
+			baselineList := []string{
+				"0001_init", "0002_outbound_queue", "0003_dkim_key", "0004_alias", "0005_relay",
+			}
+			for _, name := range baselineList {
 				if _, err := conn.Exec(ctx,
 					`INSERT INTO schema_migration (version) VALUES ($1)`, name); err != nil {
 					return fmt.Errorf("migration: baseline 기록(%s): %w", name, err)
 				}
 				appliedMap[name] = true
 			}
-			log.Printf("migration: 기존 스키마 감지 — %d개 baseline 기록", len(nameList))
+			log.Printf("migration: 기존 스키마 감지 — %d개 baseline 기록", len(baselineList))
 		}
 	}
 
