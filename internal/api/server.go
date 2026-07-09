@@ -27,6 +27,9 @@ type Server struct {
 	hostname string
 	// systemPortList는 /api/admin/system 점검 대상 (main.go에서 조립).
 	systemPortList []SystemPort
+	// externalHost/externalPortList는 외부 도달성 점검 대상.
+	externalHost     string
+	externalPortList []ExternalPort
 }
 
 // WithHostname은 DNS 검증에서 MX 기대값으로 쓸 서버 호스트네임을 지정한다.

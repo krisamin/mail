@@ -46,9 +46,9 @@ func TestSystemCheck(t *testing.T) {
 	if !ok || queue["ok"] != true {
 		t.Fatalf("queue ok여야: %v", body["queue"])
 	}
-	portList, ok := body["port"].([]any)
+	portList, ok := body["listener"].([]any)
 	if !ok || len(portList) != 1 {
-		t.Fatalf("port 1개여야: %v", body["port"])
+		t.Fatalf("listener 1개여야: %v", body["listener"])
 	}
 	p := portList[0].(map[string]any)
 	if p["name"] != "imap" || p["open"] != false {

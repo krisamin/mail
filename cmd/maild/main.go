@@ -157,11 +157,17 @@ func main() {
 	}
 	apiSrv := &http.Server{
 		Addr: apiAddr,
-		Handler: api.NewServer(st, authn).WithHostname(hostname).WithSystemPort([]api.SystemPort{
-			{Name: "imap", Addr: imapAddr, Kind: "imap", TLS: tlsConfig != nil, Check: true},
-			{Name: "smtp", Addr: smtpAddr, Kind: "smtp", Check: true},
-			{Name: "submission", Addr: submissionAddr, Kind: "smtp", Check: true},
-		}),
+		Handler: api.NewServer(st, authn).WithHostname(hostname).
+			WithSystemPort([]api.SystemPort{
+				{Name: "imap", Addr: imapAddr, Kind: "imap", TLS: tlsConfig != nil, Check: true},
+				{Name: "smtp", Addr: smtpAddr, Kind: "smtp", Check: true},
+				{Name: "submission", Addr: submissionAddr, Kind: "smtp", Check: true},
+			}).
+			WithExternalPort(hostname, []api.ExternalPort{
+				{Name: "imaps", Port: "993", Mode: "tls"},
+				{Name: "smtp", Port: "25", Mode: "banner"},
+				{Name: "submission", Port: "587", Mode: "banner"},
+			}),
 		// slowloris 방어 — 헤더/전체 읽기와 유휴 연결에 상한
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
