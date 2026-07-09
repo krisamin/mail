@@ -2,9 +2,20 @@ import { Form, useNavigation } from "react-router";
 import type { Route } from "./+types/relay";
 import { ApiError, apiFetch, type Domain, type Relay } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
+import {
+  Badge,
+  Button,
+  Card,
+  CheckboxLabel,
+  EmptyText,
+  ErrorBanner,
+  PageTitle,
+  SelectInput,
+  TextInput,
+} from "~/components";
 
-// relay 관리 — 발송 SMTP relay를 DB로 관리 (env 하드코딩 탈피).
-// password는 쓰기 전용: 서버가 절대 안 돌려줌 (hasPassword 배지만).
+// Outbound relay management — relays live in the DB (no env restarts).
+// Passwords are write-only: the server never returns them (hasPassword flag only).
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
@@ -45,7 +56,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
             host: String(form.get("host") ?? ""),
             port: Number(form.get("port") ?? 587),
             username: String(form.get("username") ?? ""),
-            // 빈 문자열 = 기존 비밀번호 유지
+            // empty string = keep existing password
             password: String(form.get("password") ?? ""),
             starttls: form.get("starttls") === "on",
             isDefault: form.get("isDefault") === "on",
@@ -77,9 +88,6 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 };
 
-const inputCls =
-  "rounded-md border border-line bg-bg-1 px-3 py-2 text-sm outline-none focus:border-accent";
-
 export default function RelayList({ loaderData, actionData }: Route.ComponentProps) {
   const { relayList, domainList } = loaderData;
   const nav = useNavigation();
@@ -87,55 +95,42 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-bold">발송 relay</h1>
-      <p className="text-sm text-text-2">
-        외부 도메인으로 나가는 메일이 경유할 SMTP relay. 서버에 있는 도메인끼리는 relay를 거치지
-        않고 내부 배달돼요. 도메인별 지정이 없으면 <b>기본 relay</b>를 사용.
-      </p>
+      <PageTitle
+        title="발송 relay"
+        description="외부 도메인으로 나가는 메일이 경유할 SMTP relay. 서버 내 도메인끼리는 relay 없이 내부 배달. 도메인별 지정이 없으면 기본 relay 사용."
+      />
 
-      {actionData && !actionData.ok && (
-        <p className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
-          {actionData.error}
-        </p>
-      )}
+      <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
-      {/* 새 relay */}
-      <Form method="post" className="flex flex-col gap-2 rounded-md border border-line bg-bg-1 p-4">
-        <input type="hidden" name="intent" value="create" />
-        <p className="text-sm font-medium">새 relay</p>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <input name="name" required placeholder="이름 (resend)" className={inputCls} />
-          <input name="host" required placeholder="smtp.resend.com" className={inputCls} />
-          <input name="port" type="number" defaultValue={587} className={inputCls} />
-          <input name="username" placeholder="username" className={inputCls} />
-          <input
-            name="password"
-            type="password"
-            placeholder="password / API key"
-            className={`${inputCls} col-span-2`}
-          />
-          <label className="flex items-center gap-1.5 text-xs text-text-2">
-            <input type="checkbox" name="starttls" defaultChecked /> STARTTLS
-          </label>
-          <label className="flex items-center gap-1.5 text-xs text-text-2">
-            <input type="checkbox" name="isDefault" /> 기본 relay
-          </label>
-        </div>
-        <button
-          type="submit"
-          disabled={busy}
-          className="self-start rounded-md bg-accent px-4 py-2 text-sm font-medium text-bg-0 hover:bg-accent-hover disabled:opacity-50"
-        >
-          추가
-        </button>
+      {/* New relay */}
+      <Form method="post">
+        <Card className="flex flex-col gap-2 p-4">
+          <input type="hidden" name="intent" value="create" />
+          <p className="text-sm font-medium">새 relay</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <TextInput name="name" required placeholder="이름 (resend)" />
+            <TextInput name="host" required placeholder="smtp.resend.com" />
+            <TextInput name="port" type="number" defaultValue={587} />
+            <TextInput name="username" placeholder="username" />
+            <TextInput
+              name="password"
+              type="password"
+              placeholder="password / API key"
+              className="col-span-2"
+            />
+            <CheckboxLabel name="starttls" defaultChecked label="STARTTLS" />
+            <CheckboxLabel name="isDefault" label="기본 relay" />
+          </div>
+          <Button disabled={busy} className="self-start">
+            추가
+          </Button>
+        </Card>
       </Form>
 
-      {/* relay 목록 */}
-      <div className="rounded-md border border-line bg-bg-1">
+      {/* Relay list */}
+      <Card>
         {relayList.length === 0 ? (
-          <p className="px-4 py-6 text-center text-sm text-text-2">
-            relay 없음 — 외부 발송은 큐에 쌓였다가 relay를 추가하면 나가요
-          </p>
+          <EmptyText>relay 없음 — 외부 발송은 큐에 쌓였다가 relay를 추가하면 나가요</EmptyText>
         ) : (
           <ul className="divide-y divide-line">
             {relayList.map((r) => (
@@ -145,62 +140,48 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                   <input type="hidden" name="id" value={r.id} />
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{r.name}</span>
-                    {r.isDefault && (
-                      <span className="rounded bg-accent-soft px-1.5 py-0.5 text-[10px] text-accent">
-                        기본
-                      </span>
-                    )}
-                    {!r.active && (
-                      <span className="rounded bg-bg-3 px-1.5 py-0.5 text-[10px] text-muted">
-                        비활성
-                      </span>
-                    )}
+                    {r.isDefault && <Badge tone="accent">기본</Badge>}
+                    {!r.active && <Badge>비활성</Badge>}
                     <span className="text-xs text-text-2">
                       {r.host}:{r.port}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    <input name="name" defaultValue={r.name} className={inputCls} />
-                    <input name="host" defaultValue={r.host} className={inputCls} />
-                    <input name="port" type="number" defaultValue={r.port} className={inputCls} />
-                    <input name="username" defaultValue={r.username} className={inputCls} />
-                    <input
+                    <TextInput name="name" defaultValue={r.name} />
+                    <TextInput name="host" defaultValue={r.host} />
+                    <TextInput name="port" type="number" defaultValue={r.port} />
+                    <TextInput name="username" defaultValue={r.username} />
+                    <TextInput
                       name="password"
                       type="password"
                       placeholder={r.hasPassword ? "(설정됨 — 비우면 유지)" : "password / API key"}
-                      className={`${inputCls} col-span-2`}
+                      className="col-span-2"
                     />
-                    <label className="flex items-center gap-1.5 text-xs text-text-2">
-                      <input type="checkbox" name="starttls" defaultChecked={r.starttls} /> STARTTLS
-                    </label>
-                    <label className="flex items-center gap-1.5 text-xs text-text-2">
-                      <input type="checkbox" name="isDefault" defaultChecked={r.isDefault} /> 기본
-                    </label>
-                    <label className="flex items-center gap-1.5 text-xs text-text-2">
-                      <input type="checkbox" name="active" defaultChecked={r.active} /> 활성
-                    </label>
+                    <CheckboxLabel name="starttls" defaultChecked={r.starttls} label="STARTTLS" />
+                    <CheckboxLabel name="isDefault" defaultChecked={r.isDefault} label="기본" />
+                    <CheckboxLabel name="active" defaultChecked={r.active} label="활성" />
                   </div>
                   <div className="flex gap-3">
-                    <button type="submit" disabled={busy} className="text-xs text-accent hover:underline">
+                    <Button variant="link" disabled={busy}>
                       저장
-                    </button>
+                    </Button>
                   </div>
                 </Form>
                 <Form method="post" className="mt-1">
                   <input type="hidden" name="intent" value="delete" />
                   <input type="hidden" name="id" value={r.id} />
-                  <button type="submit" disabled={busy} className="text-xs text-bad hover:underline">
+                  <Button variant="linkDanger" disabled={busy}>
                     삭제
-                  </button>
+                  </Button>
                 </Form>
               </li>
             ))}
           </ul>
         )}
-      </div>
+      </Card>
 
-      {/* 도메인별 relay 지정 */}
-      <div className="rounded-md border border-line bg-bg-1 p-4">
+      {/* Per-domain relay assignment */}
+      <Card className="p-4">
         <p className="mb-3 text-sm font-medium">도메인별 발신 relay</p>
         <ul className="flex flex-col gap-2">
           {domainList.map((d) => (
@@ -209,26 +190,22 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                 <input type="hidden" name="intent" value="assign" />
                 <input type="hidden" name="domainId" value={d.id} />
                 <span className="w-40 text-sm">{d.name}</span>
-                <select
-                  name="relayId"
-                  defaultValue={d.relayId ?? ""}
-                  className="rounded border border-line bg-bg-0 px-2 py-1 text-xs outline-none focus:border-accent"
-                >
+                <SelectInput name="relayId" defaultValue={d.relayId ?? ""} fieldSize="sm" className="py-1">
                   <option value="">(기본 relay)</option>
                   {relayList.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.name} — {r.host}
                     </option>
                   ))}
-                </select>
-                <button type="submit" disabled={busy} className="text-xs text-accent hover:underline">
+                </SelectInput>
+                <Button variant="link" disabled={busy}>
                   지정
-                </button>
+                </Button>
               </Form>
             </li>
           ))}
         </ul>
-      </div>
+      </Card>
     </div>
   );
 }

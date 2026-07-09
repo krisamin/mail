@@ -10,7 +10,6 @@ export default [
     layout("routes/admin/layout.tsx", [
       index("routes/admin/index.tsx"),
       route("domain", "routes/admin/domain.tsx"),
-      route("domain/:domainId/address", "routes/admin/address.tsx"),
       route("account", "routes/admin/account.tsx"),
       route("relay", "routes/admin/relay.tsx"),
       route("queue", "routes/admin/queue.tsx"),

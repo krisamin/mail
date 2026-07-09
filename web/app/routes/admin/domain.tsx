@@ -8,6 +8,21 @@ import {
   type Domain,
 } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
+import {
+  ActiveToggle,
+  Badge,
+  Banner,
+  Button,
+  Card,
+  EmptyText,
+  ErrorBanner,
+  PageTitle,
+  SelectInput,
+  TextInput,
+} from "~/components";
+
+// Domain management — create/toggle domains, DKIM keys, DNS verification.
+// Address ↔ account wiring lives on /admin/account.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
@@ -72,6 +87,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 };
 
+const dnsChecks = (dns: DnsVerify) =>
+  [
+    ["MX", dns.mx],
+    ["SPF", dns.spf],
+    ["DKIM", dns.dkim],
+    ["DMARC", dns.dmarc],
+  ] as const;
+
 export default function DomainList({ loaderData, actionData }: Route.ComponentProps) {
   const { domainList } = loaderData;
   const nav = useNavigation();
@@ -79,55 +102,42 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-bold">도메인</h1>
+      <PageTitle
+        title="도메인"
+        description="메일을 받고 보낼 도메인. 주소·계정 연결은 계정 페이지에서."
+      />
 
-      {actionData && !actionData.ok && (
-        <p className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
-          {actionData.error}
-        </p>
-      )}
+      <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
       {actionData?.ok && "dkim" in actionData && actionData.dkim && (
-        <div className="rounded-md border border-accent/40 bg-accent-soft p-4">
-          <p className="text-sm font-medium text-accent">DKIM 키 생성됨 — DNS TXT 레코드 등록:</p>
-          <p className="mt-2 font-mono text-xs text-text-1">
-            {actionData.dkim.dnsName} IN TXT
-          </p>
+        <Banner title="DKIM 키 생성됨 — DNS TXT 레코드 등록:">
+          <p className="mt-2 font-mono text-xs text-text-1">{actionData.dkim.dnsName} IN TXT</p>
           <p className="mt-1 break-all rounded bg-bg-0 p-2 font-mono text-xs text-text-1">
             {actionData.dkim.dnsTxt}
           </p>
-        </div>
+        </Banner>
       )}
 
       {actionData?.ok && "dns" in actionData && actionData.dns && (
-        <div className="rounded-md border border-line bg-bg-1 p-4">
+        <Card className="p-4">
           <p className="mb-2 text-sm font-medium">
             DNS 검증 — <span className="font-mono">{actionData.dns.domain}</span>
           </p>
           <ul className="flex flex-col gap-1.5">
-            {(
-              [
-                ["MX", actionData.dns.mx],
-                ["SPF", actionData.dns.spf],
-                ["DKIM", actionData.dns.dkim],
-                ["DMARC", actionData.dns.dmarc],
-              ] as const
-            ).map(([label, check]) => (
+            {dnsChecks(actionData.dns).map(([label, check]) => (
               <li key={label} className="flex flex-col gap-0.5">
                 <div className="flex items-center gap-2">
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                      check.status === "ok"
-                        ? "bg-ok/20 text-ok"
-                        : check.status === "warn"
-                          ? "bg-warn/20 text-warn"
-                          : "bg-bad/20 text-bad"
-                    }`}
+                  <Badge
+                    tone={check.status === "ok" ? "ok" : check.status === "warn" ? "warn" : "bad"}
+                    className="font-medium"
                   >
                     {check.status === "ok" ? "✓" : check.status === "warn" ? "!" : "✗"} {label}
-                  </span>
+                  </Badge>
                   {check.found && (
-                    <span className="max-w-lg truncate font-mono text-[10px] text-text-2" title={check.found}>
+                    <span
+                      className="max-w-lg truncate font-mono text-[10px] text-text-2"
+                      title={check.found}
+                    >
                       {check.found}
                     </span>
                   )}
@@ -144,64 +154,37 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
               </li>
             ))}
           </ul>
-        </div>
+        </Card>
       )}
 
       <Form method="post" className="flex gap-2">
         <input type="hidden" name="intent" value="create" />
-        <input
-          name="name"
-          required
-          placeholder="example.com"
-          className="flex-1 rounded-md border border-line bg-bg-1 px-3 py-2 text-sm outline-none focus:border-accent"
-        />
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-bg-0 hover:bg-accent-hover disabled:opacity-50"
-        >
-          추가
-        </button>
+        <TextInput name="name" required placeholder="example.com" className="flex-1" />
+        <Button disabled={busy}>추가</Button>
       </Form>
 
-      <div className="rounded-md border border-line bg-bg-1">
+      <Card>
         {domainList.length === 0 ? (
-          <p className="px-4 py-6 text-center text-sm text-text-2">도메인 없음</p>
+          <EmptyText>도메인 없음</EmptyText>
         ) : (
           <ul className="divide-y divide-line">
             {domainList.map((d) => (
               <li key={d.id} className="flex flex-col gap-2 px-4 py-3">
                 <div className="flex items-center justify-between">
-                  <a href={`/admin/domain/${d.id}/address`} className="text-sm font-medium hover:text-accent">
-                    {d.name}
-                  </a>
+                  <span className="text-sm font-medium">{d.name}</span>
                   <div className="flex items-center gap-2">
                     <Form method="post">
                       <input type="hidden" name="intent" value="dns-verify" />
                       <input type="hidden" name="id" value={d.id} />
-                      <button
-                        type="submit"
-                        disabled={busy}
-                        className="rounded px-2 py-1 text-xs bg-bg-3 text-text-2 hover:bg-bg-2"
-                      >
+                      <Button variant="chip" disabled={busy}>
                         DNS 검증
-                      </button>
+                      </Button>
                     </Form>
                     <Form method="post">
                       <input type="hidden" name="intent" value="toggle" />
                       <input type="hidden" name="id" value={d.id} />
                       <input type="hidden" name="active" value={String(!d.active)} />
-                      <button
-                        type="submit"
-                        disabled={busy}
-                        className={`rounded px-2 py-1 text-xs ${
-                          d.active
-                            ? "bg-ok/20 text-ok hover:bg-ok/30"
-                            : "bg-bg-3 text-muted hover:bg-bg-2"
-                        }`}
-                      >
-                        {d.active ? "활성" : "비활성"}
-                      </button>
+                      <ActiveToggle active={d.active} disabled={busy} />
                     </Form>
                   </div>
                 </div>
@@ -209,9 +192,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                 <div className="flex items-center gap-2">
                   {d.dkimSelector ? (
                     <>
-                      <span className="rounded bg-accent-soft px-1.5 py-0.5 text-[10px] text-accent">
-                        DKIM: {d.dkimSelector}
-                      </span>
+                      <Badge tone="accent">DKIM: {d.dkimSelector}</Badge>
                       {d.dkimPublicTxt && (
                         <span
                           className="max-w-md truncate font-mono text-[10px] text-text-2"
@@ -223,31 +204,23 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                       <Form method="post">
                         <input type="hidden" name="intent" value="dkim-clear" />
                         <input type="hidden" name="id" value={d.id} />
-                        <button type="submit" disabled={busy} className="text-[10px] text-bad hover:underline">
+                        <Button variant="linkDanger" disabled={busy} className="text-[10px]">
                           해제
-                        </button>
+                        </Button>
                       </Form>
                     </>
                   ) : (
                     <Form method="post" className="flex items-center gap-1.5">
                       <input type="hidden" name="intent" value="dkim" />
                       <input type="hidden" name="id" value={d.id} />
-                      <input
-                        name="selector"
-                        defaultValue="mail"
-                        className="w-24 rounded border border-line bg-bg-0 px-2 py-0.5 text-xs outline-none focus:border-accent"
-                      />
-                      <select
-                        name="keyType"
-                        defaultValue="rsa2048"
-                        className="rounded border border-line bg-bg-0 px-1.5 py-0.5 text-xs outline-none focus:border-accent"
-                      >
+                      <TextInput name="selector" defaultValue="mail" fieldSize="sm" className="w-24" />
+                      <SelectInput name="keyType" defaultValue="rsa2048" fieldSize="sm">
                         <option value="rsa2048">RSA-2048 (호환 ◎)</option>
                         <option value="ed25519">Ed25519</option>
-                      </select>
-                      <button type="submit" disabled={busy} className="text-xs text-accent hover:underline">
+                      </SelectInput>
+                      <Button variant="link" disabled={busy}>
                         DKIM 키 생성
-                      </button>
+                      </Button>
                     </Form>
                   )}
                 </div>
@@ -255,7 +228,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
             ))}
           </ul>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

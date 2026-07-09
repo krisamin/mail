@@ -2,6 +2,9 @@ import { Form, useNavigation, useSearchParams } from "react-router";
 import type { Route } from "./+types/queue";
 import { ApiError, apiFetch, type QueueItem } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
+import { Badge, Button, Card, EmptyText, ErrorBanner, PageTitle, type BadgeTone } from "~/components";
+
+// Outbound queue — filter by status, retry failed items.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
@@ -27,10 +30,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 };
 
-const statusTone: Record<string, string> = {
-  pending: "bg-warn/20 text-warn",
-  sent: "bg-ok/20 text-ok",
-  failed: "bg-bad/20 text-bad",
+const statusTone: Record<string, BadgeTone> = {
+  pending: "warn",
+  sent: "ok",
+  failed: "bad",
 };
 
 const filters = [
@@ -48,18 +51,16 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">발송 큐</h1>
-        <p className="text-xs text-text-2">
-          대기 {stats.pending ?? 0} · 완료 {stats.sent ?? 0} · 실패 {stats.failed ?? 0}
-        </p>
-      </div>
+      <PageTitle
+        title="발송 큐"
+        aside={
+          <p className="text-xs text-text-2">
+            대기 {stats.pending ?? 0} · 완료 {stats.sent ?? 0} · 실패 {stats.failed ?? 0}
+          </p>
+        }
+      />
 
-      {actionData && !actionData.ok && (
-        <p className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
-          {actionData.error}
-        </p>
-      )}
+      <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
       <div className="flex gap-1">
         {filters.map((f) => (
@@ -76,9 +77,9 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
         ))}
       </div>
 
-      <div className="rounded-md border border-line bg-bg-1">
+      <Card>
         {items.length === 0 ? (
-          <p className="px-4 py-6 text-center text-sm text-text-2">항목 없음</p>
+          <EmptyText>항목 없음</EmptyText>
         ) : (
           <ul className="divide-y divide-line">
             {items.map((m) => (
@@ -90,22 +91,22 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
                     <span className="text-text-0">{m.rcpt}</span>
                   </p>
                   <div className="flex shrink-0 items-center gap-2">
-                    <span className={`rounded px-1.5 py-0.5 text-[10px] ${statusTone[m.status] ?? "bg-bg-3 text-muted"}`}>
-                      {m.status}
-                    </span>
+                    <Badge tone={statusTone[m.status] ?? "muted"}>{m.status}</Badge>
                     {m.status === "failed" && (
                       <Form method="post">
                         <input type="hidden" name="id" value={m.id} />
-                        <button type="submit" disabled={busy} className="text-xs text-accent hover:underline">
+                        <Button variant="link" disabled={busy}>
                           재시도
-                        </button>
+                        </Button>
                       </Form>
                     )}
                   </div>
                 </div>
                 <div className="flex items-center gap-3 text-[11px] text-text-2">
                   <span>시도 {m.attemptCount}회</span>
-                  <span suppressHydrationWarning>{m.createdAt.replace("T", " ").replace("Z", "")}</span>
+                  <span suppressHydrationWarning>
+                    {m.createdAt.replace("T", " ").replace("Z", "")}
+                  </span>
                   {m.lastError && (
                     <span className="truncate text-bad" title={m.lastError}>
                       {m.lastError}
@@ -116,7 +117,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
             ))}
           </ul>
         )}
-      </div>
+      </Card>
     </div>
   );
 }
