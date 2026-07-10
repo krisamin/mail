@@ -112,6 +112,12 @@ export const en: Record<keyof typeof ko, string> = {
   "queue.attemptCount": "{{count}} attempt(s)",
 
   "system.title": "System check",
+  "system.setting": "Settings",
+  "system.locale": "Display language",
+  "system.localeDesc":
+    "The web UI display language. Auto follows each visitor's browser language; fixing a language shows it to everyone.",
+  "system.localeAuto": "Auto (browser language)",
+  "system.localeSaved": "Display language saved.",
   "system.recheck": "Re-check",
   "system.uptime": "Uptime",
   "system.db": "Database",
@@ -127,6 +133,4 @@ export const en: Record<keyof typeof ko, string> = {
     "Daemon self-check (self-dial) — only verifies the process is listening and speaks the protocol. Independent of external reachability.",
   "system.up": "Up",
   "system.down": "Down",
-
-  "locale.label": "Language",
 };

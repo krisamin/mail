@@ -12,7 +12,6 @@ import {
   Card,
   EmptyText,
   ErrorBanner,
-  LocaleSwitch,
   SecretReveal,
   TextInput,
 } from "~/components";
@@ -107,7 +106,6 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               </Link>
             )}
             <span className="text-xs text-text-2">{name}</span>
-            <LocaleSwitch />
             <Link to="/logout" className="text-xs text-text-2 hover:text-text-1">
               {t("common.logout")}
             </Link>

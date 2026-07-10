@@ -119,6 +119,12 @@ export const ko = {
 
   // ── admin system ────────────────────────────────────────
   "system.title": "시스템 점검",
+  "system.setting": "설정",
+  "system.locale": "표시 언어",
+  "system.localeDesc":
+    "웹 UI의 표시 언어예요. 자동이면 방문자의 브라우저 언어를 따르고, 특정 언어로 고정하면 모든 사용자에게 그 언어로 보여요.",
+  "system.localeAuto": "자동 (브라우저 언어)",
+  "system.localeSaved": "표시 언어를 저장했어요.",
   "system.recheck": "다시 점검",
   "system.uptime": "가동 시간",
   "system.db": "데이터베이스",
@@ -134,7 +140,4 @@ export const ko = {
     "데몬 자기 점검(self-dial)이에요 — 프로세스가 listen 중이고 프로토콜 응답이 정상인지만 확인해요. 외부 접속 가능 여부와는 별개예요.",
   "system.up": "정상",
   "system.down": "다운",
-
-  // ── locale ──────────────────────────────────────────────
-  "locale.label": "언어",
 };

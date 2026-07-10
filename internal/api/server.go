@@ -44,6 +44,8 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 
 	// Go 1.22+ 패턴 라우팅
 	s.mux.HandleFunc("GET /api/health", s.handleHealth) // 인증 불필요
+	// 전역 표시 언어 — 읽기는 공개 (로그인 전 화면도 필요), 쓰기는 admin.
+	s.mux.HandleFunc("GET /api/setting/locale", s.handleGetLocale)
 
 	admin := http.NewServeMux()
 	admin.HandleFunc("GET /api/admin/me", s.handleMe)
@@ -74,6 +76,7 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("GET /api/admin/domain/{id}/dns", s.handleVerifyDomainDNS)
 	admin.HandleFunc("GET /api/admin/system", s.handleSystemCheck)
 	admin.HandleFunc("GET /api/admin/system/external", s.handleSystemExternal)
+	admin.HandleFunc("PUT /api/admin/setting/locale", s.handleSetLocale)
 
 	s.mux.Handle("/api/admin/", auth.RequireAdmin(admin))
 

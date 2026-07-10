@@ -113,6 +113,12 @@ export const ja: Record<keyof typeof ko, string> = {
   "queue.attemptCount": "試行 {{count}} 回",
 
   "system.title": "システムチェック",
+  "system.setting": "設定",
+  "system.locale": "表示言語",
+  "system.localeDesc":
+    "Web UI の表示言語です。自動の場合は訪問者のブラウザ言語に従い、特定の言語に固定するとすべてのユーザーにその言語で表示されます。",
+  "system.localeAuto": "自動 (ブラウザ言語)",
+  "system.localeSaved": "表示言語を保存しました。",
   "system.recheck": "再チェック",
   "system.uptime": "稼働時間",
   "system.db": "データベース",
@@ -128,6 +134,4 @@ export const ja: Record<keyof typeof ko, string> = {
     "デーモンのセルフチェック (self-dial) です — プロセスが listen 中でプロトコル応答が正常かのみ確認します。外部からの到達性とは別物です。",
   "system.up": "正常",
   "system.down": "停止",
-
-  "locale.label": "言語",
 };

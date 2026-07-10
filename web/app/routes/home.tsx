@@ -1,6 +1,6 @@
 import type { Route } from "./+types/home";
 import { getUser, isAdmin } from "~/lib/session.server";
-import { ButtonLink, Card, LocaleSwitch } from "~/components";
+import { ButtonLink, Card } from "~/components";
 import { useT } from "~/lib/i18n";
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -39,8 +39,6 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           {t("common.login")}
         </ButtonLink>
       )}
-
-      <LocaleSwitch />
     </main>
   );
 }

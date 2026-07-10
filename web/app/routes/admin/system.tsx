@@ -1,10 +1,12 @@
 import { useEffect } from "react";
-import { useFetcher, useRevalidator } from "react-router";
+import { Form, useFetcher, useNavigation, useRevalidator } from "react-router";
 import type { Route } from "./+types/system";
-import { apiFetch } from "~/lib/api.server";
+import { ApiError, apiFetch } from "~/lib/api.server";
 import { useT } from "~/lib/i18n";
+import { LOCALE_LABEL_MAP, LOCALE_LIST } from "~/lib/locale";
+import { isLocaleSetting, primeLocaleSetting } from "~/lib/locale.server";
 import { requireUser } from "~/lib/session.server";
-import { Badge, Button, Card, PageTitle } from "~/components";
+import { Badge, Banner, Button, Card, ErrorBanner, PageTitle, SelectInput } from "~/components";
 
 // System check — fast page load: listener/DB/queue only.
 // External reachability is slow (blocked port = dial timeout) so it loads
@@ -46,7 +48,32 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   const status = await apiFetch<SystemStatus>(user.idToken, "/api/admin/system");
-  return { kind: "status" as const, status, checkedAt: new Date().toISOString() };
+  const localeSetting = await apiFetch<{ locale: string }>(user.idToken, "/api/setting/locale");
+  return {
+    kind: "status" as const,
+    status,
+    localeSetting: localeSetting.locale,
+    checkedAt: new Date().toISOString(),
+  };
+};
+
+// Save the global display language (admin only; applies to every visitor).
+export const action = async ({ request }: Route.ActionArgs) => {
+  const user = await requireUser(request);
+  const form = await request.formData();
+  const locale = String(form.get("locale") ?? "");
+  if (!isLocaleSetting(locale)) return { ok: false as const, error: "invalid locale" };
+  try {
+    await apiFetch(user.idToken, "/api/admin/setting/locale", {
+      method: "PUT",
+      body: { locale },
+    });
+  } catch (e) {
+    if (e instanceof ApiError) return { ok: false as const, error: e.message };
+    throw e;
+  }
+  primeLocaleSetting(locale); // refresh the SSR cache so the change is instant
+  return { ok: true as const };
 };
 
 const PortRowList = ({ list, okLabel, badLabel }: { list: PortCheck[]; okLabel: string; badLabel: string }) => (
@@ -69,10 +96,11 @@ const PortRowList = ({ list, okLabel, badLabel }: { list: PortCheck[]; okLabel: 
   </ul>
 );
 
-export default function System({ loaderData }: Route.ComponentProps) {
+export default function System({ loaderData, actionData }: Route.ComponentProps) {
   const t = useT();
   const revalidator = useRevalidator();
   const externalFetcher = useFetcher<typeof loader>();
+  const nav = useNavigation();
 
   // Kick off the external check after render — the page paints immediately,
   // the slow part fills in on its own.
@@ -84,7 +112,7 @@ export default function System({ loaderData }: Route.ComponentProps) {
   }, []);
 
   if (loaderData.kind !== "status") return null; // fetcher responses never render directly
-  const { status, checkedAt } = loaderData;
+  const { status, localeSetting, checkedAt } = loaderData;
 
   const externalData =
     externalFetcher.data?.kind === "external" ? externalFetcher.data.external : null;
@@ -180,6 +208,27 @@ export default function System({ loaderData }: Route.ComponentProps) {
         </div>
         <PortRowList list={status.listener} okLabel={t("system.up")} badLabel={t("system.down")} />
       </Card>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-medium text-text-1">{t("system.setting")}</h2>
+        <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
+        {actionData?.ok && <Banner title={t("system.localeSaved")} />}
+        <Card className="p-4">
+          <p className="text-sm font-medium text-text-0">{t("system.locale")}</p>
+          <p className="mt-1 text-[11px] text-text-2">{t("system.localeDesc")}</p>
+          <Form method="post" className="mt-3 flex gap-2">
+            <SelectInput name="locale" defaultValue={localeSetting} className="flex-1 sm:max-w-xs">
+              <option value="auto">{t("system.localeAuto")}</option>
+              {LOCALE_LIST.map((l) => (
+                <option key={l} value={l}>
+                  {LOCALE_LABEL_MAP[l]}
+                </option>
+              ))}
+            </SelectInput>
+            <Button disabled={nav.state !== "idle"}>{t("common.save")}</Button>
+          </Form>
+        </Card>
+      </section>
     </div>
   );
 }

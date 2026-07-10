@@ -4,7 +4,6 @@ import { translate } from "~/i18n";
 import { useT } from "~/lib/i18n";
 import { getLocale } from "~/lib/locale.server";
 import { isAdmin, requireUser } from "~/lib/session.server";
-import { LocaleSwitch } from "~/components";
 
 // Shared /admin/* guard: not signed in / expired token → /login, no group → 403.
 // (The real defense is the Go API's JWT check — this layer is just UX.)
@@ -55,7 +54,6 @@ export default function AdminLayout({ loaderData }: Route.ComponentProps) {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-text-2">{loaderData.name}</span>
-            <LocaleSwitch />
             <Link to="/logout" className="text-xs text-text-2 hover:text-text-1">
               {t("common.logout")}
             </Link>

@@ -274,4 +274,9 @@ type AdminStore interface {
 	DeleteRelay(ctx context.Context, id int64) error
 	// SetDomainRelay는 도메인 발신 relay 지정 (nil = default 사용).
 	SetDomainRelay(ctx context.Context, domainID int64, relayID *int64) error
+
+	// 전역 설정 (0008) — key-value. 첫 용도는 웹 표시 언어(key='locale').
+	// GetSetting은 없는 키에 store.ErrNotFound를 돌려준다.
+	GetSetting(ctx context.Context, key string) (string, error)
+	SetSetting(ctx context.Context, key, value string) error
 }
