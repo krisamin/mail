@@ -16,6 +16,9 @@ import (
 // mailboxDelim is the mailbox hierarchy delimiter.
 const mailboxDelim rune = '/'
 
+// appendLimit caps APPEND literal size (also advertised via STATUS APPENDLIMIT).
+const appendLimit = 50 * 1024 * 1024 // 50MB
+
 // snapEntry is one entry in the SELECT snapshot. seqnum = index + 1.
 type snapEntry struct {
 	msgID int64
@@ -266,6 +269,9 @@ func (s *Session) Status(name string, options *goimap.StatusOptions) (*goimap.St
 		return nil, err
 	}
 
+	// ★Every requested option MUST be filled — the go-imap encoder blindly
+	// dereferences the pointer for any requested item (writeStatus panics on
+	// nil). Real clients do ask for RECENT/SIZE/DELETED.
 	data := goimap.StatusData{Mailbox: name}
 	if options.NumMessages {
 		n := st.MessageCount
@@ -274,6 +280,26 @@ func (s *Session) Status(name string, options *goimap.StatusOptions) (*goimap.St
 	if options.NumUnseen {
 		n := st.UnseenCount
 		data.NumUnseen = &n
+	}
+	if options.NumRecent {
+		n := uint32(0) // RECENT is obsolete (IMAP4rev1) — always 0
+		data.NumRecent = &n
+	}
+	if options.NumDeleted {
+		n := st.DeletedCount
+		data.NumDeleted = &n
+	}
+	if options.Size {
+		n := st.TotalBytes
+		data.Size = &n
+	}
+	if options.AppendLimit {
+		n := uint32(appendLimit)
+		data.AppendLimit = &n
+	}
+	if options.DeletedStorage {
+		n := int64(0) // QUOTA=RES-STORAGE not supported — report 0
+		data.DeletedStorage = &n
 	}
 	if options.UIDNext {
 		data.UIDNext = goimap.UID(st.UIDNext)
@@ -302,7 +328,6 @@ func (s *Session) Append(mailbox string, r goimap.LiteralReader, options *goimap
 
 	// Size cap — trusting the client-declared literal size ({N} — r.Size())
 	// for allocation means a bare {2GB} declaration can OOM us. Reject over-limit immediately.
-	const appendLimit = 50 * 1024 * 1024 // 50MB
 	if r.Size() > appendLimit {
 		return nil, &goimap.Error{
 			Type: goimap.StatusResponseTypeNo,

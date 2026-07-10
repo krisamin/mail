@@ -113,12 +113,18 @@ func (s *Store) MailboxStatus(ctx context.Context, mailboxID int64) (*store.Mail
 			(SELECT count(*) FROM message m
 			   WHERE m.mailbox_id = mb.id
 			     AND NOT EXISTS (SELECT 1 FROM message_flag f
-			                     WHERE f.message_id = m.id AND f.flag = '\Seen')) AS num_unseen
+			                     WHERE f.message_id = m.id AND f.flag = '\Seen')) AS num_unseen,
+			(SELECT count(*) FROM message m
+			   WHERE m.mailbox_id = mb.id
+			     AND EXISTS (SELECT 1 FROM message_flag f
+			                 WHERE f.message_id = m.id AND f.flag = '\Deleted')) AS num_deleted,
+			(SELECT COALESCE(sum(m.size_bytes), 0) FROM message m
+			   WHERE m.mailbox_id = mb.id) AS total_bytes
 		FROM mailbox mb WHERE mb.id = $1`
 	var st store.MailboxStatus
 	var uidNext, uidValidity int64
-	var numMessages, numUnseen int64
-	err := s.pool.QueryRow(ctx, q, mailboxID).Scan(&uidNext, &uidValidity, &numMessages, &numUnseen)
+	var numMessages, numUnseen, numDeleted, totalBytes int64
+	err := s.pool.QueryRow(ctx, q, mailboxID).Scan(&uidNext, &uidValidity, &numMessages, &numUnseen, &numDeleted, &totalBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -129,6 +135,8 @@ func (s *Store) MailboxStatus(ctx context.Context, mailboxID int64) (*store.Mail
 	st.UIDValidity = uint32(uidValidity)
 	st.MessageCount = uint32(numMessages)
 	st.UnseenCount = uint32(numUnseen)
+	st.DeletedCount = uint32(numDeleted)
+	st.TotalBytes = totalBytes
 	st.NumRecent = 0 // RECENT is obsolete, keep 0
 	return &st, nil
 }

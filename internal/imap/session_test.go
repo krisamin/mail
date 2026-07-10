@@ -231,6 +231,18 @@ func TestIMAPFullFlow(t *testing.T) {
 	if err != nil || st.NumMessages == nil || *st.NumMessages != 1 {
 		t.Fatalf("Archive should hold 1 message: %v %+v", err, st)
 	}
+	// ★regression: options beyond MESSAGES/UNSEEN must also be filled —
+	// the go-imap encoder nil-dereferences any requested-but-nil item
+	// (prod panic from a real client requesting SIZE/DELETED).
+	st2, err := c.Status("Archive", &goimap.StatusOptions{
+		NumMessages: true, NumUnseen: true, NumDeleted: true, Size: true,
+	}).Wait()
+	if err != nil || st2.NumDeleted == nil || st2.Size == nil {
+		t.Fatalf("STATUS DELETED/SIZE should be filled: %v %+v", err, st2)
+	}
+	if *st2.Size <= 0 {
+		t.Fatalf("STATUS SIZE should be positive: %d", *st2.Size)
+	}
 	t.Log("✔ CREATE + COPY + STATUS: Archive has 1 message")
 
 	// 9) \Deleted + EXPUNGE

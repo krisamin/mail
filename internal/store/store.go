@@ -151,8 +151,12 @@ type MailboxStatus struct {
 	MessageCount uint32
 	UnseenCount  uint32
 	NumRecent    uint32
-	UIDNext      uint32
-	UIDValidity  uint32
+	// DeletedCount is the number of \Deleted-flagged messages (STATUS DELETED).
+	DeletedCount uint32
+	// TotalBytes is the sum of message sizes (STATUS SIZE).
+	TotalBytes  int64
+	UIDNext     uint32
+	UIDValidity uint32
 }
 
 // ── Interfaces ──────────────────────────────────────────────
