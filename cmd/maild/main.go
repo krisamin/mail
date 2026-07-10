@@ -115,8 +115,9 @@ func main() {
 
 	// SMTP submission 서버 (AUTH 필수 — 앱 비밀번호로 우리 유저가 제출)
 	// 발송 relay는 DB에서 관리 (0005) — 외부 도메인 제출은 항상 큐로 받고,
-	// 워커가 발송 시점에 relay를 해석한다 (도메인 지정 → default → env fallback).
-	subSrv := gosmtp.NewServer(smtpbackend.NewSubmissionBackend(st, hostname, true))
+	// 워커가 발송 시점에 relay를 해석한다 (도메인 지정 → default).
+	submissionBackend := smtpbackend.NewSubmissionBackend(st, hostname, true)
+	subSrv := gosmtp.NewServer(submissionBackend)
 	subSrv.Addr = submissionAddr
 	subSrv.Domain = hostname
 	subSrv.ReadTimeout = 60 * time.Second
@@ -127,9 +128,28 @@ func main() {
 	// TLS 미설정 시에만 평문 AUTH 허용 (프록시/터널 뒤 전제)
 	subSrv.AllowInsecureAuth = tlsConfig == nil
 	go func() {
-		log.Printf("maild: SMTP submission 서버 시작 %s (TLS=%v)", submissionAddr, tlsConfig != nil)
+		log.Printf("maild: SMTP submission 서버 시작 %s (STARTTLS=%v)", submissionAddr, tlsConfig != nil)
 		errCh <- subSrv.ListenAndServe()
 	}()
+
+	// SMTPS submission 서버 (implicit TLS — RFC 8314 권장, 465로 노출).
+	// 같은 백엔드 공유 (인증/큐 로직 동일). TLS 인증서 없으면 생략.
+	var smtpsSrv *gosmtp.Server
+	smtpsAddr := env("MAIL_SMTPS_ADDR", ":2465")
+	if tlsConfig != nil {
+		smtpsSrv = gosmtp.NewServer(submissionBackend)
+		smtpsSrv.Addr = smtpsAddr
+		smtpsSrv.Domain = hostname
+		smtpsSrv.ReadTimeout = 60 * time.Second
+		smtpsSrv.WriteTimeout = 60 * time.Second
+		smtpsSrv.MaxMessageBytes = 25 * 1024 * 1024
+		smtpsSrv.MaxRecipients = 50
+		smtpsSrv.TLSConfig = tlsConfig
+		go func() {
+			log.Printf("maild: SMTPS submission 서버 시작 %s (implicit TLS)", smtpsAddr)
+			errCh <- smtpsSrv.ListenAndServeTLS()
+		}()
+	}
 
 	// 발송 큐 워커 — relay는 전부 DB에서 관리 (어드민 UI로 추가/변경,
 	// 재기동 불필요). relay 미설정 도메인의 발송은 일시 오류로 재시도된다.
@@ -155,18 +175,22 @@ func main() {
 	if err != nil {
 		log.Fatalf("OIDC 초기화 실패: %v", err)
 	}
+	// 점검 대상 — smtps는 TLS 설정 시에만 존재
+	systemPortList := []api.SystemPort{
+		{Name: "imap", Addr: imapAddr, Kind: "imap", TLS: tlsConfig != nil, Check: true},
+		{Name: "smtp", Addr: smtpAddr, Kind: "smtp", Check: true},
+		{Name: "submission", Addr: submissionAddr, Kind: "smtp", Check: true},
+		{Name: "smtps", Addr: smtpsAddr, Kind: "smtp", TLS: true, Check: tlsConfig != nil},
+	}
 	apiSrv := &http.Server{
 		Addr: apiAddr,
 		Handler: api.NewServer(st, authn).WithHostname(hostname).
-			WithSystemPort([]api.SystemPort{
-				{Name: "imap", Addr: imapAddr, Kind: "imap", TLS: tlsConfig != nil, Check: true},
-				{Name: "smtp", Addr: smtpAddr, Kind: "smtp", Check: true},
-				{Name: "submission", Addr: submissionAddr, Kind: "smtp", Check: true},
-			}).
+			WithSystemPort(systemPortList).
 			WithExternalPort(hostname, []api.ExternalPort{
 				{Name: "imaps", Port: "993", Mode: "tls"},
 				{Name: "smtp", Port: "25", Mode: "banner"},
 				{Name: "submission", Port: "587", Mode: "banner"},
+				{Name: "smtps", Port: "465", Mode: "tls"},
 			}),
 		// slowloris 방어 — 헤더/전체 읽기와 유휴 연결에 상한
 		ReadHeaderTimeout: 10 * time.Second,
@@ -200,6 +224,9 @@ func main() {
 	_ = apiSrv.Shutdown(shutdownCtx)
 	_ = smtpSrv.Shutdown(shutdownCtx)
 	_ = subSrv.Shutdown(shutdownCtx)
+	if smtpsSrv != nil {
+		_ = smtpsSrv.Shutdown(shutdownCtx)
+	}
 	_ = imapSrv.Close()
 
 	select {

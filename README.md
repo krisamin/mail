@@ -51,7 +51,8 @@ routing, multi-tenancy, and the management plane are implemented here.
 │                                                          │
 │  :1143 IMAP    ← emersion/go-imap v2 backend             │
 │  :2525 SMTP    ← emersion/go-smtp (MX, recipient-checked)│
-│  :2587 SMTP    ← submission (SASL PLAIN = app password)  │
+│  :2587 SMTP    ← submission (STARTTLS, SASL PLAIN)       │
+│  :2465 SMTPS   ← submission (implicit TLS, RFC 8314)     │
 │  :8080 REST    ← admin + self-service API (OIDC JWKS)    │
 │                                                          │
 │  outbound queue worker (backoff, DKIM signing, relays)   │
