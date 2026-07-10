@@ -22,7 +22,7 @@ import (
 // Expunge는 \Deleted 메시지를 삭제하고 EXPUNGE 응답을 쓴다.
 // uids가 nil이면 전체(CLOSE/EXPUNGE), 아니면 UID EXPUNGE.
 func (s *Session) Expunge(w *imapserver.ExpungeWriter, uidSet *goimap.UIDSet) error {
-	if err := s.requireSelected(); err != nil {
+	if err := s.requireWritable(); err != nil {
 		return err
 	}
 	ctx, cancel := opCtx()
@@ -73,11 +73,14 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 	}
 
 	// 본문 섹션 요청 중 Peek 아닌 게 있으면 \Seen 부여 (RFC 3501 §6.4.5)
+	// — 단 EXAMINE(read-only) 선택에선 영구 상태를 바꾸지 않는다.
 	markSeen := false
-	for _, section := range options.BodySection {
-		if !section.Peek {
-			markSeen = true
-			break
+	if !s.readOnly {
+		for _, section := range options.BodySection {
+			if !section.Peek {
+				markSeen = true
+				break
+			}
 		}
 	}
 
@@ -189,7 +192,7 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 
 // Store는 플래그를 변경하고 (Silent 아니면) FETCH 응답으로 결과를 쓴다.
 func (s *Session) Store(w *imapserver.FetchWriter, numSet goimap.NumSet, op *goimap.StoreFlags, options *goimap.StoreOptions) error {
-	if err := s.requireSelected(); err != nil {
+	if err := s.requireWritable(); err != nil {
 		return err
 	}
 

@@ -124,6 +124,11 @@ func (w *Worker) ProcessOnce(ctx context.Context) (int, error) {
 }
 
 func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
+	// per-message 타임아웃 — relay TCP가 행에 걸리면 배치 전체(직렬 루프)가
+	// 멈추므로, 한 통이 워커를 인질로 잡지 못하게 상한을 건다.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
 	raw := m.Raw
 	if w.signer != nil {
 		signed, err := w.signer(ctx, m.EnvelopeFrom, raw)
@@ -155,8 +160,16 @@ func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
 		return
 	}
 
-	// 일시 오류 → 지수 백오프 재시도
-	backoff := w.cfg.BaseBackoff << m.AttemptCount // 1m, 2m, 4m, ...
+	// 일시 오류 → 지수 백오프 재시도 (상한 1시간 — AttemptCount가 크면
+	// int64 시프트 오버플로로 음수/0 백오프 → 즉시 재시도 핫루프가 된다)
+	const maxBackoff = time.Hour
+	backoff := w.cfg.BaseBackoff
+	for i := 0; i < m.AttemptCount && backoff < maxBackoff; i++ {
+		backoff <<= 1
+	}
+	if backoff <= 0 || backoff > maxBackoff {
+		backoff = maxBackoff
+	}
 	next := time.Now().Add(backoff)
 	if merr := w.store.MarkOutboundRetry(ctx, m.ID, err.Error(), next); merr != nil {
 		log.Printf("queue: retry 마킹 실패 id=%d: %v", m.ID, merr)

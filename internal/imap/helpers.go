@@ -101,6 +101,23 @@ func (s *Session) requireSelected() error {
 	return nil
 }
 
+// requireWritable은 EXAMINE(read-only)으로 선택된 메일박스의 상태 변경을
+// 막는다 (RFC 3501 §6.3.2 — EXAMINE은 영구 상태를 바꾸면 안 된다).
+func (s *Session) requireWritable() error {
+	if err := s.requireSelected(); err != nil {
+		return err
+	}
+	if s.readOnly {
+		return &goimap.Error{
+			Type: goimap.StatusResponseTypeNo,
+			// beta.8에 READ-ONLY 상수가 없어 직접 표기 (RFC 3501 §7.1)
+			Code: goimap.ResponseCode("READ-ONLY"),
+			Text: "mailbox is selected read-only",
+		}
+	}
+	return nil
+}
+
 // forEachInSet은 numSet(SeqSet 또는 UIDSet)에 매칭되는 스냅샷 항목을 순회한다.
 // f가 false를 돌려주면 중단.
 func (s *Session) forEachInSet(numSet goimap.NumSet, f func(seqNum uint32, entry snapEntry) bool) {

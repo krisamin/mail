@@ -10,9 +10,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/krisamin/mail/internal/store"
 	"github.com/krisamin/mail/internal/store/postgres"
@@ -114,17 +117,37 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// validDNSLabel은 RFC 1035 DNS 라벨 검증 (a-z, 0-9, 내부 하이픈, 63자 이하).
+func validDNSLabel(s string) bool {
+	if s == "" || len(s) > 63 || s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	for _, c := range s {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
 // mapStoreErr는 store 에러 → HTTP 상태.
 func mapStoreErr(w http.ResponseWriter, err error) {
+	var pgErr *pgconn.PgError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
-	case strings.Contains(err.Error(), "duplicate key"):
+	// pg 에러코드로 판정 (문자열 매칭은 드라이버 메시지 변경에 깨진다)
+	case errors.As(err, &pgErr) && pgErr.Code == "23505": // unique_violation
 		writeError(w, http.StatusConflict, "already exists")
+	case errors.As(err, &pgErr) && pgErr.Code == "23503": // foreign_key_violation
+		writeError(w, http.StatusConflict, "referenced by other records")
 	case strings.Contains(err.Error(), "잘못된"):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		// 내부 에러 원문(SQL/드라이버 메시지)은 클라이언트에 노출하지
+		// 않는다 — 서버 로그에만 남기고 고정 문구로 응답.
+		log.Printf("api: internal error: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 	}
 }
 
@@ -255,6 +278,12 @@ func (s *Server) handleGenerateDKIM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	selector := strings.ToLower(strings.TrimSpace(req.Selector))
+	// DNS 라벨 검증 — 여기서 안 거르면 "<selector>._domainkey" DNS 이름이
+	// 깨진 채 DB에 저장돼 서명은 되는데 검증은 안 되는 상태가 된다.
+	if !validDNSLabel(selector) {
+		writeError(w, http.StatusBadRequest, "invalid selector (a-z, 0-9, hyphen; max 63 chars)")
+		return
+	}
 
 	var (
 		priv   any
@@ -517,14 +546,26 @@ func (s *Server) handleRevokeAppPassword(w http.ResponseWriter, r *http.Request)
 // generateAppPassword는 사람이 옮겨 적기 좋은 4그룹 포맷 (예: abcd-efgh-ijkl-mnop).
 func generateAppPassword() (string, error) {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+	// rejection sampling — 단순 b[i]%36은 256이 36의 배수가 아니라
+	// 앞쪽 문자가 ~1.6% 더 자주 나오는 modulo bias가 생긴다.
+	// 252(=36*7) 미만 바이트만 채택해 완전 균등 분포 보장.
+	const limit = byte(252)
+	out := make([]byte, 0, 16)
+	buf := make([]byte, 32)
+	for len(out) < 16 {
+		if _, err := rand.Read(buf); err != nil {
+			return "", err
+		}
+		for _, v := range buf {
+			if v < limit {
+				out = append(out, alphabet[int(v)%len(alphabet)])
+				if len(out) == 16 {
+					break
+				}
+			}
+		}
 	}
-	for i := range b {
-		b[i] = alphabet[int(b[i])%len(alphabet)]
-	}
-	return string(b[0:4]) + "-" + string(b[4:8]) + "-" + string(b[8:12]) + "-" + string(b[12:16]), nil
+	return string(out[0:4]) + "-" + string(out[4:8]) + "-" + string(out[8:12]) + "-" + string(out[12:16]), nil
 }
 
 // ── 발송 큐 ─────────────────────────────────────────────────

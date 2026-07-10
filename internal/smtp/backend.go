@@ -163,6 +163,13 @@ func (s *Session) Data(r io.Reader) error {
 				log.Printf("smtp: DMARC quarantine → Junk from=%s ip=%s", s.from, ip)
 			}
 		}
+		// From 헤더 파싱 불가(부재/기형/다중)는 DMARC 평가 자체를 못 한
+		// 상태 — 집행 모드에서 그냥 통과시키면 기형 From으로 reject 정책을
+		// 우회할 수 있다 (fail-open). 의심 신호로 Junk 격리 (RFC 7489 §6.6.1).
+		if s.backend.enforceDMARC && !vr.FromParsed {
+			folder = "Junk"
+			log.Printf("smtp: From 헤더 파싱 불가 → Junk 격리 from=%s ip=%s", s.from, ip)
+		}
 	}
 
 	now := timeNow()
@@ -174,19 +181,20 @@ func (s *Session) Data(r io.Reader) error {
 		stamped = append(stamped, raw...)
 
 		if err := s.deliver(rc, folder, stamped, now); err != nil {
-			log.Printf("smtp: 배달 실패 to=%s from=%s: %v", rc.address, s.from, err)
-			continue
+			// 부분 배달 실패를 250으로 삼키면 송신 서버는 재시도하지 않고
+			// 나머지 수신자 메일이 조용히 유실된다 — 451로 트랜잭션 전체를
+			// 거절해 재전송을 유도 (이미 배달된 수신자는 중복 수신 감수,
+			// at-least-once가 유실보다 낫다).
+			log.Printf("smtp: 배달 실패 to=%s from=%s (전체 451 거절): %v", rc.address, s.from, err)
+			return &gosmtp.SMTPError{
+				Code:         451,
+				EnhancedCode: gosmtp.EnhancedCode{4, 3, 0},
+				Message:      "delivery failed, try again later",
+			}
 		}
 		delivered++
 	}
 
-	if delivered == 0 {
-		return &gosmtp.SMTPError{
-			Code:         451,
-			EnhancedCode: gosmtp.EnhancedCode{4, 3, 0},
-			Message:      "delivery failed, try again later",
-		}
-	}
 	log.Printf("smtp: 배달 완료 from=%s rcptList=%d/%d folder=%s size=%d", s.from, delivered, len(s.rcptList), folder, len(raw))
 	return nil
 }

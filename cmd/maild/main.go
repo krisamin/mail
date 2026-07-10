@@ -164,12 +164,22 @@ func main() {
 
 	// Admin REST API — OIDC Bearer 토큰 + admin 그룹 필요
 	apiAddr := env("MAIL_API_ADDR", ":8080")
+	issuerURL := os.Getenv("MAIL_OIDC_ISSUER")
+	devInsecure := os.Getenv("MAIL_DEV_INSECURE") == "true"
+	// fail-closed: issuer가 없으면 기동 자체를 거부한다. env 하나 빠졌다고
+	// admin API가 조용히 무인증 개방되는 사고 방지 — 검증 없는 dev 모드는
+	// MAIL_DEV_INSECURE=true 명시 opt-in으로만.
+	if issuerURL == "" && !devInsecure {
+		log.Fatal("MAIL_OIDC_ISSUER 미설정 — 검증 없이 띄우려면 MAIL_DEV_INSECURE=true 명시 필요 (프로덕션 금지)")
+	}
+	if devInsecure {
+		log.Printf("★★★ MAIL_DEV_INSECURE=true — API 토큰 검증 꺼짐, 전 요청 admin 취급 (프로덕션 금지) ★★★")
+	}
 	authCfg := api.AuthConfig{
-		IssuerURL:  os.Getenv("MAIL_OIDC_ISSUER"),
-		ClientID:   os.Getenv("MAIL_OIDC_CLIENT_ID"),
-		AdminGroup: env("MAIL_ADMIN_GROUP", "mail-admin"),
-		// dev 전용: issuer 미설정이면 검증 없이 전부 admin 취급
-		InsecureSkipVerify: os.Getenv("MAIL_OIDC_ISSUER") == "",
+		IssuerURL:          issuerURL,
+		ClientID:           os.Getenv("MAIL_OIDC_CLIENT_ID"),
+		AdminGroup:         env("MAIL_ADMIN_GROUP", "mail-admin"),
+		InsecureSkipVerify: devInsecure,
 	}
 	authn, err := api.NewAuthenticator(context.Background(), authCfg)
 	if err != nil {

@@ -42,6 +42,10 @@ type VerifyResult struct {
 	// DMARCPolicy는 발신 도메인이 공표한 정책 ("none"|"quarantine"|"reject").
 	// DMARCEvaluated가 true일 때만 의미 있다.
 	DMARCPolicy string
+	// FromParsed는 From 헤더에서 도메인 추출에 성공했는지. false면 From이
+	// 없거나 기형 — DMARC 평가 자체가 불가능했다는 뜻이라, 집행 모드에서는
+	// fail-open이 아니라 의심 신호로 다뤄야 한다 (RFC 7489 §6.6.1).
+	FromParsed bool
 }
 
 // VerifyInbound는 수신 메일의 SPF/DKIM/DMARC를 검증하고
@@ -91,6 +95,7 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 
 	// ── DMARC (RFC 7489) — relaxed alignment ────────────────
 	fromDomain := headerFromDomain(raw)
+	res.FromParsed = fromDomain != ""
 	if fromDomain != "" {
 		dmarcValue := authres.ResultValue(authres.ResultNone)
 		var lookupOpts *dmarc.LookupOptions

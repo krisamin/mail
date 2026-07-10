@@ -1,10 +1,12 @@
 package smtp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log"
+	"net/mail"
 	"strings"
 
 	"github.com/emersion/go-sasl"
@@ -194,6 +196,10 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 }
 
 // Data는 본문을 받아 로컬 수신자에게 배달하고, 외부 수신자는 발송 큐에 넣는다.
+//
+// 실패 정책: 한 건이라도 배달/큐 삽입에 실패하면 451로 트랜잭션 전체를
+// 거절한다 — 250을 돌려주고 일부를 조용히 유실하는 것보다, 클라이언트
+// 재전송으로 인한 중복 배달(at-least-once)이 낫다.
 func (s *SubmissionSession) Data(r io.Reader) error {
 	if len(s.rcptList) == 0 && len(s.external) == 0 {
 		return &gosmtp.SMTPError{
@@ -205,6 +211,25 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return err
+	}
+
+	// 헤더 From 검증 — envelope(Mail)만 믿으면 헤더 From:에 타인 주소를
+	// 박아 보낼 수 있고, 큐 워커가 도메인 키로 DKIM 서명까지 얹어준다.
+	// 헤더 From도 인증 계정 소유 주소여야 한다 (스푸핑 차단).
+	if headerFrom := headerFromAddress(raw); headerFrom != "" && headerFrom != s.accountAddr {
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		ok, err := s.backend.store.CanSendAs(ctx, s.user.ID, headerFrom)
+		cancel()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return &gosmtp.SMTPError{
+				Code:         553,
+				EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
+				Message:      "header From must match authenticated user or an owned alias",
+			}
+		}
 	}
 
 	// 배달 로직은 수신 세션과 공유
@@ -222,7 +247,11 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		stamped = append(stamped, raw...)
 		if err := inbound.deliver(rc, "INBOX", stamped, now); err != nil {
 			log.Printf("submission: 배달 실패 to=%s from=%s: %v", rc.address, s.from, err)
-			continue
+			return &gosmtp.SMTPError{
+				Code:         451,
+				EnhancedCode: gosmtp.EnhancedCode{4, 3, 0},
+				Message:      "delivery failed, try again later",
+			}
 		}
 		delivered++
 	}
@@ -236,19 +265,18 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		err := s.backend.store.EnqueueOutbound(ctx, s.from, s.external, stamped)
 		cancel()
 		if err != nil {
+			// 큐 삽입 실패를 250으로 삼키면 클라이언트는 "보냈다"고 믿는데
+			// 외부 수신자는 영원히 못 받는다 — 451로 재시도 유도.
 			log.Printf("submission: 큐 삽입 실패 from=%s rcptList=%v: %v", s.from, s.external, err)
-		} else {
-			enqueued = len(s.external)
+			return &gosmtp.SMTPError{
+				Code:         451,
+				EnhancedCode: gosmtp.EnhancedCode{4, 3, 0},
+				Message:      "queueing failed, try again later",
+			}
 		}
+		enqueued = len(s.external)
 	}
 
-	if delivered == 0 && enqueued == 0 {
-		return &gosmtp.SMTPError{
-			Code:         451,
-			EnhancedCode: gosmtp.EnhancedCode{4, 3, 0},
-			Message:      "delivery failed, try again later",
-		}
-	}
 	log.Printf("submission: 제출 완료 user=%s local=%d/%d queued=%d/%d size=%d",
 		s.accountAddr, delivered, len(s.rcptList), enqueued, len(s.external), len(raw))
 	return nil
@@ -258,6 +286,29 @@ func (s *SubmissionSession) Reset() {
 	s.from = ""
 	s.rcptList = nil
 	s.external = nil
+}
+
+// headerFromAddress는 메시지 헤더 블록의 From: 주소를 소문자로 뽑는다.
+// 파싱 실패/부재 시 빈 문자열 (호출부에서 검증 스킵 — envelope 검증은
+// Mail 단계에서 이미 통과한 상태).
+func headerFromAddress(raw []byte) string {
+	headerEnd := bytes.Index(raw, []byte("\r\n\r\n"))
+	if headerEnd < 0 {
+		headerEnd = len(raw)
+	}
+	msg, err := mail.ReadMessage(bytes.NewReader(raw[:min(headerEnd+4, len(raw))]))
+	if err != nil {
+		return ""
+	}
+	fromHeader := msg.Header.Get("From")
+	if fromHeader == "" {
+		return ""
+	}
+	addr, err := mail.ParseAddress(fromHeader)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(addr.Address)
 }
 
 func (s *SubmissionSession) Logout() error {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/krisamin/mail/internal/store"
 )
@@ -114,11 +115,22 @@ func (s *Store) BackfillDomainAddress(ctx context.Context, domainID int64) (int,
 		if err != nil {
 			return created, err
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO address (domain_id, local_part, account_id) VALUES ($1, $2, $3)`,
-			domainID, t.local, t.accountID); err != nil {
+		// ON CONFLICT DO NOTHING — 대상 조회와 INSERT 사이에 주소가 생겼거나
+		// 같은 주소를 남이 선점한 경우, 그 한 건 때문에 나머지 계정 전체의
+		// backfill이 막히면 안 된다 (fail-fast였던 버그 수정). 충돌 건은
+		// 건너뛰고 계속 진행 — 멱등 재실행도 자연히 성립.
+		tag, err := tx.Exec(ctx,
+			`INSERT INTO address (domain_id, local_part, account_id) VALUES ($1, $2, $3)
+			 ON CONFLICT (domain_id, local_part) DO NOTHING`,
+			domainID, t.local, t.accountID)
+		if err != nil {
 			tx.Rollback(ctx)
 			return created, fmt.Errorf("backfill 주소 생성(%s@%s): %w", t.local, domainName, err)
+		}
+		if tag.RowsAffected() == 0 {
+			// 이미 존재/선점 — 스킵
+			tx.Rollback(ctx)
+			continue
 		}
 		// INBOX 없으면 생성 (bare 계정은 INBOX도 없다)
 		if _, err := tx.Exec(ctx,
@@ -241,9 +253,24 @@ func (s *Store) ProvisionAccount(ctx context.Context, subject, email string) (*s
 	if errors.Is(err, store.ErrNotFound) {
 		// 도메인 미등록 — 계정만 만든다 (주소/INBOX 없음 = 메일 사용 불가).
 		// admin이 나중에 도메인을 추가하면 BackfillDomainAddress가 채운다.
-		return s.createBareAccount(ctx, subject, email, store.AccountKindUser)
+		u, err = s.createBareAccount(ctx, subject, email, store.AccountKindUser)
+	}
+	if err != nil && isUniqueViolation(err) {
+		// 동시 JIT 프로비저닝(같은 유저가 탭 2개로 로그인 등) — 둘 다
+		// "계정 없음" 판정 후 INSERT 경쟁하면 한쪽이 duplicate로 진다.
+		// 진 쪽은 이긴 쪽이 만든 계정을 재조회해 돌려주면 멱등.
+		if existing, ferr := s.FindAccountBySubject(ctx, subject); ferr == nil {
+			return existing, nil
+		}
+		return nil, err
 	}
 	return u, err
+}
+
+// isUniqueViolation은 pg unique_violation(23505) 판정.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // createBareAccount는 주소 없는 계정만 만든다 (도메인 미등록 유저의 로그인).
@@ -274,7 +301,7 @@ func (s *Store) createAccountWithAddress(ctx context.Context, subject, email, ki
 	if err != nil {
 		return nil, err
 	}
-	if local == "" || local == "*" || strings.ContainsAny(local, "@ 	") {
+	if !validLocalPart(local) {
 		return nil, fmt.Errorf("잘못된 주소: %q", email)
 	}
 

@@ -2,6 +2,7 @@ package imap
 
 import (
 	"errors"
+	"io"
 	"sort"
 	"strings"
 
@@ -293,13 +294,29 @@ func (s *Session) Append(mailbox string, r goimap.LiteralReader, options *goimap
 		return nil, err
 	}
 
+	// 크기 상한 — 클라이언트가 선언한 리터럴 크기({N} — r.Size())를 그대로
+	// 믿고 할당하면 {2GB} 선언만으로 OOM. 상한 초과는 즉시 거절.
+	const appendLimit = 50 * 1024 * 1024 // 50MB
+	if r.Size() > appendLimit {
+		return nil, &goimap.Error{
+			Type: goimap.StatusResponseTypeNo,
+			Code: goimap.ResponseCodeTooBig,
+			Text: "message exceeds append limit",
+		}
+	}
+
 	raw := make([]byte, 0, r.Size())
 	buf := make([]byte, 32*1024)
 	for {
 		n, rerr := r.Read(buf)
 		raw = append(raw, buf[:n]...)
-		if rerr != nil {
+		if rerr == io.EOF {
 			break
+		}
+		if rerr != nil {
+			// EOF가 아닌 read 에러를 EOF 취급하면 잘린 메시지가
+			// 정상 메일로 저장된다 — 에러로 거절.
+			return nil, rerr
 		}
 	}
 

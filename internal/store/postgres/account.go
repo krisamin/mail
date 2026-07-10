@@ -18,6 +18,27 @@ var ErrNotFound = store.ErrNotFound
 // ErrAuthFailed는 인증 실패 (store.ErrAuthFailed 별칭 — 하위호환).
 var ErrAuthFailed = store.ErrAuthFailed
 
+// validLocalPart는 이메일 local part 화이트리스트 검증 (RFC 5321 dot-atom
+// 부분집합). 제어문자(\r\n — SMTP/헤더 인젝션 소지)와 '@', 공백, '<', '>'류를
+// 원천 차단한다. '*'는 atext에 있지만 이 시스템에선 catch-all 마커라 제외
+// (catch-all은 호출부에서 localPart == "*" 단독으로만 허용). 소문자 정규화
+// 이후 호출 전제.
+func validLocalPart(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case strings.ContainsRune("!#$%&'+/=?^_`{|}~.-", c):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // splitAddress는 'maro@krisam.in' → ('maro', 'krisam.in').
 func splitAddress(address string) (local, domain string, err error) {
 	at := strings.LastIndex(address, "@")

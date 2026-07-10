@@ -90,7 +90,7 @@ func (s *Store) CreateAddress(ctx context.Context, domainID int64, localPart str
 	if localPart == "" {
 		return nil, fmt.Errorf("잘못된 주소: local part 비어있음")
 	}
-	if localPart != "*" && strings.ContainsAny(localPart, "@ *\t") {
+	if localPart != "*" && !validLocalPart(localPart) {
 		return nil, fmt.Errorf("잘못된 주소: %q ('*' 단독 또는 일반 local part만)", localPart)
 	}
 

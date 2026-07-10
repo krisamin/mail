@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,7 +11,8 @@ import (
 )
 
 // DNS 검증 (0005) — 도메인의 메일 관련 DNS 레코드를 실조회해서
-// 어드민 화면에 ✅/⚠️/❌ 배지를 띄운다. 조회 실패는 missing으로 취급.
+// 어드민 화면에 ✅/⚠️/❌ 배지를 띄운다. 조회 실패(NXDOMAIN 아님)는
+// missing이 아니라 error 상태로 구분한다.
 //
 // 항목: MX(우리 서버), SPF(TXT v=spf1), DKIM(<selector>._domainkey — DB 키와
 // 일치 여부까지), DMARC(_dmarc TXT).
@@ -95,17 +97,42 @@ var resolver = &net.Resolver{
 	},
 }
 
-func lookupTXTJoined(ctx context.Context, name string) []string {
-	txtList, err := resolver.LookupTXT(ctx, name)
-	if err != nil {
-		return nil
+// dnsUnavailable은 "레코드 없음(NXDOMAIN/NODATA)"이 아닌 조회 실패 판정.
+// 일시적 DNS 장애를 missing으로 오판하면 어드민이 멀쩡한 레코드를
+// 재설정하러 가는 사고가 난다 — error 상태로 구분해서 표기.
+func dnsUnavailable(err error) bool {
+	if err == nil {
+		return false
 	}
-	return txtList
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return !dnsErr.IsNotFound
+	}
+	return true
+}
+
+// dnsErrorCheck는 조회 실패용 공통 DTO.
+func dnsErrorCheck(name string) dnsCheckDTO {
+	return dnsCheckDTO{
+		Status: "error",
+		Note:   name + " 조회 실패 — DNS 응답 없음 (레코드 없음과 다름, 잠시 후 재시도)",
+	}
+}
+
+func lookupTXTJoined(ctx context.Context, name string) ([]string, error) {
+	txtList, err := resolver.LookupTXT(ctx, name)
+	if dnsUnavailable(err) {
+		return nil, err
+	}
+	return txtList, nil
 }
 
 func checkMX(ctx context.Context, domain, expectedHost string) dnsCheckDTO {
 	mxList, err := resolver.LookupMX(ctx, domain)
-	if err != nil || len(mxList) == 0 {
+	if dnsUnavailable(err) {
+		return dnsErrorCheck(domain + " MX")
+	}
+	if len(mxList) == 0 {
 		return dnsCheckDTO{
 			Status: "missing", Expected: expectedHost,
 			Note: "MX 레코드 없음 — 수신하려면 이 서버를 가리키는 MX가 필요",
@@ -131,7 +158,11 @@ func checkMX(ctx context.Context, domain, expectedHost string) dnsCheckDTO {
 }
 
 func checkSPF(ctx context.Context, domain string) dnsCheckDTO {
-	for _, txt := range lookupTXTJoined(ctx, domain) {
+	txtList, err := lookupTXTJoined(ctx, domain)
+	if err != nil {
+		return dnsErrorCheck(domain + " TXT")
+	}
+	for _, txt := range txtList {
 		if strings.HasPrefix(strings.ToLower(txt), "v=spf1") {
 			return dnsCheckDTO{Status: "ok", Found: txt}
 		}
@@ -147,7 +178,10 @@ func checkDKIM(ctx context.Context, domain, selector, privateKeyPEM string) dnsC
 		return dnsCheckDTO{Status: "warn", Note: "DKIM 키 미생성 — 도메인 관리에서 생성"}
 	}
 	name := selector + "._domainkey." + domain
-	txtList := lookupTXTJoined(ctx, name)
+	txtList, err := lookupTXTJoined(ctx, name)
+	if err != nil {
+		return dnsErrorCheck(name + " TXT")
+	}
 	if len(txtList) == 0 {
 		expected := ""
 		if txt, err := dkimPublicTXT(privateKeyPEM); err == nil {
@@ -188,7 +222,11 @@ func extractDKIMKey(txt string) string {
 
 func checkDMARC(ctx context.Context, domain string) dnsCheckDTO {
 	name := "_dmarc." + domain
-	for _, txt := range lookupTXTJoined(ctx, name) {
+	txtList, err := lookupTXTJoined(ctx, name)
+	if err != nil {
+		return dnsErrorCheck(name + " TXT")
+	}
+	for _, txt := range txtList {
 		if strings.HasPrefix(strings.ToLower(txt), "v=dmarc1") {
 			return dnsCheckDTO{Status: "ok", Found: txt}
 		}
@@ -212,7 +250,10 @@ func checkSRV(ctx context.Context, service, domain, expectedHost string, expecte
 	}
 
 	_, srvList, err := resolver.LookupSRV(ctx, service, "tcp", domain)
-	if err != nil || len(srvList) == 0 {
+	if dnsUnavailable(err) {
+		return dnsErrorCheck(recordName + " SRV")
+	}
+	if len(srvList) == 0 {
 		return dnsCheckDTO{
 			Status: "missing", Expected: expected,
 			Note: recordName + " SRV 없음 — 클라이언트 자동설정이 서버를 못 찾음",
@@ -256,7 +297,10 @@ func checkAutoconfigDNS(ctx context.Context, domain, expectedHost string) dnsChe
 	}
 
 	addrList, err := resolver.LookupHost(ctx, recordName)
-	if err != nil || len(addrList) == 0 {
+	if dnsUnavailable(err) {
+		return dnsErrorCheck(recordName)
+	}
+	if len(addrList) == 0 {
 		return dnsCheckDTO{
 			Status: "missing", Expected: expected,
 			Note: recordName + " 없음 — Thunderbird 자동설정 불가",
