@@ -99,6 +99,10 @@ const dnsCheckList = (dns: DnsVerify) =>
     ["SPF", dns.spf],
     ["DKIM", dns.dkim],
     ["DMARC", dns.dmarc],
+    ["SRV imaps (993)", dns.srvImaps],
+    ["SRV submissions (465)", dns.srvSubmissions],
+    ["SRV submission (587)", dns.srvSubmission],
+    ["autoconfig", dns.autoconfig],
   ] as const;
 
 export default function DomainList({ loaderData, actionData }: Route.ComponentProps) {

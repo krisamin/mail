@@ -14,6 +14,8 @@ import (
 //
 // 항목: MX(우리 서버), SPF(TXT v=spf1), DKIM(<selector>._domainkey — DB 키와
 // 일치 여부까지), DMARC(_dmarc TXT).
+// 자동감지: SRV(_imaps/_submissions/_submission — RFC 6186/8314),
+// autoconfig(Thunderbird XML 자동설정 호스트).
 
 type dnsCheckDTO struct {
 	// Status: "ok" | "warn" | "missing"
@@ -32,6 +34,14 @@ type dnsVerifyDTO struct {
 	SPF    dnsCheckDTO `json:"spf"`
 	DKIM   dnsCheckDTO `json:"dkim"`
 	DMARC  dnsCheckDTO `json:"dmarc"`
+	// 자동감지 — 클라이언트가 이메일 주소만으로 서버를 찾게 하는 레코드.
+	// 필드명의 imaps/submissions는 복수형이 아니라 DNS 서비스 라벨 그대로다
+	// (_imaps._tcp = IMAP over TLS 993, _submissions._tcp = implicit TLS 465,
+	//  _submission._tcp = STARTTLS 587).
+	SRVImaps       dnsCheckDTO `json:"srvImaps"`
+	SRVSubmissions dnsCheckDTO `json:"srvSubmissions"`
+	SRVSubmission  dnsCheckDTO `json:"srvSubmission"`
+	Autoconfig     dnsCheckDTO `json:"autoconfig"`
 }
 
 // handleVerifyDomainDNS는 도메인의 DNS 상태를 실조회한다.
@@ -67,6 +77,10 @@ func (s *Server) handleVerifyDomainDNS(w http.ResponseWriter, r *http.Request) {
 	out.SPF = checkSPF(ctx, name)
 	out.DKIM = checkDKIM(ctx, name, dkimSelector, dkimKey)
 	out.DMARC = checkDMARC(ctx, name)
+	out.SRVImaps = checkSRV(ctx, "imaps", name, s.hostname, 993)
+	out.SRVSubmissions = checkSRV(ctx, "submissions", name, s.hostname, 465)
+	out.SRVSubmission = checkSRV(ctx, "submission", name, s.hostname, 587)
+	out.Autoconfig = checkAutoconfigDNS(ctx, name, s.hostname)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -184,4 +198,88 @@ func checkDMARC(ctx context.Context, domain string) dnsCheckDTO {
 		Expected: "v=DMARC1; p=none; rua=mailto:postmaster@" + domain,
 		Note:     name + " TXT 없음",
 	}
+}
+
+// checkSRV는 RFC 6186/8314 클라이언트 자동감지 SRV 레코드를 검사한다.
+// service: "imaps"(993) | "submissions"(465) | "submission"(587).
+// 메일 클라이언트는 이메일 도메인의 이 레코드로 접속할 서버를 찾는다 —
+// 없으면 imap.<domain> 같은 추측에 의존해 엉뚱한 곳에 붙을 수 있다.
+func checkSRV(ctx context.Context, service, domain, expectedHost string, expectedPort uint16) dnsCheckDTO {
+	recordName := fmt.Sprintf("_%s._tcp.%s", service, domain)
+	expected := fmt.Sprintf("%s IN SRV 0 1 %d %s.", recordName, expectedPort, expectedHost)
+	if expectedHost == "" {
+		expected = ""
+	}
+
+	_, srvList, err := resolver.LookupSRV(ctx, service, "tcp", domain)
+	if err != nil || len(srvList) == 0 {
+		return dnsCheckDTO{
+			Status: "missing", Expected: expected,
+			Note: recordName + " SRV 없음 — 클라이언트 자동설정이 서버를 못 찾음",
+		}
+	}
+	foundList := make([]string, 0, len(srvList))
+	match := false
+	for _, srv := range srvList {
+		host := strings.TrimSuffix(srv.Target, ".")
+		foundList = append(foundList, fmt.Sprintf("%s:%d (prio %d)", host, srv.Port, srv.Priority))
+		if expectedHost != "" && strings.EqualFold(host, expectedHost) && srv.Port == expectedPort {
+			match = true
+		}
+	}
+	found := strings.Join(foundList, ", ")
+	if expectedHost == "" || match {
+		return dnsCheckDTO{Status: "ok", Found: found}
+	}
+	return dnsCheckDTO{
+		Status: "warn", Found: found, Expected: expected,
+		Note: fmt.Sprintf("SRV가 이 서버(%s:%d)를 가리키지 않음", expectedHost, expectedPort),
+	}
+}
+
+// checkAutoconfigDNS는 Thunderbird 계열 자동설정 호스트를 검사한다.
+// 클라이언트는 http(s)://autoconfig.<domain>/mail/config-v1.1.xml 을 먼저
+// 찾으므로, autoconfig.<domain>이 이 서버(웹)로 향해야 XML을 서빙할 수 있다.
+// A/AAAA/CNAME 무엇이든 최종적으로 우리 서버 호스트로 해석되면 ok.
+func checkAutoconfigDNS(ctx context.Context, domain, expectedHost string) dnsCheckDTO {
+	recordName := "autoconfig." + domain
+	expected := recordName + " IN CNAME " + expectedHost + "."
+	if expectedHost == "" {
+		expected = ""
+	}
+
+	// CNAME이 기대 호스트로 바로 향하는지 먼저 확인 (가장 명확한 신호).
+	if cname, err := resolver.LookupCNAME(ctx, recordName); err == nil && expectedHost != "" {
+		if strings.EqualFold(strings.TrimSuffix(cname, "."), expectedHost) {
+			return dnsCheckDTO{Status: "ok", Found: recordName + " → " + expectedHost}
+		}
+	}
+
+	addrList, err := resolver.LookupHost(ctx, recordName)
+	if err != nil || len(addrList) == 0 {
+		return dnsCheckDTO{
+			Status: "missing", Expected: expected,
+			Note: recordName + " 없음 — Thunderbird 자동설정 불가",
+		}
+	}
+	found := recordName + " → " + strings.Join(addrList, ", ")
+	// IP 비교: 기대 호스트의 IP 집합과 겹치면 ok (CNAME 없이 A로 걸어도 인정).
+	if expectedHost != "" {
+		if expectedAddrList, err := resolver.LookupHost(ctx, expectedHost); err == nil {
+			expectedSet := map[string]bool{}
+			for _, a := range expectedAddrList {
+				expectedSet[a] = true
+			}
+			for _, a := range addrList {
+				if expectedSet[a] {
+					return dnsCheckDTO{Status: "ok", Found: found}
+				}
+			}
+		}
+		return dnsCheckDTO{
+			Status: "warn", Found: found, Expected: expected,
+			Note: "autoconfig가 이 서버(" + expectedHost + ")로 해석되지 않음",
+		}
+	}
+	return dnsCheckDTO{Status: "ok", Found: found}
 }

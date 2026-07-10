@@ -113,4 +113,9 @@ export type DnsVerify = {
   spf: DnsCheck;
   dkim: DnsCheck;
   dmarc: DnsCheck;
+  // Client autodiscovery records (SRV names follow the DNS service labels).
+  srvImaps: DnsCheck;
+  srvSubmissions: DnsCheck;
+  srvSubmission: DnsCheck;
+  autoconfig: DnsCheck;
 };

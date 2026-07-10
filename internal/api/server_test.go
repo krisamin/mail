@@ -39,7 +39,7 @@ func testServer(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatalf("auth: %v", err)
 	}
-	srv := httptest.NewServer(NewServer(st, auth))
+	srv := httptest.NewServer(NewServer(st, auth).WithHostname("mail.example.test"))
 	t.Cleanup(srv.Close)
 	return srv
 }

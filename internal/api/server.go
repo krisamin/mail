@@ -46,6 +46,10 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth) // 인증 불필요
 	// 전역 표시 언어 — 읽기는 공개 (로그인 전 화면도 필요), 쓰기는 admin.
 	s.mux.HandleFunc("GET /api/setting/locale", s.handleGetLocale)
+	// Thunderbird autoconfig — 공개 (설정값만, 비밀 없음).
+	// autoconfig.<도메인> 호스트와 .well-known 경로 둘 다 지원.
+	s.mux.HandleFunc("GET /mail/config-v1.1.xml", s.handleAutoconfigXML)
+	s.mux.HandleFunc("GET /.well-known/autoconfig/mail/config-v1.1.xml", s.handleAutoconfigXML)
 
 	admin := http.NewServeMux()
 	admin.HandleFunc("GET /api/admin/me", s.handleMe)
