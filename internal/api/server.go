@@ -21,36 +21,36 @@ import (
 	"github.com/krisamin/mail/internal/store/postgres"
 )
 
-// Server는 admin REST API.
+// Server is the admin REST API.
 type Server struct {
-	store *postgres.Store // AdminStore + FindAccountByID까지 필요해서 구체 타입
+	store *postgres.Store // concrete type — needs AdminStore plus FindAccountByID
 	auth  *Authenticator
 	mux   *http.ServeMux
-	// hostname은 MX 검증 기대값 (MAIL_HOSTNAME). 비어있으면 존재만 확인.
+	// hostname is the expected MX value (MAIL_HOSTNAME). Empty = existence check only.
 	hostname string
-	// systemPortList는 /api/admin/system 점검 대상 (main.go에서 조립).
+	// systemPortList is what /api/admin/system probes (assembled in main.go).
 	systemPortList []SystemPort
-	// externalHost/externalPortList는 외부 도달성 점검 대상.
+	// externalHost/externalPortList are the external-reachability probe targets.
 	externalHost     string
 	externalPortList []ExternalPort
 }
 
-// WithHostname은 DNS 검증에서 MX 기대값으로 쓸 서버 호스트네임을 지정한다.
+// WithHostname sets the server hostname used as the expected MX in DNS checks.
 func (s *Server) WithHostname(h string) *Server {
 	s.hostname = h
 	return s
 }
 
-// NewServer는 라우팅을 조립한다.
+// NewServer assembles the routes.
 func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	s := &Server{store: st, auth: auth, mux: http.NewServeMux()}
 
-	// Go 1.22+ 패턴 라우팅
-	s.mux.HandleFunc("GET /api/health", s.handleHealth) // 인증 불필요
-	// 전역 표시 언어 — 읽기는 공개 (로그인 전 화면도 필요), 쓰기는 admin.
+	// Go 1.22+ pattern routing
+	s.mux.HandleFunc("GET /api/health", s.handleHealth) // no auth
+	// global display locale — reads are public (pre-login screens need it), writes are admin.
 	s.mux.HandleFunc("GET /api/setting/locale", s.handleGetLocale)
-	// Thunderbird autoconfig — 공개 (설정값만, 비밀 없음).
-	// autoconfig.<도메인> 호스트와 .well-known 경로 둘 다 지원.
+	// Thunderbird autoconfig — public (config values only, no secrets).
+	// Supports both the autoconfig.<domain> host and the .well-known path.
 	s.mux.HandleFunc("GET /mail/config-v1.1.xml", s.handleAutoconfigXML)
 	s.mux.HandleFunc("GET /.well-known/autoconfig/mail/config-v1.1.xml", s.handleAutoconfigXML)
 
@@ -65,6 +65,7 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("POST /api/admin/domain/{id}/address", s.handleCreateAddress)
 	admin.HandleFunc("DELETE /api/admin/address/{id}", s.handleDeleteAddress)
 	admin.HandleFunc("GET /api/admin/account", s.handleListAccount)
+	admin.HandleFunc("GET /api/admin/account/overview", s.handleAccountOverview)
 	admin.HandleFunc("POST /api/admin/account/service", s.handleCreateServiceAccount)
 	admin.HandleFunc("PATCH /api/admin/account/{id}", s.handlePatchAccount)
 	admin.HandleFunc("GET /api/admin/account/{id}/address", s.handleListAccountAddress)
@@ -75,6 +76,7 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("GET /api/admin/queue", s.handleListQueue)
 	admin.HandleFunc("GET /api/admin/queue/stat", s.handleQueueStat)
 	admin.HandleFunc("POST /api/admin/queue/{id}/retry", s.handleRetryQueue)
+	admin.HandleFunc("POST /api/admin/queue/{id}/cancel", s.handleCancelQueue)
 	admin.HandleFunc("GET /api/admin/relay", s.handleListRelay)
 	admin.HandleFunc("POST /api/admin/relay", s.handleCreateRelay)
 	admin.HandleFunc("PUT /api/admin/relay/{id}", s.handleUpdateRelay)
@@ -87,8 +89,8 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 
 	s.mux.Handle("/api/admin/", auth.RequireAdmin(admin))
 
-	// 셀프서비스 — 로그인한 유저 본인 계정 (그룹 불필요).
-	// OIDC sub 클레임 → 계정 매핑 (JIT 프로비저닝). 소유권 검증 필수.
+	// self-service — the logged-in user's own account (no group required).
+	// OIDC sub claim → account mapping (JIT provisioning). Ownership checks required.
 	me := http.NewServeMux()
 	me.HandleFunc("GET /api/me/account", s.handleMeAccount)
 	me.HandleFunc("POST /api/me/provision", s.handleMeProvision)
@@ -100,12 +102,12 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	return s
 }
 
-// ServeHTTP는 http.Handler 구현.
+// ServeHTTP implements http.Handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// ── 헬퍼 ────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -117,7 +119,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// validDNSLabel은 RFC 1035 DNS 라벨 검증 (a-z, 0-9, 내부 하이픈, 63자 이하).
+// validDNSLabel validates an RFC 1035 DNS label (a-z, 0-9, inner hyphens, ≤63 chars).
 func validDNSLabel(s string) bool {
 	if s == "" || len(s) > 63 || s[0] == '-' || s[len(s)-1] == '-' {
 		return false
@@ -130,22 +132,23 @@ func validDNSLabel(s string) bool {
 	return true
 }
 
-// mapStoreErr는 store 에러 → HTTP 상태.
+// mapStoreErr maps store errors → HTTP statuses.
 func mapStoreErr(w http.ResponseWriter, err error) {
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
-	// pg 에러코드로 판정 (문자열 매칭은 드라이버 메시지 변경에 깨진다)
+	// judged by pg error code (string matching breaks when driver messages change)
 	case errors.As(err, &pgErr) && pgErr.Code == "23505": // unique_violation
 		writeError(w, http.StatusConflict, "already exists")
 	case errors.As(err, &pgErr) && pgErr.Code == "23503": // foreign_key_violation
 		writeError(w, http.StatusConflict, "referenced by other records")
-	case strings.Contains(err.Error(), "잘못된"):
+	// validation errors from the store carry an "invalid ..." prefix → 400
+	case strings.HasPrefix(err.Error(), "invalid"):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
-		// 내부 에러 원문(SQL/드라이버 메시지)은 클라이언트에 노출하지
-		// 않는다 — 서버 로그에만 남기고 고정 문구로 응답.
+		// Raw internal errors (SQL/driver messages) are never exposed to the
+		// client — server log only, fixed phrase in the response.
 		log.Printf("api: internal error: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 	}
@@ -162,7 +165,7 @@ func decodeBody(r *http.Request, v any) error {
 	return dec.Decode(v)
 }
 
-// ── 핸들러 ──────────────────────────────────────────────────
+// ── Handlers ────────────────────────────────────────────────
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -172,7 +175,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, IdentityFrom(r.Context()))
 }
 
-// ── 도메인 ──────────────────────────────────────────────────
+// ── Domains ─────────────────────────────────────────────────
 
 type domainDTO struct {
 	ID           int64  `json:"id"`
@@ -180,7 +183,7 @@ type domainDTO struct {
 	Active       bool   `json:"active"`
 	CreatedAt    string `json:"createdAt"`
 	DKIMSelector string `json:"dkimSelector"`
-	// DKIMPublicTXT는 DNS에 게시할 TXT 값 (개인키는 절대 안 내려줌).
+	// DKIMPublicTXT is the TXT value to publish in DNS (the private key never leaves).
 	DKIMPublicTXT string `json:"dkimPublicTxt,omitempty"`
 }
 
@@ -224,9 +227,10 @@ func (s *Server) handleCreateDomain(w http.ResponseWriter, r *http.Request) {
 		mapStoreErr(w, err)
 		return
 	}
-	// 소급 프로비저닝: 이 도메인 email로 이미 로그인했던(bare) 계정들에
-	// primary 주소+INBOX 생성. 실패해도 도메인 생성 자체는 유효 — 경고만.
-	// 응답은 domainDTO 필드 + backfilled (flat — 기존 클라이언트 호환).
+	// Retroactive provisioning: create primary address + INBOX for (bare)
+	// accounts that already logged in with this domain's email. A failure
+	// doesn't invalidate the domain creation — warn only.
+	// Response = domainDTO fields + backfilled (flat — existing-client compatible).
 	backfilled, backfillErr := s.store.BackfillDomainAddress(r.Context(), d.ID)
 	out := struct {
 		domainDTO
@@ -259,10 +263,11 @@ func (s *Server) handlePatchDomain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"active": *req.Active})
 }
 
-// handleGenerateDKIM은 DKIM 키를 생성해 저장하고 DNS TXT 값을 돌려준다.
-// keyType: "rsa2048"(기본) | "ed25519".
-// 기본이 RSA인 이유: Gmail 등 대형 프로바이더가 Ed25519 DKIM(RFC 8463)을
-// 사실상 검증하지 못한다 — Ed25519로만 서명하면 무서명 취급될 수 있다.
+// handleGenerateDKIM generates and stores a DKIM key and returns the DNS TXT value.
+// keyType: "rsa2048" (default) | "ed25519".
+// RSA is the default because large providers (Gmail etc.) effectively cannot
+// verify Ed25519 DKIM (RFC 8463) — signing with Ed25519 alone risks being
+// treated as unsigned.
 func (s *Server) handleGenerateDKIM(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -278,8 +283,8 @@ func (s *Server) handleGenerateDKIM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	selector := strings.ToLower(strings.TrimSpace(req.Selector))
-	// DNS 라벨 검증 — 여기서 안 거르면 "<selector>._domainkey" DNS 이름이
-	// 깨진 채 DB에 저장돼 서명은 되는데 검증은 안 되는 상태가 된다.
+	// DNS label validation — without this filter a broken "<selector>._domainkey"
+	// DNS name gets stored, leaving mail signed but unverifiable.
 	if !validDNSLabel(selector) {
 		writeError(w, http.StatusBadRequest, "invalid selector (a-z, 0-9, hyphen; max 63 chars)")
 		return
@@ -347,7 +352,7 @@ func (s *Server) handleClearDKIM(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// dkimPublicTXT는 저장된 개인키에서 DNS TXT 값을 재계산한다.
+// dkimPublicTXT recomputes the DNS TXT value from the stored private key.
 func dkimPublicTXT(pemText string) (string, error) {
 	block, _ := pem.Decode([]byte(pemText))
 	if block == nil {
@@ -372,7 +377,7 @@ func dkimPublicTXT(pemText string) (string, error) {
 	}
 }
 
-// ── 계정 ────────────────────────────────────────────────────
+// ── Accounts ────────────────────────────────────────────────
 
 type accountDTO struct {
 	ID        int64  `json:"id"`
@@ -390,8 +395,8 @@ func toAccountDTO(u *store.Account) accountDTO {
 	}
 }
 
-// handleCreateServiceAccount는 서비스 계정 생성 (admin 전용, 0007).
-// 로그인 불가 — 주소+앱비밀번호만 갖는 시스템 계정. body: {email}.
+// handleCreateServiceAccount creates a service account (admin only, 0007).
+// No login — a system account with only addresses + app passwords. body: {email}.
 func (s *Server) handleCreateServiceAccount(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email string `json:"email"`
@@ -445,7 +450,7 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"active": *req.Active})
 }
 
-// ── 앱 비밀번호 ─────────────────────────────────────────────
+// ── App passwords ───────────────────────────────────────────
 
 type appPasswordDTO struct {
 	ID        int64    `json:"id"`
@@ -487,15 +492,15 @@ func (s *Server) handleListAppPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleCreateAppPassword는 랜덤 비밀번호를 생성해 해시 저장,
-// 평문은 응답에 1회만 포함 (다시 조회 불가).
+// handleCreateAppPassword generates a random password, stores the hash,
+// and includes the plaintext exactly once in the response (never retrievable again).
 func (s *Server) handleCreateAppPassword(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	// 유저 존재 확인 (없는 유저에 비번 만드는 것 방지)
+	// verify the user exists (no passwords for nonexistent users)
 	if _, err := s.store.FindAccountByID(r.Context(), id); err != nil {
 		mapStoreErr(w, err)
 		return
@@ -525,7 +530,7 @@ func (s *Server) handleCreateAppPassword(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"appPassword": toAppPasswordDTO(p),
-		// 평문은 이 응답에서만 — 저장 안 함
+		// plaintext lives in this response only — never stored
 		"plaintext": plain,
 	})
 }
@@ -543,12 +548,12 @@ func (s *Server) handleRevokeAppPassword(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// generateAppPassword는 사람이 옮겨 적기 좋은 4그룹 포맷 (예: abcd-efgh-ijkl-mnop).
+// generateAppPassword uses a human-transcribable 4-group format (e.g. abcd-efgh-ijkl-mnop).
 func generateAppPassword() (string, error) {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
-	// rejection sampling — 단순 b[i]%36은 256이 36의 배수가 아니라
-	// 앞쪽 문자가 ~1.6% 더 자주 나오는 modulo bias가 생긴다.
-	// 252(=36*7) 미만 바이트만 채택해 완전 균등 분포 보장.
+	// rejection sampling — naive b[i]%36 has modulo bias (256 isn't a multiple
+	// of 36, so early alphabet chars appear ~1.6% more often).
+	// Accepting only bytes < 252 (=36*7) guarantees a perfectly uniform distribution.
 	const limit = byte(252)
 	out := make([]byte, 0, 16)
 	buf := make([]byte, 32)
@@ -568,7 +573,7 @@ func generateAppPassword() (string, error) {
 	return string(out[0:4]) + "-" + string(out[4:8]) + "-" + string(out[8:12]) + "-" + string(out[12:16]), nil
 }
 
-// ── 발송 큐 ─────────────────────────────────────────────────
+// ── Outbound queue ──────────────────────────────────────────
 
 type queueDTO struct {
 	ID            int64  `json:"id"`
@@ -621,4 +626,17 @@ func (s *Server) handleRetryQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
+}
+
+func (s *Server) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := s.store.CancelOutbound(r.Context(), id); err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "canceled"})
 }

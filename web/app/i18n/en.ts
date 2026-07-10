@@ -119,6 +119,9 @@ export const en: Record<keyof typeof ko, string> = {
   "queue.filterFailed": "Failed",
   "queue.empty": "Nothing here.",
   "queue.attemptCount": "{{count}} attempt(s)",
+  "queue.filterCanceled": "Canceled",
+  "common.cancel": "Cancel",
+  "common.confirmCancelQueue": "Cancel this outbound entry? Only pending entries can be canceled.",
 
   "system.title": "System check",
   "system.setting": "Settings",

@@ -23,8 +23,17 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 export const action = async ({ request }: Route.ActionArgs) => {
   const user = await requireAdmin(request);
   const form = await request.formData();
+  const intent = form.get("intent");
   try {
-    await apiFetch(user.idToken, `/api/admin/queue/${form.get("id")}/retry`, { method: "POST" });
+    if (intent === "cancel") {
+      await apiFetch(user.idToken, `/api/admin/queue/${form.get("id")}/cancel`, {
+        method: "POST",
+      });
+    } else {
+      await apiFetch(user.idToken, `/api/admin/queue/${form.get("id")}/retry`, {
+        method: "POST",
+      });
+    }
     return { ok: true as const };
   } catch (e) {
     if (e instanceof ApiError) return { ok: false as const, error: e.message };
@@ -36,6 +45,7 @@ const statusTone: Record<string, BadgeTone> = {
   pending: "warn",
   sent: "ok",
   failed: "bad",
+  canceled: "muted",
 };
 
 const filterList = [
@@ -43,6 +53,7 @@ const filterList = [
   { value: "pending", key: "queue.filterPending" },
   { value: "sent", key: "queue.filterSent" },
   { value: "failed", key: "queue.filterFailed" },
+  { value: "canceled", key: "queue.filterCanceled" },
 ] as const;
 
 export default function Queue({ loaderData, actionData }: Route.ComponentProps) {
@@ -113,9 +124,23 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
                     <Badge tone={statusTone[m.status] ?? "muted"}>{m.status}</Badge>
                     {m.status === "failed" && (
                       <Form method="post">
+                        <input type="hidden" name="intent" value="retry" />
                         <input type="hidden" name="id" value={m.id} />
                         <Button variant="link" disabled={busy}>
                           {t("common.retry")}
+                        </Button>
+                      </Form>
+                    )}
+                    {m.status === "pending" && (
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="cancel" />
+                        <input type="hidden" name="id" value={m.id} />
+                        <Button
+                          variant="linkDanger"
+                          disabled={busy}
+                          confirmMessage={t("common.confirmCancelQueue")}
+                        >
+                          {t("common.cancel")}
                         </Button>
                       </Form>
                     )}

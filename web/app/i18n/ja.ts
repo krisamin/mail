@@ -120,6 +120,9 @@ export const ja: Record<keyof typeof ko, string> = {
   "queue.filterFailed": "失敗",
   "queue.empty": "項目がありません。",
   "queue.attemptCount": "試行 {{count}} 回",
+  "queue.filterCanceled": "キャンセル済み",
+  "common.cancel": "キャンセル",
+  "common.confirmCancelQueue": "この送信エントリをキャンセルしますか？保留中のエントリのみキャンセルできます。",
 
   "system.title": "システムチェック",
   "system.setting": "設定",

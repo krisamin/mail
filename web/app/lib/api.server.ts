@@ -85,6 +85,12 @@ export type Address = {
   createdAt: string;
 };
 
+export type AccountOverview = {
+  account: Account;
+  addressList: Address[];
+  appPasswordList: AppPassword[];
+};
+
 export type QueueItem = {
   id: number;
   from: string;

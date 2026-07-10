@@ -3,9 +3,8 @@ import type { Route } from "./+types/account";
 import {
   ApiError,
   apiFetch,
-  type Address,
+  type AccountOverview,
   type AppPassword,
-  type Account,
   type Domain,
 } from "~/lib/api.server";
 import { translate } from "~/i18n";
@@ -34,29 +33,14 @@ import {
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = await requireAdmin(request);
 
-  const [accountList, domainList] = await Promise.all([
-    apiFetch<Account[]>(user.idToken, "/api/admin/account").then((r) => r ?? []),
+  // Single-round-trip overview — no per-account request fan-out.
+  const [overviewList, domainList] = await Promise.all([
+    apiFetch<AccountOverview[]>(user.idToken, "/api/admin/account/overview").then((r) => r ?? []),
     apiFetch<Domain[]>(user.idToken, "/api/admin/domain").then((r) => r ?? []),
   ]);
-
-  // Per-account fan-out is fine here — admin page, small account count.
-  const addressList: Record<number, Address[]> = {};
-  const appPasswordList: Record<number, AppPassword[]> = {};
-  await Promise.all(
-    accountList.map(async (u) => {
-      [addressList[u.id], appPasswordList[u.id]] = await Promise.all([
-        apiFetch<Address[]>(user.idToken, `/api/admin/account/${u.id}/address`).then((r) => r ?? []),
-        apiFetch<AppPassword[]>(user.idToken, `/api/admin/account/${u.id}/app-password`).then(
-          (r) => r ?? [],
-        ),
-      ]);
-    }),
-  );
   return {
-    accountList,
+    overviewList,
     domainList: domainList.filter((d) => d.active),
-    addressList,
-    appPasswordList,
   };
 };
 
@@ -126,7 +110,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
 };
 
 export default function AccountList({ loaderData, actionData }: Route.ComponentProps) {
-  const { accountList, domainList, addressList, appPasswordList } = loaderData;
+  const { overviewList, domainList } = loaderData;
   const t = useT();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
@@ -171,12 +155,12 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
       </Form>
 
       <div className="flex flex-col gap-3">
-        {accountList.length === 0 ? (
+        {overviewList.length === 0 ? (
           <Card>
             <EmptyText>{t("adminAccount.empty")}</EmptyText>
           </Card>
         ) : (
-          accountList.map((u) => (
+          overviewList.map(({ account: u, addressList, appPasswordList }) => (
             <Card key={u.id}>
               <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
                 <div className="flex items-center gap-2">
@@ -199,7 +183,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
               {/* Addresses: chips + inline [local]@[domain] add */}
               <div className="flex flex-col gap-2 px-4 py-3">
                 <p className="text-xs text-text-2">{t("adminAccount.address")}</p>
-                <AddressChipList list={addressList[u.id] ?? []} busy={busy} deletable />
+                <AddressChipList list={addressList} busy={busy} deletable />
                 <Form method="post" className="flex items-center gap-1.5">
                   <input type="hidden" name="intent" value="create-address" />
                   <input type="hidden" name="accountId" value={u.id} />
@@ -250,7 +234,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                     </Button>
                   </Form>
                 </div>
-                <AppPasswordRows list={appPasswordList[u.id] ?? []} busy={busy} />
+                <AppPasswordRows list={appPasswordList} busy={busy} />
               </div>
             </Card>
           ))

@@ -1,9 +1,9 @@
 // Command maild is the mail server daemon.
 //
-// 한 바이너리에 IMAP(:1143) + SMTP 수신(:2525) + submission(:2587) +
-// Admin/셀프서비스 REST API(:8080) + 발송 큐 워커를 조립한다.
-// 기동 시 내장 마이그레이션으로 스키마를 수렴시키고, SIGTERM/SIGINT에
-// graceful shutdown한다 (k8s rolling update 안전).
+// One binary assembling IMAP (:1143) + inbound SMTP (:2525) + submission
+// (:2587) + admin/self-service REST API (:8080) + the outbound queue worker.
+// On startup the embedded migrations converge the schema; SIGTERM/SIGINT
+// triggers a graceful drain (safe for k8s rolling updates).
 package main
 
 import (
@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	imapbackend "github.com/krisamin/mail/internal/imap"
 	"github.com/krisamin/mail/internal/queue"
 	smtpbackend "github.com/krisamin/mail/internal/smtp"
+	"github.com/krisamin/mail/internal/spam"
 	"github.com/krisamin/mail/internal/store/migration"
 	"github.com/krisamin/mail/internal/store/postgres"
 )
@@ -34,8 +36,8 @@ func env(key, fallback string) string {
 	return fallback
 }
 
-// loadTLS는 MAIL_TLS_CERT/MAIL_TLS_KEY가 설정돼 있으면 TLS 설정을 만든다.
-// 미설정이면 nil (평문 — 프록시/터널 뒤이거나 dev).
+// loadTLS builds a TLS config when MAIL_TLS_CERT/MAIL_TLS_KEY are set.
+// Unset returns nil (plaintext — behind a proxy/tunnel, or dev).
 func loadTLS() *tls.Config {
 	certFile, keyFile := os.Getenv("MAIL_TLS_CERT"), os.Getenv("MAIL_TLS_KEY")
 	if certFile == "" || keyFile == "" {
@@ -43,7 +45,7 @@ func loadTLS() *tls.Config {
 	}
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		log.Fatalf("TLS 인증서 로드 실패: %v", err)
+		log.Fatalf("TLS certificate load failed: %v", err)
 	}
 	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 }
@@ -51,9 +53,9 @@ func loadTLS() *tls.Config {
 func main() {
 	dsn := os.Getenv("MAIL_DSN")
 	if dsn == "" {
-		log.Fatal("MAIL_DSN 미설정 (예: postgres://mail:maildev@localhost:55432/mail)")
+		log.Fatal("MAIL_DSN unset (e.g. postgres://mail:maildev@localhost:55432/mail)")
 	}
-	// dev 기본값: 143/25/587은 특권 포트 → 1143/2525/2587. k8s에선 Service로 매핑.
+	// dev defaults: 143/25/587 are privileged ports → 1143/2525/2587. Mapped by a Service on k8s.
 	imapAddr := env("MAIL_IMAP_ADDR", ":1143")
 	smtpAddr := env("MAIL_SMTP_ADDR", ":2525")
 	submissionAddr := env("MAIL_SUBMISSION_ADDR", ":2587")
@@ -62,23 +64,23 @@ func main() {
 
 	st, err := postgres.New(context.Background(), dsn)
 	if err != nil {
-		log.Fatalf("store 연결 실패: %v", err)
+		log.Fatalf("store connect failed: %v", err)
 	}
 	defer st.Close()
 
-	// 내장 마이그레이션 — 빈 DB든 기존 DB든 여기서 스키마 수렴 (k8s에선 이거 하나로 끝)
+	// embedded migrations — schema converges here for both empty and existing DBs (the whole story on k8s)
 	if err := migration.Run(context.Background(), st.Pool()); err != nil {
-		log.Fatalf("마이그레이션 실패: %v", err)
+		log.Fatalf("migration failed: %v", err)
 	}
 
 	errCh := make(chan error, 5) // sender: IMAP/SMTP/submission/SMTPS/API
 
-	// 메일박스 변경 push 허브 (LISTEN/NOTIFY) — IDLE이 폴링 대신 즉시 깨어남
+	// mailbox-change push hub (LISTEN/NOTIFY) — IDLE wakes immediately instead of polling
 	notifyCtx, notifyCancel := context.WithCancel(context.Background())
 	notifier := postgres.NewNotifier(st)
 	go notifier.Run(notifyCtx)
 
-	// IMAP 서버 — TLS 설정 시 implicit TLS, 미설정 시 평문(프록시/dev 전제)
+	// IMAP server — implicit TLS when configured, plaintext otherwise (proxy/dev assumption)
 	imapOpts := &imapserver.Options{
 		NewSession: imapbackend.NewBackend(st).WithNotifier(notifier).NewSession,
 		TLSConfig:  tlsConfig,
@@ -89,21 +91,35 @@ func main() {
 	imapSrv := imapserver.New(imapOpts)
 	go func() {
 		if tlsConfig != nil {
-			log.Printf("maild: IMAP 서버 시작 %s (TLS)", imapAddr)
+			log.Printf("maild: IMAP server listening %s (TLS)", imapAddr)
 			errCh <- imapSrv.ListenAndServeTLS(imapAddr)
 			return
 		}
-		log.Printf("maild: IMAP 서버 시작 %s (평문 — 프록시/dev 전제)", imapAddr)
+		log.Printf("maild: IMAP server listening %s (plaintext — proxy/dev assumption)", imapAddr)
 		errCh <- imapSrv.ListenAndServe(imapAddr)
 	}()
 
-	// SMTP 수신(MX) 서버 — SPF/DKIM/DMARC 검증 + 정책 집행(옵션)
+	// inbound (MX) SMTP server — SPF/DKIM/DMARC verification + optional policy enforcement
 	mxBackend := smtpbackend.NewBackend(st, hostname)
 	if os.Getenv("MAIL_DMARC_ENFORCE") == "true" {
 		mxBackend.WithDMARCEnforcement()
-		log.Printf("maild: DMARC 정책 집행 활성 (reject→550, quarantine→Junk)")
+		log.Printf("maild: DMARC enforcement active (reject→550, quarantine→Junk)")
 	} else {
 		mxBackend.WithInboundVerification()
+	}
+	// connection screening: DNSBL(reject) + FCrDNS/HELO(quarantine).
+	// MAIL_DNSBL_ZONE: comma-separated zones ("off" disables everything,
+	// empty = rDNS/HELO screening only with the default zone list empty).
+	dnsblEnv := env("MAIL_DNSBL_ZONE", "zen.spamhaus.org")
+	if dnsblEnv != "off" {
+		var zoneList []string
+		for _, z := range strings.Split(dnsblEnv, ",") {
+			if z = strings.TrimSpace(z); z != "" {
+				zoneList = append(zoneList, z)
+			}
+		}
+		mxBackend.WithSpamChecker(spam.NewChecker(zoneList))
+		log.Printf("maild: connection screening active (dnsbl=%v, rDNS/HELO quarantine)", zoneList)
 	}
 	smtpSrv := gosmtp.NewServer(mxBackend)
 	smtpSrv.Addr = smtpAddr
@@ -112,15 +128,15 @@ func main() {
 	smtpSrv.WriteTimeout = 60 * time.Second
 	smtpSrv.MaxMessageBytes = 25 * 1024 * 1024 // 25MB
 	smtpSrv.MaxRecipients = 50
-	smtpSrv.TLSConfig = tlsConfig // STARTTLS 제공 (설정 시)
+	smtpSrv.TLSConfig = tlsConfig // offers STARTTLS (when configured)
 	go func() {
-		log.Printf("maild: SMTP 수신 서버 시작 %s (hostname=%s)", smtpAddr, hostname)
+		log.Printf("maild: inbound SMTP server listening %s (hostname=%s)", smtpAddr, hostname)
 		errCh <- smtpSrv.ListenAndServe()
 	}()
 
-	// SMTP submission 서버 (AUTH 필수 — 앱 비밀번호로 우리 유저가 제출)
-	// 발송 relay는 DB에서 관리 (0005) — 외부 도메인 제출은 항상 큐로 받고,
-	// 워커가 발송 시점에 relay를 해석한다 (도메인 지정 → default).
+	// SMTP submission server (AUTH required — our users submit with app passwords)
+	// Outbound relays are DB-managed (0005) — external-domain submissions are
+	// always queued; the worker resolves the relay at send time (domain-assigned → default).
 	submissionBackend := smtpbackend.NewSubmissionBackend(st, hostname, true)
 	subSrv := gosmtp.NewServer(submissionBackend)
 	subSrv.Addr = submissionAddr
@@ -130,15 +146,15 @@ func main() {
 	subSrv.MaxMessageBytes = 25 * 1024 * 1024
 	subSrv.MaxRecipients = 50
 	subSrv.TLSConfig = tlsConfig
-	// TLS 미설정 시에만 평문 AUTH 허용 (프록시/터널 뒤 전제)
+	// plaintext AUTH only without TLS (assumes proxy/tunnel in front)
 	subSrv.AllowInsecureAuth = tlsConfig == nil
 	go func() {
-		log.Printf("maild: SMTP submission 서버 시작 %s (STARTTLS=%v)", submissionAddr, tlsConfig != nil)
+		log.Printf("maild: SMTP submission server listening %s (STARTTLS=%v)", submissionAddr, tlsConfig != nil)
 		errCh <- subSrv.ListenAndServe()
 	}()
 
-	// SMTPS submission 서버 (implicit TLS — RFC 8314 권장, 465로 노출).
-	// 같은 백엔드 공유 (인증/큐 로직 동일). TLS 인증서 없으면 생략.
+	// SMTPS submission server (implicit TLS — RFC 8314 recommended, exposed as 465).
+	// Shares the same backend (identical auth/queue logic). Skipped without a TLS cert.
 	var smtpsSrv *gosmtp.Server
 	smtpsAddr := env("MAIL_SMTPS_ADDR", ":2465")
 	if tlsConfig != nil {
@@ -151,13 +167,13 @@ func main() {
 		smtpsSrv.MaxRecipients = 50
 		smtpsSrv.TLSConfig = tlsConfig
 		go func() {
-			log.Printf("maild: SMTPS submission 서버 시작 %s (implicit TLS)", smtpsAddr)
+			log.Printf("maild: SMTPS submission server listening %s (implicit TLS)", smtpsAddr)
 			errCh <- smtpsSrv.ListenAndServeTLS()
 		}()
 	}
 
-	// 발송 큐 워커 — relay는 전부 DB에서 관리 (어드민 UI로 추가/변경,
-	// 재기동 불필요). relay 미설정 도메인의 발송은 일시 오류로 재시도된다.
+	// outbound queue worker — relays are fully DB-managed (add/change via the
+	// admin UI, no restart). Sends for relay-less domains retry as transient errors.
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	worker := queue.NewWorker(st, queue.NewResolvingSender(st), queue.Config{}).
 		WithSigner(queue.NewDKIMSigner(st)).
@@ -168,18 +184,18 @@ func main() {
 		close(workerDone)
 	}()
 
-	// Admin REST API — OIDC Bearer 토큰 + admin 그룹 필요
+	// Admin REST API — requires an OIDC Bearer token + the admin group
 	apiAddr := env("MAIL_API_ADDR", ":8080")
 	issuerURL := os.Getenv("MAIL_OIDC_ISSUER")
 	devInsecure := os.Getenv("MAIL_DEV_INSECURE") == "true"
-	// fail-closed: issuer가 없으면 기동 자체를 거부한다. env 하나 빠졌다고
-	// admin API가 조용히 무인증 개방되는 사고 방지 — 검증 없는 dev 모드는
-	// MAIL_DEV_INSECURE=true 명시 opt-in으로만.
+	// fail-closed: refuse to start without an issuer. Prevents one missing env
+	// from silently opening the admin API unauthenticated — the no-verification
+	// dev mode requires an explicit MAIL_DEV_INSECURE=true opt-in.
 	if issuerURL == "" && !devInsecure {
-		log.Fatal("MAIL_OIDC_ISSUER 미설정 — 검증 없이 띄우려면 MAIL_DEV_INSECURE=true 명시 필요 (프로덕션 금지)")
+		log.Fatal("MAIL_OIDC_ISSUER unset — to run without verification set MAIL_DEV_INSECURE=true explicitly (never in production)")
 	}
 	if devInsecure {
-		log.Printf("★★★ MAIL_DEV_INSECURE=true — API 토큰 검증 꺼짐, 전 요청 admin 취급 (프로덕션 금지) ★★★")
+		log.Printf("★★★ MAIL_DEV_INSECURE=true — API token verification OFF, every request treated as admin (never in production) ★★★")
 	}
 	authCfg := api.AuthConfig{
 		IssuerURL:          issuerURL,
@@ -189,9 +205,9 @@ func main() {
 	}
 	authn, err := api.NewAuthenticator(context.Background(), authCfg)
 	if err != nil {
-		log.Fatalf("OIDC 초기화 실패: %v", err)
+		log.Fatalf("OIDC init failed: %v", err)
 	}
-	// 점검 대상 — smtps는 TLS 설정 시에만 존재
+	// health-check targets — smtps exists only when TLS is configured
 	systemPortList := []api.SystemPort{
 		{Name: "imap", Addr: imapAddr, Kind: "imap", TLS: tlsConfig != nil, Check: true},
 		{Name: "smtp", Addr: smtpAddr, Kind: "smtp", Check: true},
@@ -208,36 +224,37 @@ func main() {
 				{Name: "submission", Port: "587", Mode: "banner"},
 				{Name: "smtps", Port: "465", Mode: "tls"},
 			}),
-		// slowloris 방어 — 헤더/전체 읽기와 유휴 연결에 상한
+		// slowloris defense — caps on header/full reads and idle connections
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 	go func() {
-		log.Printf("maild: Admin API 시작 %s (issuer=%q group=%s)",
+		log.Printf("maild: Admin API listening %s (issuer=%q group=%s)",
 			apiAddr, authCfg.IssuerURL, authCfg.AdminGroup)
 		errCh <- apiSrv.ListenAndServe()
 	}()
 
 	// ── graceful shutdown ────────────────────────────────────
-	// SIGTERM(k8s)/SIGINT를 받으면: 새 연결 수락 중단 → 워커 정지 →
-	// 유예 시간 내 정리. 서버 하나가 죽어도 전체 종료 (crash-fast).
+	// On SIGTERM (k8s)/SIGINT: stop accepting new connections → stop the worker
+	// → clean up within the grace period. Any single server dying exits the whole
+	// process (crash-fast).
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
 	select {
 	case sig := <-sigCh:
-		log.Printf("maild: %s 수신 — graceful shutdown 시작", sig)
+		log.Printf("maild: received %s — starting graceful drain", sig)
 	case err := <-errCh:
-		log.Printf("maild: 서버 오류 — shutdown: %v", err)
+		log.Printf("maild: server error — shutting down: %v", err)
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	workerCancel() // 큐 워커: 현재 배치 마치고 정지
-	notifyCancel() // LISTEN 루프 정지
+	workerCancel() // queue worker: finish the current batch, then stop
+	notifyCancel() // stop the LISTEN loop
 	_ = apiSrv.Shutdown(shutdownCtx)
 	_ = smtpSrv.Shutdown(shutdownCtx)
 	_ = subSrv.Shutdown(shutdownCtx)
@@ -249,7 +266,7 @@ func main() {
 	select {
 	case <-workerDone:
 	case <-shutdownCtx.Done():
-		log.Printf("maild: 워커 종료 대기 타임아웃")
+		log.Printf("maild: timed out waiting for the worker to stop")
 	}
-	log.Printf("maild: 종료 완료")
+	log.Printf("maild: bye")
 }

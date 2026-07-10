@@ -1,8 +1,9 @@
-// Package smtp는 store.Store 위에서 go-smtp 수신 백엔드를 구현한다.
+// Package smtp implements the go-smtp inbound backend on top of store.Store.
 //
-// Phase 2-1: 외부에서 들어오는 메일(port 25 MX 역할)을 받아 수신자 검증 후
-// INBOX에 배달한다. 인증 없음 — MX 수신은 원래 익명이다 (발신자 검증은
-// Phase 2-4의 SPF/DKIM/DMARC 몫). submission(587, AUTH 필수)은 별도.
+// Phase 2-1: accepts mail arriving from outside (port 25 MX role), validates
+// recipients, and delivers to INBOX. No auth — MX reception is inherently
+// anonymous (sender verification belongs to Phase 2-4 SPF/DKIM/DMARC).
+// Submission (587, AUTH required) is separate.
 package smtp
 
 import (
@@ -18,47 +19,58 @@ import (
 	gosmtp "github.com/emersion/go-smtp"
 
 	"github.com/krisamin/mail/internal/auth"
+	"github.com/krisamin/mail/internal/spam"
 	"github.com/krisamin/mail/internal/store"
 )
 
-// opTimeout은 SMTP 콜백 하나가 store에 접근할 때의 상한.
+// opTimeout is the upper bound for a single SMTP callback's store access.
 const opTimeout = 30 * time.Second
 
-// timeNow는 테스트에서 바꿔치기 가능하도록 변수로.
+// timeNow is a variable so tests can swap it out.
 var timeNow = time.Now
 
-// Backend는 수신(MX) SMTP 백엔드.
+// Backend is the inbound (MX) SMTP backend.
 type Backend struct {
 	store    store.Store
-	hostname string // Received 헤더에 박을 서버 이름
-	// verifyInbound가 true면 수신 메일에 SPF/DKIM/DMARC 검증을 돌려
-	// Authentication-Results 헤더를 붙인다 (기록).
+	hostname string // server name stamped into Received headers
+	// verifyInbound, when true, runs SPF/DKIM/DMARC verification on inbound
+	// mail and attaches an Authentication-Results header (record only).
 	verifyInbound bool
-	// enforceDMARC가 true면 발신 도메인의 DMARC 정책을 집행한다:
-	// 판정 fail + p=reject → 550 거절, p=quarantine → Junk 폴더 배달.
-	// p=none이거나 레코드 없으면 기록만 (기존 동작).
+	// enforceDMARC, when true, enforces the sender domain's DMARC policy:
+	// verdict fail + p=reject → 550 rejection, p=quarantine → deliver to Junk.
+	// p=none or no record → record only (previous behavior).
 	enforceDMARC bool
+	// checker screens connections (DNSBL reject, rDNS/HELO quarantine).
+	// nil = screening disabled.
+	checker *spam.Checker
 }
 
-// NewBackend는 store 위에 수신 백엔드를 만든다.
+// NewBackend creates an inbound backend on top of store.
 func NewBackend(st store.Store, hostname string) *Backend {
 	return &Backend{store: st, hostname: hostname}
 }
 
-// WithInboundVerification은 수신 SPF/DKIM/DMARC 검증을 켠다.
+// WithSpamChecker enables connection screening: DNSBL-listed IPs are rejected
+// at MAIL FROM (554); missing FCrDNS + implausible HELO quarantines to Junk.
+func (b *Backend) WithSpamChecker(c *spam.Checker) *Backend {
+	b.checker = c
+	return b
+}
+
+// WithInboundVerification enables inbound SPF/DKIM/DMARC verification.
 func (b *Backend) WithInboundVerification() *Backend {
 	b.verifyInbound = true
 	return b
 }
 
-// WithDMARCEnforcement는 DMARC 정책 집행을 켠다 (검증도 함께 켜짐).
+// WithDMARCEnforcement enables DMARC policy enforcement (verification is enabled too).
 func (b *Backend) WithDMARCEnforcement() *Backend {
 	b.verifyInbound = true
 	b.enforceDMARC = true
 	return b
 }
 
-// NewSession은 연결마다 불린다 (gosmtp.Backend 인터페이스).
+// NewSession is called per connection (gosmtp.Backend interface).
 func (b *Backend) NewSession(c *gosmtp.Conn) (gosmtp.Session, error) {
 	remote := ""
 	if c != nil && c.Conn() != nil {
@@ -71,13 +83,13 @@ func (b *Backend) NewSession(c *gosmtp.Conn) (gosmtp.Session, error) {
 	return &Session{backend: b, remoteAddr: remote, heloName: helo}, nil
 }
 
-// rcpt는 검증 통과한 수신자 하나.
+// rcpt is a single recipient that passed validation.
 type rcpt struct {
 	address string
 	user    *store.Account
 }
 
-// Session은 SMTP 트랜잭션 하나 (gosmtp.Session 구현).
+// Session is a single SMTP transaction (implements gosmtp.Session).
 type Session struct {
 	backend    *Backend
 	remoteAddr string
@@ -85,18 +97,44 @@ type Session struct {
 
 	from     string
 	rcptList []rcpt
+	// suspicious marks a weak-signal connection (no FCrDNS + bogus HELO) —
+	// delivery goes to Junk instead of INBOX.
+	suspicious bool
 }
 
 var _ gosmtp.Session = (*Session)(nil)
 
 func (s *Session) Mail(from string, opts *gosmtp.MailOptions) error {
+	// Connection screening at MAIL FROM — after HELO (so we have the name)
+	// but before any recipient/body work is wasted on a listed sender.
+	if s.backend.checker != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		defer cancel()
+		ip := remoteIP(s.remoteAddr)
+
+		if v := s.backend.checker.CheckDNSBL(ctx, ip); v.Listed {
+			log.Printf("smtp: DNSBL reject ip=%s zone=%s code=%s from=%s", ip, v.Zone, v.Code, from)
+			return &gosmtp.SMTPError{
+				Code:         554,
+				EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
+				Message:      "IP listed by " + v.Zone,
+			}
+		}
+		// weak signals: never reject, quarantine at delivery time
+		conn := s.backend.checker.CheckConnection(ctx, ip, s.heloName)
+		if conn.Suspicious {
+			s.suspicious = true
+			log.Printf("smtp: suspicious connection ip=%s helo=%q signals=%v from=%s",
+				ip, s.heloName, conn.SignalList, from)
+		}
+	}
 	s.from = from
 	return nil
 }
 
-// Rcpt는 수신자가 우리 유저인지 검증한다. 아니면 550 5.1.1.
-// ★여기서 거절해야 backscatter(수락 후 반송 스팸)를 안 만든다.
-// 별칭·와일드카드도 배달 대상 (ResolveAddress).
+// Rcpt verifies the recipient is one of our users. Otherwise 550 5.1.1.
+// ★Rejecting here is what prevents backscatter (accept-then-bounce spam).
+// Aliases and wildcards are also deliverable (ResolveAddress).
 func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
@@ -116,9 +154,9 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	return nil
 }
 
-// Data는 본문을 받아 각 수신자의 INBOX에 배달한다.
-// DMARC 집행이 켜져 있으면: fail+p=reject → 550 거절,
-// fail+p=quarantine → Junk 폴더 배달.
+// Data receives the body and delivers it to each recipient's INBOX.
+// With DMARC enforcement on: fail+p=reject → 550 rejection,
+// fail+p=quarantine → deliver to Junk folder.
 func (s *Session) Data(r io.Reader) error {
 	if len(s.rcptList) == 0 {
 		return &gosmtp.SMTPError{
@@ -133,9 +171,13 @@ func (s *Session) Data(r io.Reader) error {
 		return err
 	}
 
-	// SPF/DKIM/DMARC 검증 → Authentication-Results 기록 + 정책 판단
+	// SPF/DKIM/DMARC verification → record Authentication-Results + policy decision
 	var authHeader []byte
 	folder := "INBOX"
+	if s.suspicious {
+		// connection screening (no FCrDNS + implausible HELO) → quarantine
+		folder = "Junk"
+	}
 	if s.backend.verifyInbound {
 		ip := remoteIP(s.remoteAddr)
 		vr := auth.VerifyInbound(raw, auth.VerifyOptions{
@@ -145,10 +187,10 @@ func (s *Session) Data(r io.Reader) error {
 			Hostname:     s.backend.hostname,
 		})
 		authHeader = vr.Header
-		log.Printf("smtp: 인증 검증 from=%s ip=%s spf=%v dkim=%v dmarc=%v policy=%s",
+		log.Printf("smtp: auth verification from=%s ip=%s spf=%v dkim=%v dmarc=%v policy=%s",
 			s.from, ip, vr.SPFPass, vr.DKIMPass, vr.DMARCPass, vr.DMARCPolicy)
 
-		// DMARC 정책 집행 — 발신 도메인이 공표한 정책을 따른다.
+		// DMARC policy enforcement — follow the policy the sender domain published.
 		if s.backend.enforceDMARC && vr.DMARCEvaluated && !vr.DMARCPass {
 			switch vr.DMARCPolicy {
 			case "reject":
@@ -163,29 +205,31 @@ func (s *Session) Data(r io.Reader) error {
 				log.Printf("smtp: DMARC quarantine → Junk from=%s ip=%s", s.from, ip)
 			}
 		}
-		// From 헤더 파싱 불가(부재/기형/다중)는 DMARC 평가 자체를 못 한
-		// 상태 — 집행 모드에서 그냥 통과시키면 기형 From으로 reject 정책을
-		// 우회할 수 있다 (fail-open). 의심 신호로 Junk 격리 (RFC 7489 §6.6.1).
+		// An unparseable From header (missing/malformed/multiple) means DMARC
+		// evaluation itself was impossible — letting it pass in enforcement
+		// mode would allow bypassing a reject policy with a malformed From
+		// (fail-open). Quarantine to Junk as a suspicious signal (RFC 7489 §6.6.1).
 		if s.backend.enforceDMARC && !vr.FromParsed {
 			folder = "Junk"
-			log.Printf("smtp: From 헤더 파싱 불가 → Junk 격리 from=%s ip=%s", s.from, ip)
+			log.Printf("smtp: unparseable From header → quarantined to Junk from=%s ip=%s", s.from, ip)
 		}
 	}
 
 	now := timeNow()
 	delivered := 0
 	for _, rc := range s.rcptList {
-		// 수신자별 Received 헤더 prepend (RFC 5321 §4.4 — 배달 추적용)
+		// Prepend a per-recipient Received header (RFC 5321 §4.4 — delivery tracing)
 		stamped := s.receivedHeader(rc.address, now)
 		stamped = append(stamped, authHeader...)
 		stamped = append(stamped, raw...)
 
 		if err := s.deliver(rc, folder, stamped, now); err != nil {
-			// 부분 배달 실패를 250으로 삼키면 송신 서버는 재시도하지 않고
-			// 나머지 수신자 메일이 조용히 유실된다 — 451로 트랜잭션 전체를
-			// 거절해 재전송을 유도 (이미 배달된 수신자는 중복 수신 감수,
-			// at-least-once가 유실보다 낫다).
-			log.Printf("smtp: 배달 실패 to=%s from=%s (전체 451 거절): %v", rc.address, s.from, err)
+			// Swallowing a partial delivery failure with 250 means the sending
+			// server won't retry and the remaining recipients' mail is silently
+			// lost — reject the whole transaction with 451 to induce a resend
+			// (already-delivered recipients may get duplicates; at-least-once
+			// beats loss).
+			log.Printf("smtp: delivery failed to=%s from=%s (rejecting whole transaction with 451): %v", rc.address, s.from, err)
 			return &gosmtp.SMTPError{
 				Code:         451,
 				EnhancedCode: gosmtp.EnhancedCode{4, 3, 0},
@@ -195,11 +239,11 @@ func (s *Session) Data(r io.Reader) error {
 		delivered++
 	}
 
-	log.Printf("smtp: 배달 완료 from=%s rcptList=%d/%d folder=%s size=%d", s.from, delivered, len(s.rcptList), folder, len(raw))
+	log.Printf("smtp: delivery complete from=%s rcptList=%d/%d folder=%s size=%d", s.from, delivered, len(s.rcptList), folder, len(raw))
 	return nil
 }
 
-// deliver는 수신자의 지정 폴더에 메시지를 저장한다. 폴더 없으면 생성.
+// deliver stores the message in the recipient's given folder. Creates the folder if missing.
 func (s *Session) deliver(rc rcpt, folder string, raw []byte, now time.Time) error {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
@@ -209,10 +253,10 @@ func (s *Session) deliver(rc rcpt, folder string, raw []byte, now time.Time) err
 		box, err = s.backend.store.CreateMailbox(ctx, rc.user.ID, folder)
 	}
 	if err != nil {
-		return fmt.Errorf("%s 확보: %w", folder, err)
+		return fmt.Errorf("ensure %s: %w", folder, err)
 	}
 
-	// 새 메일은 플래그 없음 (= unseen)
+	// new mail has no flags (= unseen)
 	_, err = s.backend.store.AppendMessage(ctx, box.ID, raw, nil, now)
 	if err != nil {
 		return fmt.Errorf("append: %w", err)
@@ -220,7 +264,7 @@ func (s *Session) deliver(rc rcpt, folder string, raw []byte, now time.Time) err
 	return nil
 }
 
-// receivedHeader는 RFC 5321 형식의 Received 헤더를 만든다.
+// receivedHeader builds an RFC 5321-style Received header.
 func (s *Session) receivedHeader(forAddr string, now time.Time) []byte {
 	helo := s.heloName
 	if helo == "" {
@@ -233,7 +277,7 @@ func (s *Session) receivedHeader(forAddr string, now time.Time) []byte {
 	return []byte(b.String())
 }
 
-// remoteIP는 "1.2.3.4:5678" 형태에서 IP를 뽑는다.
+// remoteIP extracts the IP from a "1.2.3.4:5678"-style address.
 func remoteIP(remoteAddr string) net.IP {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
@@ -245,6 +289,7 @@ func remoteIP(remoteAddr string) net.IP {
 func (s *Session) Reset() {
 	s.from = ""
 	s.rcptList = nil
+	s.suspicious = false
 }
 
 func (s *Session) Logout() error {

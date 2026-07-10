@@ -8,11 +8,11 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// EnqueueOutbound는 수신자별로 발송 항목을 큐에 넣는다 (한 트랜잭션).
+// EnqueueOutbound enqueues an outbound item per recipient (one transaction).
 func (s *Store) EnqueueOutbound(ctx context.Context, from string, rcptList []string, raw []byte) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("트랜잭션 시작: %w", err)
+		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -20,29 +20,37 @@ func (s *Store) EnqueueOutbound(ctx context.Context, from string, rcptList []str
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO outbound_queue (envelope_from, envelope_rcpt, raw)
 			 VALUES ($1, $2, $3)`, from, rcpt, raw); err != nil {
-			return fmt.Errorf("큐 삽입 (%s): %w", rcpt, err)
+			return fmt.Errorf("queue insert (%s): %w", rcpt, err)
 		}
 	}
 	return tx.Commit(ctx)
 }
 
-// DueOutbound는 발송 시각이 지난 pending 항목을 최대 limit개 가져온다.
-// FOR UPDATE SKIP LOCKED — 여러 워커가 떠도 같은 행을 안 잡는다.
-// (행 잠금은 이 호출의 트랜잭션이 끝나면 풀리므로, 워커는 가져온 뒤
-// 상태를 즉시 갱신하는 게 아니라 발송 후 Mark*를 호출한다. Phase 2-3의
-// 단일 워커 전제에선 충분하고, 다중 워커는 잠금 유지 트랜잭션으로 확장.)
+// DueOutbound fetches up to limit pending items whose send time has passed.
+// FOR UPDATE SKIP LOCKED — multiple workers never grab the same row.
+//
+// ★Claim lease: fetched rows get next_attempt_at pushed forward by
+// claimLease in the same statement. If the worker crashes mid-send or
+// MarkOutboundSent fails, the row is NOT immediately re-eligible — it only
+// comes back after the lease expires. This bounds the duplicate-send window
+// (at-least-once stays, but a marking hiccup no longer causes an instant
+// duplicate on the next 10s poll).
 func (s *Store) DueOutbound(ctx context.Context, limit int) ([]*store.OutboundMessage, error) {
+	const claimLease = 5 * time.Minute
 	const q = `
-		SELECT id, envelope_from, envelope_rcpt, raw, status, attempt_count,
-		       next_attempt_at, COALESCE(last_error, ''), created_at
-		FROM outbound_queue
-		WHERE status = 'pending' AND next_attempt_at <= now()
-		ORDER BY next_attempt_at
-		LIMIT $1
-		FOR UPDATE SKIP LOCKED`
-	rows, err := s.pool.Query(ctx, q, limit)
+		UPDATE outbound_queue SET next_attempt_at = now() + $2::interval
+		WHERE id IN (
+			SELECT id FROM outbound_queue
+			WHERE status = 'pending' AND next_attempt_at <= now()
+			ORDER BY next_attempt_at
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING id, envelope_from, envelope_rcpt, raw, status, attempt_count,
+		          next_attempt_at, COALESCE(last_error, ''), created_at`
+	rows, err := s.pool.Query(ctx, q, limit, claimLease.String())
 	if err != nil {
-		return nil, fmt.Errorf("due 조회: %w", err)
+		return nil, fmt.Errorf("due lookup: %w", err)
 	}
 	defer rows.Close()
 
@@ -58,12 +66,12 @@ func (s *Store) DueOutbound(ctx context.Context, limit int) ([]*store.OutboundMe
 	return out, rows.Err()
 }
 
-// MarkOutboundSent는 발송 성공 처리.
+// MarkOutboundSent marks delivery success.
 func (s *Store) MarkOutboundSent(ctx context.Context, id int64) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue SET status = 'sent', updated_at = now() WHERE id = $1`, id)
 	if err != nil {
-		return fmt.Errorf("sent 처리: %w", err)
+		return fmt.Errorf("mark sent: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -71,14 +79,14 @@ func (s *Store) MarkOutboundSent(ctx context.Context, id int64) error {
 	return nil
 }
 
-// MarkOutboundRetry는 실패 기록 + 다음 시도 시각 설정. attemptCount 증가.
+// MarkOutboundRetry records the failure + sets the next attempt time. attemptCount is incremented.
 func (s *Store) MarkOutboundRetry(ctx context.Context, id int64, errMsg string, nextAttempt time.Time) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
 		 SET attempt_count = attempt_count + 1, last_error = $2, next_attempt_at = $3, updated_at = now()
 		 WHERE id = $1`, id, errMsg, nextAttempt)
 	if err != nil {
-		return fmt.Errorf("retry 처리: %w", err)
+		return fmt.Errorf("mark retry: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -86,14 +94,14 @@ func (s *Store) MarkOutboundRetry(ctx context.Context, id int64, errMsg string, 
 	return nil
 }
 
-// MarkOutboundFailed는 영구 실패 처리 (재시도 소진 또는 5xx 영구 오류).
+// MarkOutboundFailed marks a permanent failure (retries exhausted or a permanent 5xx error).
 func (s *Store) MarkOutboundFailed(ctx context.Context, id int64, errMsg string) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
 		 SET status = 'failed', attempt_count = attempt_count + 1, last_error = $2, updated_at = now()
 		 WHERE id = $1`, id, errMsg)
 	if err != nil {
-		return fmt.Errorf("failed 처리: %w", err)
+		return fmt.Errorf("mark failed: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound

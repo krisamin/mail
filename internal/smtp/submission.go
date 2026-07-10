@@ -16,24 +16,27 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// SubmissionBackend는 메일 제출(submission, 587 역할) 백엔드.
-// 수신(MX)과 반대로 **AUTH가 필수**다 — 우리 유저가 앱 비밀번호로 인증하고
-// 메일을 내보내는 문. DD-02: 메일 앱 인증 = 앱 비밀번호.
+// SubmissionBackend is the mail submission backend (port 587 role).
+// Unlike inbound (MX), **AUTH is required** — it's the door where our users
+// authenticate with an app password and send mail out. DD-02: mail app auth
+// = app password.
 //
-// 라우팅: 로컬 도메인 수신자는 직접 배달, 외부 도메인은 발송 큐로
-// (Phase 2-3). 큐가 없으면(EnqueueDisabled) 외부 도메인은 550 거절.
+// Routing: recipients on local domains are delivered directly; external
+// domains go to the outbound queue (Phase 2-3). Without a queue
+// (EnqueueDisabled), external domains are rejected with 550.
 type SubmissionBackend struct {
 	store    store.Store
 	hostname string
-	// enqueueEnabled가 false면 외부 도메인 수신자를 거절한다
-	// (발송 큐 워커가 안 도는 구성 — dev에서 relay 미설정일 때).
+	// enqueueEnabled=false rejects recipients on external domains
+	// (configurations where no outbound queue worker runs — e.g. dev
+	// without relay configured).
 	enqueueEnabled bool
-	// limiter는 인증 브루트포스 방어 (IP 단위).
+	// limiter defends against auth brute force (per IP).
 	limiter *guard.Limiter
 }
 
-// NewSubmissionBackend는 submission 백엔드를 만든다.
-// enqueueEnabled: 외부 도메인 수신자를 발송 큐에 넣을지 여부.
+// NewSubmissionBackend creates a submission backend.
+// enqueueEnabled: whether recipients on external domains go to the outbound queue.
 func NewSubmissionBackend(st store.Store, hostname string, enqueueEnabled bool) *SubmissionBackend {
 	return &SubmissionBackend{
 		store: st, hostname: hostname, enqueueEnabled: enqueueEnabled,
@@ -41,7 +44,7 @@ func NewSubmissionBackend(st store.Store, hostname string, enqueueEnabled bool) 
 	}
 }
 
-// NewSession은 연결마다 불린다.
+// NewSession is called per connection.
 func (b *SubmissionBackend) NewSession(c *gosmtp.Conn) (gosmtp.Session, error) {
 	remote := ""
 	if c != nil && c.Conn() != nil {
@@ -54,30 +57,30 @@ func (b *SubmissionBackend) NewSession(c *gosmtp.Conn) (gosmtp.Session, error) {
 	return &SubmissionSession{backend: b, remoteAddr: remote, heloName: helo}, nil
 }
 
-// SubmissionSession은 인증된 제출 트랜잭션.
+// SubmissionSession is an authenticated submission transaction.
 type SubmissionSession struct {
 	backend    *SubmissionBackend
 	remoteAddr string
 	heloName   string
 
-	user        *store.Account // 인증 성공 시 채워짐
-	accountAddr string         // 인증에 쓴 주소 (envelope from 검증용)
+	user        *store.Account // populated on successful auth
+	accountAddr string         // address used to authenticate (for envelope-from validation)
 
 	from     string
-	rcptList []rcpt   // 로컬 배달 대상
-	external []string // 외부 도메인 → 발송 큐 대상
+	rcptList []rcpt   // local delivery targets
+	external []string // external domains → outbound queue targets
 }
 
 var _ gosmtp.Session = (*SubmissionSession)(nil)
 var _ gosmtp.AuthSession = (*SubmissionSession)(nil)
 
-// AuthMechanisms는 지원 SASL 메커니즘 목록.
+// AuthMechanisms lists the supported SASL mechanisms.
 func (s *SubmissionSession) AuthMechanisms() []string {
 	return []string{sasl.Plain}
 }
 
-// Auth는 SASL 서버를 돌려준다. PLAIN = 주소 + 앱 비밀번호.
-// IP 단위 브루트포스 방어: 반복 실패 시 일정 시간 차단.
+// Auth returns the SASL server. PLAIN = address + app password.
+// Per-IP brute-force defense: repeated failures trigger a temporary block.
 func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 	if mech != sasl.Plain {
 		return nil, gosmtp.ErrAuthUnsupported
@@ -124,8 +127,9 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 	}), nil
 }
 
-// Mail은 AUTH 필수 + envelope from이 인증 계정 소유 주소여야 한다
-// (발신자 위조 방지). 본인 주소 또는 본인에게 걸린 별칭(와일드카드 포함).
+// Mail requires AUTH and the envelope from must be an address owned by the
+// authenticated account (sender-forgery prevention). Own address or an alias
+// bound to the account (wildcards included).
 func (s *SubmissionSession) Mail(from string, opts *gosmtp.MailOptions) error {
 	if s.user == nil {
 		return gosmtp.ErrAuthRequired
@@ -149,7 +153,7 @@ func (s *SubmissionSession) Mail(from string, opts *gosmtp.MailOptions) error {
 	return nil
 }
 
-// Rcpt는 수신자를 분류한다: 로컬 도메인이면 유저 확인, 외부면 Phase 2-3 전까지 거절.
+// Rcpt classifies the recipient: local domain → verify user, external → rejected until Phase 2-3.
 func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	if s.user == nil {
 		return gosmtp.ErrAuthRequired
@@ -169,7 +173,7 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 
 	if _, err := s.backend.store.FindDomain(ctx, domain); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			// 외부 도메인 → 발송 큐 (활성화된 경우만)
+			// external domain → outbound queue (only when enabled)
 			if !s.backend.enqueueEnabled {
 				return &gosmtp.SMTPError{
 					Code:         550,
@@ -198,11 +202,12 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	return nil
 }
 
-// Data는 본문을 받아 로컬 수신자에게 배달하고, 외부 수신자는 발송 큐에 넣는다.
+// Data receives the body, delivers to local recipients, and enqueues external
+// recipients to the outbound queue.
 //
-// 실패 정책: 한 건이라도 배달/큐 삽입에 실패하면 451로 트랜잭션 전체를
-// 거절한다 — 250을 돌려주고 일부를 조용히 유실하는 것보다, 클라이언트
-// 재전송으로 인한 중복 배달(at-least-once)이 낫다.
+// Failure policy: if even one delivery/enqueue fails, reject the whole
+// transaction with 451 — duplicate delivery from a client resend
+// (at-least-once) beats returning 250 and silently losing part of the mail.
 func (s *SubmissionSession) Data(r io.Reader) error {
 	if len(s.rcptList) == 0 && len(s.external) == 0 {
 		return &gosmtp.SMTPError{
@@ -216,9 +221,11 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		return err
 	}
 
-	// 헤더 From 검증 — envelope(Mail)만 믿으면 헤더 From:에 타인 주소를
-	// 박아 보낼 수 있고, 큐 워커가 도메인 키로 DKIM 서명까지 얹어준다.
-	// 헤더 From도 인증 계정 소유 주소여야 한다 (스푸핑 차단).
+	// Header From validation — trusting only the envelope (Mail) would let
+	// someone stamp another person's address into the header From:, and the
+	// queue worker would even add a DKIM signature with the domain key.
+	// The header From must also be an address owned by the authenticated
+	// account (spoofing prevention).
 	if headerFrom := headerFromAddress(raw); headerFrom != "" && headerFrom != s.accountAddr {
 		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 		ok, err := s.backend.store.CanSendAs(ctx, s.user.ID, headerFrom)
@@ -235,7 +242,7 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		}
 	}
 
-	// 배달 로직은 수신 세션과 공유
+	// delivery logic is shared with the inbound session
 	inbound := &Session{
 		backend:    &Backend{store: s.backend.store, hostname: s.backend.hostname},
 		remoteAddr: s.remoteAddr,
@@ -249,7 +256,7 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		stamped := inbound.receivedHeader(rc.address, now)
 		stamped = append(stamped, raw...)
 		if err := inbound.deliver(rc, "INBOX", stamped, now); err != nil {
-			log.Printf("submission: 배달 실패 to=%s from=%s: %v", rc.address, s.from, err)
+			log.Printf("submission: delivery failed to=%s from=%s: %v", rc.address, s.from, err)
 			return &gosmtp.SMTPError{
 				Code:         451,
 				EnhancedCode: gosmtp.EnhancedCode{4, 3, 0},
@@ -259,7 +266,8 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		delivered++
 	}
 
-	// 외부 수신자 → 발송 큐 (Received 헤더는 서버 통과 증적으로 동일하게 찍음)
+	// external recipients → outbound queue (Received header stamped the same
+	// way as evidence the message passed through this server)
 	enqueued := 0
 	if len(s.external) > 0 {
 		stamped := inbound.receivedHeader(s.external[0], now)
@@ -268,9 +276,10 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		err := s.backend.store.EnqueueOutbound(ctx, s.from, s.external, stamped)
 		cancel()
 		if err != nil {
-			// 큐 삽입 실패를 250으로 삼키면 클라이언트는 "보냈다"고 믿는데
-			// 외부 수신자는 영원히 못 받는다 — 451로 재시도 유도.
-			log.Printf("submission: 큐 삽입 실패 from=%s rcptList=%v: %v", s.from, s.external, err)
+			// Swallowing an enqueue failure with 250 makes the client believe
+			// it was sent while the external recipient never receives it —
+			// return 451 to induce a retry.
+			log.Printf("submission: enqueue failed from=%s rcptList=%v: %v", s.from, s.external, err)
 			return &gosmtp.SMTPError{
 				Code:         451,
 				EnhancedCode: gosmtp.EnhancedCode{4, 3, 0},
@@ -280,7 +289,7 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		enqueued = len(s.external)
 	}
 
-	log.Printf("submission: 제출 완료 user=%s local=%d/%d queued=%d/%d size=%d",
+	log.Printf("submission: submission complete user=%s local=%d/%d queued=%d/%d size=%d",
 		s.accountAddr, delivered, len(s.rcptList), enqueued, len(s.external), len(raw))
 	return nil
 }
@@ -291,9 +300,9 @@ func (s *SubmissionSession) Reset() {
 	s.external = nil
 }
 
-// headerFromAddress는 메시지 헤더 블록의 From: 주소를 소문자로 뽑는다.
-// 파싱 실패/부재 시 빈 문자열 (호출부에서 검증 스킵 — envelope 검증은
-// Mail 단계에서 이미 통과한 상태).
+// headerFromAddress extracts the From: address from the message header block,
+// lowercased. On parse failure/absence returns "" (caller skips validation —
+// envelope validation already passed at the Mail stage).
 func headerFromAddress(raw []byte) string {
 	headerEnd := bytes.Index(raw, []byte("\r\n\r\n"))
 	if headerEnd < 0 {

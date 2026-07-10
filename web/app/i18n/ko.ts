@@ -125,6 +125,9 @@ export const ko = {
   "queue.filterFailed": "실패",
   "queue.empty": "항목이 없어요.",
   "queue.attemptCount": "시도 {{count}}회",
+  "queue.filterCanceled": "취소됨",
+  "common.cancel": "취소",
+  "common.confirmCancelQueue": "이 발송 항목을 취소할까요? 대기 중인 항목만 취소할 수 있어요.",
 
   // ── admin system ────────────────────────────────────────
   "system.title": "시스템 점검",

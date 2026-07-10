@@ -1,8 +1,9 @@
-// Package store는 메일 저장 엔진의 도메인 타입과 인터페이스를 정의한다.
+// Package store defines the domain types and interfaces of the mail storage engine.
 //
-// 여기엔 SQL도 IMAP도 없다 — 순수 도메인. Postgres 구현체(store/postgres)나
-// IMAP 백엔드(internal/imap)가 이 인터페이스에 의존한다. 덕분에 나중에
-// 본문 저장을 DB→S3로 바꾸거나 테스트용 in-memory 구현을 끼우기 쉽다.
+// No SQL and no IMAP here — pure domain. The Postgres implementation
+// (store/postgres) and the IMAP backend (internal/imap) depend on these
+// interfaces. This makes it easy to later move body storage from DB to S3
+// or plug in an in-memory implementation for tests.
 package store
 
 import (
@@ -11,97 +12,98 @@ import (
 	"time"
 )
 
-// ── 에러 ────────────────────────────────────────────────────
+// ── Errors ──────────────────────────────────────────────────
 
-// ErrNotFound는 조회 대상이 없을 때. 구현체가 이 sentinel을 반환해야
-// 소비자(IMAP 백엔드 등)가 구현체 패키지를 import하지 않고 분기할 수 있다.
+// ErrNotFound is returned when the lookup target does not exist. Implementations
+// must return this sentinel so consumers (IMAP backend, etc.) can branch on it
+// without importing the implementation package.
 var ErrNotFound = errors.New("not found")
 
-// ErrAuthFailed는 인증 실패.
+// ErrAuthFailed is an authentication failure.
 var ErrAuthFailed = errors.New("authentication failed")
 
-// ── 도메인 타입 ─────────────────────────────────────────────
+// ── Domain types ────────────────────────────────────────────
 
-// Domain은 메일 도메인 (멀티테넌시 최상위). 예: krisam.in
+// Domain is a mail domain (top level of multi-tenancy). E.g. krisam.in
 type Domain struct {
 	ID        int64
 	Name      string
 	Active    bool
 	CreatedAt time.Time
 
-	// DKIM 서명 (Phase 2-4). Selector가 비어있으면 서명 안 함.
-	// 공개키는 <selector>._domainkey.<name> TXT로 게시.
+	// DKIM signing (Phase 2-4). No signing when Selector is empty.
+	// Public key is published as a <selector>._domainkey.<name> TXT record.
 	DKIMSelector   string
 	DKIMPrivateKey string // PKCS#8 PEM
 
-	// 발신 relay 지정 (0005). nil = default relay 사용.
+	// Outbound relay assignment (0005). nil = use default relay.
 	RelayID *int64
 }
 
-// Relay는 외부 발송용 SMTP relay (Resend, SES, ...).
-// 도메인별 지정(domain.relay_id) → default → env fallback 순으로 해석.
+// Relay is an SMTP relay for external delivery (Resend, SES, ...).
+// Resolved in order: per-domain assignment (domain.relay_id) → default → env fallback.
 type Relay struct {
 	ID        int64
-	Name      string // 'resend' 등 표시명
+	Name      string // display name such as 'resend'
 	Host      string
 	Port      int
 	Username  string
-	Password  string // 평문 (API로는 노출 금지 — 쓰기 전용)
+	Password  string // plaintext (never exposed via API — write-only)
 	StartTLS  bool
 	IsDefault bool
 	Active    bool
 	CreatedAt time.Time
 }
 
-// AccountKind 값 — account.kind 컬럼 (0007).
+// AccountKind values — account.kind column (0007).
 const (
-	AccountKindUser    = "user"    // 사람 — OIDC 로그인 (JIT 프로비저닝)
-	AccountKindService = "service" // 시스템 — 로그인 불가, 주소+앱비밀번호만
+	AccountKindUser    = "user"    // human — OIDC login (JIT provisioning)
+	AccountKindService = "service" // system — no login, address + app passwords only
 )
 
-// Account는 유저 = OIDC 신원 (0006). 주소는 address 테이블에 별도.
-// 사람 로그인은 OIDC(sub 기준 JIT 프로비저닝), 메일앱은 앱 비밀번호.
-// 서비스 계정(0007)은 sub가 'service:<email>' 합성값이라 웹 로그인 불가.
+// Account is a user = OIDC identity (0006). Addresses live separately in the address table.
+// Humans log in via OIDC (JIT provisioning keyed by sub); mail apps use app passwords.
+// Service accounts (0007) have a synthetic sub 'service:<email>' so web login is impossible.
 type Account struct {
 	ID          int64
-	OIDCSubject string // OIDC sub 클레임 (유니크 — 진짜 신원 키)
-	OIDCEmail   string // IdP가 내려준 email (참고/표시용, 로그인 시 갱신)
+	OIDCSubject string // OIDC sub claim (unique — the real identity key)
+	OIDCEmail   string // email from the IdP (informational/display, refreshed on login)
 	Kind        string // AccountKindUser | AccountKindService
-	QuotaBytes  *int64 // nil = 무제한
+	QuotaBytes  *int64 // nil = unlimited
 	Active      bool
 	CreatedAt   time.Time
 }
 
-// Mailbox는 IMAP 폴더 (INBOX, Sent, ...).
+// Mailbox is an IMAP folder (INBOX, Sent, ...).
 type Mailbox struct {
 	ID          int64
 	AccountID   int64
 	Name        string
-	UIDValidity uint32 // 생성 시 고정. 재생성되면 바뀜 → 클라 캐시 무효화
-	UIDNext     uint32 // 다음 부여할 UID
+	UIDValidity uint32 // fixed at creation. Changes on recreation → invalidates client caches
+	UIDNext     uint32 // next UID to assign
 	Subscribed  bool
 	CreatedAt   time.Time
 }
 
-// Message는 메일박스 내 메시지 메타데이터. 원문 본문은 BlobID로 참조.
+// Message is message metadata within a mailbox. Raw body is referenced via BlobID.
 type Message struct {
 	ID           int64
 	MailboxID    int64
-	UID          uint32 // 메일박스 스코프. 단조 증가, 재사용 안 함
+	UID          uint32 // mailbox-scoped. Monotonically increasing, never reused
 	BlobID       int64
 	SizeBytes    int64
 	InternalDate time.Time // IMAP INTERNALDATE
-	Subject      string    // 헤더 캐시 (SEARCH/정렬용)
+	Subject      string    // header cache (for SEARCH/sorting)
 	FromAddr     string
 	Flags        []string // '\Seen', '\Flagged', ...
 	CreatedAt    time.Time
 }
 
-// AppPassword는 메일앱(IMAP/SMTP) 인증용 앱 비밀번호. OAuth로 발급/revoke.
+// AppPassword is an app password for mail-app (IMAP/SMTP) authentication. Issued/revoked via OAuth.
 type AppPassword struct {
 	ID        int64
 	AccountID int64
-	Label     string // 'Thunderbird 노트북'
+	Label     string // 'Thunderbird laptop'
 	Hash      string // argon2id
 	ScopeList []string
 	LastUsed  *time.Time
@@ -109,29 +111,29 @@ type AppPassword struct {
 	RevokedAt *time.Time
 }
 
-// Address는 계정 소유의 메일 주소. local_part '*'는 도메인 catch-all.
-// 유저의 모든 수신/발신 주소가 여기 산다 (0006 — 기존 계정주소+별칭 통합).
+// Address is a mail address owned by an account. local_part '*' is the domain catch-all.
+// All of a user's receiving/sending addresses live here (0006 — merged former account addresses + aliases).
 type Address struct {
 	ID        int64
 	DomainID  int64
-	LocalPart string // '*' = 와일드카드 (그 도메인의 모든 미지정 주소)
+	LocalPart string // '*' = wildcard (all otherwise-unassigned addresses of that domain)
 	AccountID int64
 	CreatedAt time.Time
 
-	// 조회 편의 필드 (JOIN으로 채움)
-	DomainName   string // 주소의 도메인 이름
-	AccountEmail string // 소유 계정의 oidc_email (표시용)
+	// Convenience fields for lookups (filled via JOIN)
+	DomainName   string // domain name of the address
+	AccountEmail string // oidc_email of the owning account (for display)
 }
 
-// OutboundStatus는 발송 큐 항목의 상태.
+// OutboundStatus is the state of an outbound queue item.
 const (
-	OutboundPending = "pending" // 발송 대기 (재시도 포함)
-	OutboundSent    = "sent"    // 발송 완료
-	OutboundFailed  = "failed"  // 영구 실패 (bounce 대상)
+	OutboundPending = "pending" // waiting to be sent (including retries)
+	OutboundSent    = "sent"    // delivered
+	OutboundFailed  = "failed"  // permanent failure (bounce candidate)
 )
 
-// OutboundMessage는 발송 큐의 한 항목. 수신자(rcpt) 단위 —
-// 재시도/실패를 수신자별로 독립 추적한다.
+// OutboundMessage is one item in the outbound queue. Per-recipient (rcpt) —
+// retries/failures are tracked independently per recipient.
 type OutboundMessage struct {
 	ID            int64
 	EnvelopeFrom  string
@@ -144,7 +146,7 @@ type OutboundMessage struct {
 	CreatedAt     time.Time
 }
 
-// MailboxStatus는 SELECT/STATUS가 요구하는 집계값.
+// MailboxStatus holds the aggregates required by SELECT/STATUS.
 type MailboxStatus struct {
 	MessageCount uint32
 	UnseenCount  uint32
@@ -153,32 +155,32 @@ type MailboxStatus struct {
 	UIDValidity  uint32
 }
 
-// ── 인터페이스 ──────────────────────────────────────────────
+// ── Interfaces ──────────────────────────────────────────────
 
-// Store는 메일 저장 엔진의 최상위 인터페이스.
-// Postgres 구현체가 이걸 만족한다. IMAP/SMTP 백엔드가 소비한다.
+// Store is the top-level interface of the mail storage engine.
+// The Postgres implementation satisfies it. IMAP/SMTP backends consume it.
 type Store interface {
-	// 인증
+	// Authentication
 	AuthenticateAppPassword(ctx context.Context, address, password string) (*Account, error)
-	// FindAccountByAddress는 주소를 소유한 활성 계정을 찾는다 (정확 매칭만 —
-	// 와일드카드 제외. IMAP/SMTP 로그인과 셀프서비스 매핑용).
+	// FindAccountByAddress finds the active account that owns the address (exact
+	// match only — no wildcards. Used for IMAP/SMTP login and self-service mapping).
 	FindAccountByAddress(ctx context.Context, address string) (*Account, error)
-	// FindAccountBySubject는 OIDC sub로 활성 계정을 찾는다 (웹 로그인 신원).
+	// FindAccountBySubject finds an active account by OIDC sub (web login identity).
 	FindAccountBySubject(ctx context.Context, subject string) (*Account, error)
-	// ResolveAddress는 배달 대상 계정을 찾는다.
-	// 우선순위: 정확 주소 > 와일드카드(*@domain).
-	// SMTP 수신/submission의 로컬 배달이 이걸 쓴다.
+	// ResolveAddress finds the account to deliver to.
+	// Priority: exact address > wildcard (*@domain).
+	// Used by local delivery for SMTP receiving/submission.
 	ResolveAddress(ctx context.Context, address string) (*Account, error)
-	// CanSendAs는 계정이 해당 주소로 발신 가능한지 (소유 주소 —
-	// 와일드카드 주소 포함).
+	// CanSendAs reports whether the account may send as the given address
+	// (owned addresses — including wildcard addresses).
 	CanSendAs(ctx context.Context, accountID int64, address string) (bool, error)
 
-	// 도메인
-	// FindDomain은 활성 도메인을 이름으로 찾는다. 수신/제출 시
-	// "우리 도메인인가"(로컬 배달 대상) 판단에 쓴다.
+	// Domains
+	// FindDomain finds an active domain by name. Used during receiving/submission
+	// to decide "is this our domain" (local delivery target).
 	FindDomain(ctx context.Context, name string) (*Domain, error)
 
-	// 메일박스
+	// Mailboxes
 	ListMailbox(ctx context.Context, accountID int64) ([]*Mailbox, error)
 	GetMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error)
 	CreateMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error)
@@ -187,96 +189,106 @@ type Store interface {
 	SetSubscribed(ctx context.Context, mailboxID int64, subscribed bool) error
 	MailboxStatus(ctx context.Context, mailboxID int64) (*MailboxStatus, error)
 
-	// 메시지
+	// Messages
 	AppendMessage(ctx context.Context, mailboxID int64, raw []byte, flagList []string, internalDate time.Time) (*Message, error)
 	ListMessage(ctx context.Context, mailboxID int64) ([]*Message, error)
 	GetMessageBlob(ctx context.Context, messageID int64) ([]byte, error)
 	SetFlag(ctx context.Context, messageID int64, flagList []string) error
-	// ExpungeDeleted는 \Deleted 메시지를 실제 삭제한다.
-	// uids가 nil이면 전체, 아니면 해당 UID들만 (IMAP UID EXPUNGE 대응).
+	// ExpungeDeleted physically deletes \Deleted messages.
+	// nil uids means all; otherwise only the given UIDs (for IMAP UID EXPUNGE).
 	ExpungeDeleted(ctx context.Context, mailboxID int64, uids []uint32) ([]uint32, error)
 	CopyMessage(ctx context.Context, messageID, destMailboxID int64) (*Message, error)
 
-	// 발송 큐 (Phase 2-3)
-	// EnqueueOutbound는 수신자별로 발송 항목을 큐에 넣는다.
+	// Outbound queue (Phase 2-3)
+	// EnqueueOutbound enqueues an outbound item per recipient.
 	EnqueueOutbound(ctx context.Context, from string, rcptList []string, raw []byte) error
-	// DueOutbound는 발송 시각이 지난 pending 항목을 최대 limit개 가져온다.
-	// FOR UPDATE SKIP LOCKED 의미론 — 여러 워커가 떠도 같은 행을 안 잡는다.
+	// DueOutbound fetches up to limit pending items whose send time has passed.
+	// FOR UPDATE SKIP LOCKED semantics — multiple workers never grab the same row.
 	DueOutbound(ctx context.Context, limit int) ([]*OutboundMessage, error)
-	// MarkOutboundSent는 발송 성공 처리.
+	// MarkOutboundSent marks delivery success.
 	MarkOutboundSent(ctx context.Context, id int64) error
-	// MarkOutboundRetry는 실패 기록 + 다음 시도 시각 설정. attempts는 증가.
+	// MarkOutboundRetry records the failure + sets the next attempt time. attempts is incremented.
 	MarkOutboundRetry(ctx context.Context, id int64, errMsg string, nextAttempt time.Time) error
-	// MarkOutboundFailed는 영구 실패 처리 (재시도 소진).
+	// MarkOutboundFailed marks a permanent failure (retries exhausted).
 	MarkOutboundFailed(ctx context.Context, id int64, errMsg string) error
 
-	// ResolveRelay는 발신 도메인 이름으로 사용할 relay를 찾는다.
-	// 도메인 지정 relay → default relay → ErrNotFound (호출자가 env fallback).
-	// 비활성 relay는 무시한다.
+	// ResolveRelay finds the relay to use for the given sender domain name.
+	// Domain-assigned relay → default relay → ErrNotFound (caller falls back to env).
+	// Inactive relays are ignored.
 	ResolveRelay(ctx context.Context, senderDomain string) (*Relay, error)
 }
 
-// AdminStore는 관리 플레인(Admin API)이 쓰는 확장 인터페이스 (Phase 3).
-// 프로토콜 경로(Store)와 분리해 서로의 표면적을 좁게 유지한다.
+// AdminStore is the extended interface used by the management plane (Admin API) (Phase 3).
+// Kept separate from the protocol path (Store) so each surface stays narrow.
 type AdminStore interface {
 	Store
 
-	// 도메인
+	// Domains
 	ListDomain(ctx context.Context) ([]*Domain, error)
 	CreateDomain(ctx context.Context, name string) (*Domain, error)
-	// BackfillDomainAddress는 oidc_email이 이 도메인인 기존 사람 계정에
-	// primary 주소+INBOX를 소급 생성한다 (멱등). 생성 수 반환.
+	// BackfillDomainAddress retroactively creates the primary address + INBOX for
+	// existing human accounts whose oidc_email is on this domain (idempotent).
+	// Returns the number created.
 	BackfillDomainAddress(ctx context.Context, domainID int64) (int, error)
 	SetDomainActive(ctx context.Context, id int64, active bool) error
-	// SetDomainDKIM은 DKIM selector/개인키를 설정한다 (빈 문자열 = 해제).
+	// SetDomainDKIM sets the DKIM selector/private key (empty strings = unset).
 	SetDomainDKIM(ctx context.Context, id int64, selector, privateKeyPEM string) error
 
-	// 계정 (유저 = OIDC 신원. 사람 계정 생성은 JIT 프로비저닝만)
+	// Accounts (user = OIDC identity. Human accounts are created via JIT provisioning only)
 	ListAccount(ctx context.Context) ([]*Account, error)
-	// ProvisionAccount는 OIDC sub 기준 JIT 프로비저닝 — 계정이 없으면
-	// 만들고, 있으면 oidc_email만 갱신해 돌려준다 (멱등).
-	// email 도메인이 등록돼 있으면 primary 주소+INBOX까지, 미등록이면
-	// 계정만 생성 (주소 없음 = 메일 사용 불가, 도메인 추가 시 backfill).
+	// ProvisionAccount does JIT provisioning keyed by OIDC sub — creates the
+	// account if missing, otherwise just refreshes oidc_email and returns it (idempotent).
+	// If the email domain is registered, it also creates the primary address + INBOX;
+	// if not, only the account is created (no address = mail unusable, backfilled
+	// when the domain is added).
 	ProvisionAccount(ctx context.Context, subject, email string) (*Account, error)
-	// CreateServiceAccount는 서비스 계정을 만든다 (admin 전용) —
-	// 로그인 불가, 주소+앱비밀번호만. email 주소가 primary로 등록된다.
+	// CreateServiceAccount creates a service account (admin only) —
+	// no login, address + app passwords only. The email address is registered as primary.
 	CreateServiceAccount(ctx context.Context, email string) (*Account, error)
 	SetAccountActive(ctx context.Context, id int64, active bool) error
 
-	// 앱 비밀번호 (DD-02: OAuth 로그인 후 발급)
+	// App passwords (DD-02: issued after OAuth login)
 	ListAppPassword(ctx context.Context, accountID int64) ([]*AppPassword, error)
-	// CreateAppPassword는 해시를 저장하고 레코드를 돌려준다.
-	// 평문 생성은 호출자(API 레이어) 책임 — 발급 시 1회만 노출.
+	// ListAllAppPassword lists every app password (admin overview — avoids per-account fan-out).
+	ListAllAppPassword(ctx context.Context) ([]*AppPassword, error)
+	// CreateAppPassword stores the hash and returns the record.
+	// Generating the plaintext is the caller's (API layer's) responsibility —
+	// shown exactly once at issuance.
 	CreateAppPassword(ctx context.Context, accountID int64, label, hash string) (*AppPassword, error)
 	RevokeAppPassword(ctx context.Context, id int64) error
 
-	// 주소 (계정 소유 메일 주소 + 와일드카드 — admin만 추가/삭제)
+	// Addresses (account-owned mail addresses + wildcards — admin-only add/delete)
 	ListAddress(ctx context.Context, domainID int64) ([]*Address, error)
 	ListAccountAddress(ctx context.Context, accountID int64) ([]*Address, error)
-	// CreateAddress는 localPart '*'를 catch-all로 취급한다.
+	// ListAllAddress lists every address (admin overview — avoids per-account fan-out).
+	ListAllAddress(ctx context.Context) ([]*Address, error)
+	// CreateAddress treats localPart '*' as a catch-all.
 	CreateAddress(ctx context.Context, domainID int64, localPart string, accountID int64) (*Address, error)
-	// DeleteAddress는 주소를 지운다. 계정의 마지막 일반 주소는 지울 수 없다
-	// (수신/로그인 매핑이 사라지는 것 방지).
+	// DeleteAddress deletes an address. The account's last regular address cannot
+	// be deleted (prevents losing the receive/login mapping).
 	DeleteAddress(ctx context.Context, id int64) error
 
-	// 발송 큐 관리
+	// Outbound queue management
 	ListOutbound(ctx context.Context, status string, limit int) ([]*OutboundMessage, error)
-	// RetryOutbound는 failed 항목을 pending으로 되돌린다 (즉시 due).
+	// RetryOutbound flips a failed item back to pending (due immediately).
 	RetryOutbound(ctx context.Context, id int64) error
-	// OutboundStat는 상태별 건수.
+	// CancelOutbound cancels a pending item (races with an in-flight send lose —
+	// a message already handed to the relay cannot be recalled).
+	CancelOutbound(ctx context.Context, id int64) error
+	// OutboundStat returns counts per status.
 	OutboundStat(ctx context.Context) (map[string]int64, error)
 
-	// relay (0005) — password는 쓰기 전용 (List가 돌려주는 값도 API 레이어에서 마스킹)
+	// relay (0005) — password is write-only (values returned by List are masked at the API layer too)
 	ListRelay(ctx context.Context) ([]*Relay, error)
 	CreateRelay(ctx context.Context, r *Relay) (*Relay, error)
-	// UpdateRelay는 password가 빈 문자열이면 기존 값 유지.
+	// UpdateRelay keeps the existing password when the password field is empty.
 	UpdateRelay(ctx context.Context, r *Relay) (*Relay, error)
 	DeleteRelay(ctx context.Context, id int64) error
-	// SetDomainRelay는 도메인 발신 relay 지정 (nil = default 사용).
+	// SetDomainRelay assigns the domain's outbound relay (nil = use default).
 	SetDomainRelay(ctx context.Context, domainID int64, relayID *int64) error
 
-	// 전역 설정 (0008) — key-value. 첫 용도는 웹 표시 언어(key='locale').
-	// GetSetting은 없는 키에 store.ErrNotFound를 돌려준다.
+	// Global settings (0008) — key-value. First use: web display language (key='locale').
+	// GetSetting returns store.ErrNotFound for a missing key.
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
 }
