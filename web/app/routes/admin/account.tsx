@@ -8,7 +8,10 @@ import {
   type Account,
   type Domain,
 } from "~/lib/api.server";
-import { getUser } from "~/lib/session.server";
+import { translate } from "~/i18n";
+import { useT } from "~/lib/i18n";
+import { getLocale } from "~/lib/locale.server";
+import { requireUser } from "~/lib/session.server";
 import {
   ActiveToggle,
   AddressChipList,
@@ -29,7 +32,7 @@ import {
 // accounts (no login, address + app password only) are created here.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = (await getUser(request))!;
+  const user = await requireUser(request);
 
   const [accountList, domainList] = await Promise.all([
     apiFetch<Account[]>(user.idToken, "/api/admin/account").then((r) => r ?? []),
@@ -58,7 +61,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
-  const user = (await getUser(request))!;
+  const user = await requireUser(request);
   const form = await request.formData();
   const intent = form.get("intent");
 
@@ -111,7 +114,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
         return { ok: true as const };
       }
       default:
-        return { ok: false as const, error: "알 수 없는 요청" };
+        return {
+          ok: false as const,
+          error: translate(await getLocale(request), "common.unknownIntent"),
+        };
     }
   } catch (e) {
     if (e instanceof ApiError) return { ok: false as const, error: e.message };
@@ -121,20 +127,18 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
 export default function AccountList({ loaderData, actionData }: Route.ComponentProps) {
   const { accountList, domainList, addressList, appPasswordList } = loaderData;
+  const t = useT();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle
-        title="계정"
-        description="사람 계정은 첫 로그인 때 자동 생성 (OIDC 신원 기준). 서비스 계정은 로그인 없이 주소·앱 비밀번호만 갖는 시스템용."
-      />
+      <PageTitle title={t("adminAccount.title")} description={t("adminAccount.description")} />
 
       <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
       {actionData?.ok && "plaintext" in actionData && actionData.plaintext && (
-        <SecretReveal title="앱 비밀번호 — 지금만 표시됨" value={actionData.plaintext} />
+        <SecretReveal title={t("adminAccount.secretIssued")} value={actionData.plaintext} />
       )}
 
       {/* Service account creation */}
@@ -156,13 +160,13 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
             ))}
           </SelectInput>
         </div>
-        <Button disabled={busy || domainList.length === 0}>서비스 계정 추가</Button>
+        <Button disabled={busy || domainList.length === 0}>{t("adminAccount.createService")}</Button>
       </Form>
 
       <div className="flex flex-col gap-3">
         {accountList.length === 0 ? (
           <Card>
-            <EmptyText>계정 없음 — 유저가 로그인하거나 서비스 계정을 만들면 여기 나타나요.</EmptyText>
+            <EmptyText>{t("adminAccount.empty")}</EmptyText>
           </Card>
         ) : (
           accountList.map((u) => (
@@ -175,7 +179,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                       <p className="font-mono text-[10px] text-text-2">sub: {u.subject}</p>
                     )}
                   </div>
-                  {u.kind === "service" && <Badge tone="accent">서비스</Badge>}
+                  {u.kind === "service" && <Badge tone="accent">{t("adminAccount.service")}</Badge>}
                 </div>
                 <Form method="post">
                   <input type="hidden" name="intent" value="toggle-account" />
@@ -187,7 +191,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
 
               {/* Addresses: chips + inline [local]@[domain] add */}
               <div className="flex flex-col gap-2 px-4 py-3">
-                <p className="text-xs text-text-2">주소</p>
+                <p className="text-xs text-text-2">{t("adminAccount.address")}</p>
                 <AddressChipList list={addressList[u.id] ?? []} busy={busy} deletable />
                 <Form method="post" className="flex items-center gap-1.5">
                   <input type="hidden" name="intent" value="create-address" />
@@ -195,7 +199,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                   <TextInput
                     name="localPart"
                     required
-                    placeholder="hello 또는 *"
+                    placeholder={t("adminAccount.addressPlaceholder")}
                     fieldSize="sm"
                     className="w-32"
                   />
@@ -208,7 +212,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                     ))}
                   </SelectInput>
                   <Button variant="link" disabled={busy}>
-                    추가
+                    {t("common.add")}
                   </Button>
                 </Form>
               </div>
@@ -216,18 +220,18 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
               {/* App passwords */}
               <div className="flex flex-col gap-2 border-t border-line px-4 py-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs text-text-2">앱 비밀번호</p>
+                  <p className="text-xs text-text-2">{t("adminAccount.appPassword")}</p>
                   <Form method="post" className="flex items-center gap-1.5">
                     <input type="hidden" name="intent" value="create-pw" />
                     <input type="hidden" name="accountId" value={u.id} />
                     <TextInput
                       name="label"
-                      placeholder="라벨 (예: Thunderbird)"
+                      placeholder={t("adminAccount.labelPlaceholder")}
                       fieldSize="sm"
                       className="w-40"
                     />
                     <Button variant="link" disabled={busy}>
-                      발급
+                      {t("common.issue")}
                     </Button>
                   </Form>
                 </div>

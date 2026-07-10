@@ -3,7 +3,7 @@ import type { Route } from "./+types/logout";
 import { buildLogoutUrl, publicOrigin } from "~/lib/oidc.server";
 import { getSession, getUser, sessionStorage } from "~/lib/session.server";
 
-// 세션 파기 + IdP 로그아웃 (있으면)
+// Destroy the session, then IdP logout when the endpoint exists.
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = await getUser(request);
   const session = await getSession(request);

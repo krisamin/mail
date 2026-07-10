@@ -5,6 +5,7 @@ export default [
   route("login", "routes/login.tsx"),
   route("auth/callback", "routes/auth.callback.tsx"),
   route("logout", "routes/logout.tsx"),
+  route("locale", "routes/locale.ts"),
   route("account", "routes/account.tsx"),
   ...prefix("admin", [
     layout("routes/admin/layout.tsx", [

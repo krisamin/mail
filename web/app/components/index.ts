@@ -5,6 +5,7 @@ export { Banner, ErrorBanner } from "./banner";
 export { ActiveToggle, Button, ButtonLink, type ButtonVariant } from "./button";
 export { Card, EmptyText } from "./card";
 export { CheckboxLabel, SelectInput, TextInput } from "./field";
+export { LocaleSwitch } from "./locale";
 export { AddressChipList, AppPasswordRows } from "./mail";
 export { PageTitle } from "./page";
 export { SecretReveal } from "./secret";

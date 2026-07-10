@@ -1,7 +1,10 @@
 import { Form, useNavigation } from "react-router";
 import type { Route } from "./+types/relay";
 import { ApiError, apiFetch, type Domain, type Relay } from "~/lib/api.server";
-import { getUser } from "~/lib/session.server";
+import { translate } from "~/i18n";
+import { useT } from "~/lib/i18n";
+import { getLocale } from "~/lib/locale.server";
+import { requireUser } from "~/lib/session.server";
 import {
   Badge,
   Button,
@@ -18,7 +21,7 @@ import {
 // Passwords are write-only: the server never returns them (hasPassword flag only).
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = (await getUser(request))!;
+  const user = await requireUser(request);
   const [relayList, domainList] = await Promise.all([
     apiFetch<Relay[]>(user.idToken, "/api/admin/relay"),
     apiFetch<Domain[]>(user.idToken, "/api/admin/domain"),
@@ -27,7 +30,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
-  const user = (await getUser(request))!;
+  const user = await requireUser(request);
   const form = await request.formData();
   const intent = form.get("intent");
 
@@ -80,7 +83,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
         return { ok: true as const };
       }
       default:
-        return { ok: false as const, error: "알 수 없는 요청" };
+        return {
+          ok: false as const,
+          error: translate(await getLocale(request), "common.unknownIntent"),
+        };
     }
   } catch (e) {
     if (e instanceof ApiError) return { ok: false as const, error: e.message };
@@ -90,15 +96,13 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
 export default function RelayList({ loaderData, actionData }: Route.ComponentProps) {
   const { relayList, domainList } = loaderData;
+  const t = useT();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle
-        title="발송 relay"
-        description="외부 도메인으로 나가는 메일이 경유할 SMTP relay. 서버 내 도메인끼리는 relay 없이 내부 배달. 도메인별 지정이 없으면 기본 relay 사용."
-      />
+      <PageTitle title={t("relay.title")} description={t("relay.description")} />
 
       <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
@@ -106,23 +110,23 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
       <Form method="post">
         <Card className="flex flex-col gap-2 p-4">
           <input type="hidden" name="intent" value="create" />
-          <p className="text-sm font-medium">새 relay</p>
+          <p className="text-sm font-medium">{t("relay.new")}</p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <TextInput name="name" required placeholder="이름 (resend)" />
+            <TextInput name="name" required placeholder={t("relay.namePlaceholder")} />
             <TextInput name="host" required placeholder="smtp.resend.com" />
             <TextInput name="port" type="number" defaultValue={587} />
             <TextInput name="username" placeholder="username" />
             <TextInput
               name="password"
               type="password"
-              placeholder="password / API key"
+              placeholder={t("relay.passwordPlaceholder")}
               className="col-span-2"
             />
             <CheckboxLabel name="starttls" defaultChecked label="STARTTLS" />
-            <CheckboxLabel name="isDefault" label="기본 relay" />
+            <CheckboxLabel name="isDefault" label={t("relay.defaultRelay")} />
           </div>
           <Button disabled={busy} className="self-start">
-            추가
+            {t("common.add")}
           </Button>
         </Card>
       </Form>
@@ -130,7 +134,7 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
       {/* Relay list */}
       <Card>
         {relayList.length === 0 ? (
-          <EmptyText>relay 없음 — 외부 발송은 큐에 쌓였다가 relay를 추가하면 나가요</EmptyText>
+          <EmptyText>{t("relay.empty")}</EmptyText>
         ) : (
           <ul className="divide-y divide-line">
             {relayList.map((r) => (
@@ -140,8 +144,8 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                   <input type="hidden" name="id" value={r.id} />
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{r.name}</span>
-                    {r.isDefault && <Badge tone="accent">기본</Badge>}
-                    {!r.active && <Badge>비활성</Badge>}
+                    {r.isDefault && <Badge tone="accent">{t("relay.default")}</Badge>}
+                    {!r.active && <Badge>{t("common.inactive")}</Badge>}
                     <span className="text-xs text-text-2">
                       {r.host}:{r.port}
                     </span>
@@ -154,16 +158,16 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                     <TextInput
                       name="password"
                       type="password"
-                      placeholder={r.hasPassword ? "(설정됨 — 비우면 유지)" : "password / API key"}
+                      placeholder={r.hasPassword ? t("relay.passwordKeep") : t("relay.passwordPlaceholder")}
                       className="col-span-2"
                     />
                     <CheckboxLabel name="starttls" defaultChecked={r.starttls} label="STARTTLS" />
-                    <CheckboxLabel name="isDefault" defaultChecked={r.isDefault} label="기본" />
-                    <CheckboxLabel name="active" defaultChecked={r.active} label="활성" />
+                    <CheckboxLabel name="isDefault" defaultChecked={r.isDefault} label={t("relay.default")} />
+                    <CheckboxLabel name="active" defaultChecked={r.active} label={t("common.active")} />
                   </div>
                   <div className="flex gap-3">
                     <Button variant="link" disabled={busy}>
-                      저장
+                      {t("common.save")}
                     </Button>
                   </div>
                 </Form>
@@ -171,7 +175,7 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                   <input type="hidden" name="intent" value="delete" />
                   <input type="hidden" name="id" value={r.id} />
                   <Button variant="linkDanger" disabled={busy}>
-                    삭제
+                    {t("common.delete")}
                   </Button>
                 </Form>
               </li>
@@ -182,7 +186,7 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
 
       {/* Per-domain relay assignment */}
       <Card className="p-4">
-        <p className="mb-3 text-sm font-medium">도메인별 발신 relay</p>
+        <p className="mb-3 text-sm font-medium">{t("relay.perDomain")}</p>
         <ul className="flex flex-col gap-2">
           {domainList.map((d) => (
             <li key={d.id}>
@@ -191,7 +195,7 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                 <input type="hidden" name="domainId" value={d.id} />
                 <span className="w-40 text-sm">{d.name}</span>
                 <SelectInput name="relayId" defaultValue={d.relayId ?? ""} fieldSize="sm" className="py-1">
-                  <option value="">(기본 relay)</option>
+                  <option value="">{t("relay.defaultOption")}</option>
                   {relayList.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.name} — {r.host}
@@ -199,7 +203,7 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                   ))}
                 </SelectInput>
                 <Button variant="link" disabled={busy}>
-                  지정
+                  {t("common.assign")}
                 </Button>
               </Form>
             </li>

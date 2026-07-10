@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes } from "react";
 import { Link, type LinkProps } from "react-router";
+import { useT } from "~/lib/i18n";
 
 // Button variants — one source of truth for every clickable style.
 const styleMap = {
@@ -36,14 +37,17 @@ export const ButtonLink = ({
 );
 
 /** Active/inactive toggle — submit button styled as a state pill. */
-export const ActiveToggle = ({ active, disabled }: { active: boolean; disabled?: boolean }) => (
-  <button
-    type="submit"
-    disabled={disabled}
-    className={`rounded px-2 py-1 text-xs ${
-      active ? "bg-ok/20 text-ok hover:bg-ok/30" : "bg-bg-3 text-muted hover:bg-bg-2"
-    }`}
-  >
-    {active ? "활성" : "비활성"}
-  </button>
-);
+export const ActiveToggle = ({ active, disabled }: { active: boolean; disabled?: boolean }) => {
+  const t = useT();
+  return (
+    <button
+      type="submit"
+      disabled={disabled}
+      className={`rounded px-2 py-1 text-xs ${
+        active ? "bg-ok/20 text-ok hover:bg-ok/30" : "bg-bg-3 text-muted hover:bg-bg-2"
+      }`}
+    >
+      {active ? t("common.active") : t("common.inactive")}
+    </button>
+  );
+};

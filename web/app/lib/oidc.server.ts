@@ -1,14 +1,14 @@
-// OIDC Authorization Code Flow 헬퍼 (라이브러리 없이 표준만).
-// discovery → authorize URL → code 교환 → id_token 클레임 파싱.
+// OIDC Authorization Code Flow helpers (standards only, no library).
+// discovery → authorize URL → code exchange → id_token claim parsing.
 
 const ISSUER = process.env.MAIL_OIDC_ISSUER ?? "http://localhost:8480/realms/mail";
 const CLIENT_ID = process.env.MAIL_OIDC_CLIENT_ID ?? "mail-web";
 const CLIENT_SECRET = process.env.MAIL_OIDC_CLIENT_SECRET ?? "mail-web-dev-secret";
-// dev Keycloak은 client-level mapper로 클레임을 붙여서 openid만으로 충분.
-// Authentik 등 실 IdP는 email/groups 클레임에 "openid profile email" 필요.
+// Dev Keycloak attaches claims via client-level mappers, so "openid" is enough.
+// Real IdPs (Authentik etc.) need "openid profile email" for email/groups claims.
 const SCOPE = process.env.MAIL_OIDC_SCOPE ?? "openid";
 
-/** 리버스 프록시 뒤에선 요청 origin이 http로 보임 — 프로덕션은 env로 고정. */
+/** Behind a reverse proxy the request origin looks like http — pin via env in production. */
 export const publicOrigin = (request: Request): string =>
   process.env.MAIL_PUBLIC_ORIGIN ?? new URL(request.url).origin;
 
@@ -22,23 +22,23 @@ let discoveryCache: Discovery | null = null;
 
 const discover = async (): Promise<Discovery> => {
   if (discoveryCache) return discoveryCache;
-  // Authentik 등은 issuer가 슬래시로 끝남 — 이중 슬래시 방지
+  // Some IdPs (Authentik) end the issuer with a slash — avoid double slashes.
   const base = ISSUER.replace(/\/$/, "");
   const res = await fetch(`${base}/.well-known/openid-configuration`);
-  if (!res.ok) throw new Error(`OIDC discovery 실패: ${res.status}`);
+  if (!res.ok) throw new Error(`OIDC discovery failed: ${res.status}`);
   discoveryCache = (await res.json()) as Discovery;
   return discoveryCache;
 };
 
-/** 로그인 시작 URL. state는 CSRF 방지용 랜덤 값 (세션에 저장해 콜백에서 대조). */
+/** Sign-in start URL. state is a random CSRF token (stored in the session, checked in the callback). */
 export const buildAuthorizeUrl = async (redirectUri: string, state: string): Promise<string> => {
   const d = await discover();
   const params = new URLSearchParams({
     response_type: "code",
     client_id: CLIENT_ID,
     redirect_uri: redirectUri,
-    // 클레임(groups/email/username)은 IdP 설정에 따라 scope가 달라짐 —
-    // dev Keycloak은 "openid"(client mapper), Authentik은 "openid profile email".
+    // Which scopes yield which claims (groups/email/username) depends on the
+    // IdP — dev Keycloak: "openid" (client mapper), Authentik: "openid profile email".
     scope: SCOPE,
     state,
   });
@@ -47,7 +47,7 @@ export const buildAuthorizeUrl = async (redirectUri: string, state: string): Pro
 
 export type TokenSet = { idToken: string; accessToken: string };
 
-/** 콜백 code를 토큰으로 교환. */
+/** Exchange the callback code for tokens. */
 export const exchangeCode = async (code: string, redirectUri: string): Promise<TokenSet> => {
   const d = await discover();
   const res = await fetch(d.token_endpoint, {
@@ -61,7 +61,7 @@ export const exchangeCode = async (code: string, redirectUri: string): Promise<T
       redirect_uri: redirectUri,
     }),
   });
-  if (!res.ok) throw new Error(`토큰 교환 실패: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(`token exchange failed: ${res.status} ${await res.text()}`);
   const body = (await res.json()) as { id_token: string; access_token: string };
   return { idToken: body.id_token, accessToken: body.access_token };
 };
@@ -74,15 +74,15 @@ export type IdClaims = {
   groups?: string[];
 };
 
-/** id_token 페이로드 디코드 (검증은 Go API가 JWKS로 다시 함 — 여기선 표시용). */
+/** Decode the id_token payload (the Go API re-verifies via JWKS — display only here). */
 export const decodeClaims = (idToken: string): IdClaims => {
   const payload = idToken.split(".")[1];
-  if (!payload) throw new Error("잘못된 토큰");
+  if (!payload) throw new Error("malformed token");
   const pad = payload + "=".repeat((4 - (payload.length % 4)) % 4);
   return JSON.parse(Buffer.from(pad, "base64url").toString()) as IdClaims;
 };
 
-/** IdP 로그아웃 URL (없으면 null — 세션만 지움). */
+/** IdP logout URL (null when unsupported — session-only logout). */
 export const buildLogoutUrl = async (idToken: string, redirectUri: string): Promise<string | null> => {
   const d = await discover();
   if (!d.end_session_endpoint) return null;

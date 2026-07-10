@@ -7,7 +7,10 @@ import {
   type DnsVerify,
   type Domain,
 } from "~/lib/api.server";
-import { getUser } from "~/lib/session.server";
+import { translate } from "~/i18n";
+import { useT } from "~/lib/i18n";
+import { getLocale } from "~/lib/locale.server";
+import { requireUser } from "~/lib/session.server";
 import {
   ActiveToggle,
   Badge,
@@ -25,13 +28,13 @@ import {
 // Address ↔ account wiring lives on /admin/account.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = (await getUser(request))!;
+  const user = await requireUser(request);
   const domainList = await apiFetch<Domain[]>(user.idToken, "/api/admin/domain");
   return { domainList: domainList ?? [] };
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
-  const user = (await getUser(request))!;
+  const user = await requireUser(request);
   const form = await request.formData();
   const intent = form.get("intent");
 
@@ -79,7 +82,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
         return { ok: true as const, dns };
       }
       default:
-        return { ok: false as const, error: "알 수 없는 요청" };
+        return {
+          ok: false as const,
+          error: translate(await getLocale(request), "common.unknownIntent"),
+        };
     }
   } catch (e) {
     if (e instanceof ApiError) return { ok: false as const, error: e.message };
@@ -97,20 +103,18 @@ const dnsCheckList = (dns: DnsVerify) =>
 
 export default function DomainList({ loaderData, actionData }: Route.ComponentProps) {
   const { domainList } = loaderData;
+  const t = useT();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle
-        title="도메인"
-        description="메일을 받고 보낼 도메인. 주소·계정 연결은 계정 페이지에서."
-      />
+      <PageTitle title={t("domain.title")} description={t("domain.description")} />
 
       <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
       {actionData?.ok && "dkim" in actionData && actionData.dkim && (
-        <Banner title="DKIM 키 생성됨 — DNS TXT 레코드 등록:">
+        <Banner title={t("domain.dkimIssued")}>
           <p className="mt-2 font-mono text-xs text-text-1">{actionData.dkim.dnsName} IN TXT</p>
           <p className="mt-1 break-all rounded bg-bg-0 p-2 font-mono text-xs text-text-1">
             {actionData.dkim.dnsTxt}
@@ -121,7 +125,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
       {actionData?.ok && "dns" in actionData && actionData.dns && (
         <Card className="p-4">
           <p className="mb-2 text-sm font-medium">
-            DNS 검증 — <span className="font-mono">{actionData.dns.domain}</span>
+            {t("domain.dnsVerifyPrefix")} <span className="font-mono">{actionData.dns.domain}</span>
           </p>
           <ul className="flex flex-col gap-1.5">
             {dnsCheckList(actionData.dns).map(([label, check]) => (
@@ -146,7 +150,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                 {check.expected && check.status !== "ok" && (
                   <p
                     className="break-all rounded bg-bg-0 p-1.5 pl-1 font-mono text-[10px] text-text-1"
-                    title="등록할 값"
+                    title={t("domain.expectedValue")}
                   >
                     {check.expected}
                   </p>
@@ -160,12 +164,12 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
       <Form method="post" className="flex gap-2">
         <input type="hidden" name="intent" value="create" />
         <TextInput name="name" required placeholder="example.com" className="flex-1" />
-        <Button disabled={busy}>추가</Button>
+        <Button disabled={busy}>{t("common.add")}</Button>
       </Form>
 
       <Card>
         {domainList.length === 0 ? (
-          <EmptyText>도메인 없음</EmptyText>
+          <EmptyText>{t("domain.none")}</EmptyText>
         ) : (
           <ul className="divide-y divide-line">
             {domainList.map((d) => (
@@ -177,7 +181,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                       <input type="hidden" name="intent" value="dns-verify" />
                       <input type="hidden" name="id" value={d.id} />
                       <Button variant="chip" disabled={busy}>
-                        DNS 검증
+                        {t("domain.dnsVerify")}
                       </Button>
                     </Form>
                     <Form method="post">
@@ -205,7 +209,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                         <input type="hidden" name="intent" value="dkim-clear" />
                         <input type="hidden" name="id" value={d.id} />
                         <Button variant="linkDanger" disabled={busy} className="text-[10px]">
-                          해제
+                          {t("domain.dkimClear")}
                         </Button>
                       </Form>
                     </>
@@ -215,11 +219,11 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                       <input type="hidden" name="id" value={d.id} />
                       <TextInput name="selector" defaultValue="mail" fieldSize="sm" className="w-24" />
                       <SelectInput name="keyType" defaultValue="rsa2048" fieldSize="sm">
-                        <option value="rsa2048">RSA-2048 (호환 ◎)</option>
+                        <option value="rsa2048">{t("domain.rsaCompat")}</option>
                         <option value="ed25519">Ed25519</option>
                       </SelectInput>
                       <Button variant="link" disabled={busy}>
-                        DKIM 키 생성
+                        {t("domain.dkimCreate")}
                       </Button>
                     </Form>
                   )}

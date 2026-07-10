@@ -3,7 +3,7 @@ import type { Route } from "./+types/login";
 import { buildAuthorizeUrl, publicOrigin } from "~/lib/oidc.server";
 import { getSession, sessionStorage } from "~/lib/session.server";
 
-// /login → IdP authorize로 리다이렉트 (state는 세션에 저장)
+// /login → redirect to the IdP authorize endpoint (state stored in session).
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
   const redirectUri = `${publicOrigin(request)}/auth/callback`;
@@ -11,7 +11,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   const session = await getSession(request);
   session.set("oauthState", state);
-  // 로그인 후 돌아갈 곳 (기본 /)
+  // Where to land after sign-in (default /).
   session.set("returnTo", url.searchParams.get("returnTo") ?? "/");
 
   return redirect(await buildAuthorizeUrl(redirectUri, state), {

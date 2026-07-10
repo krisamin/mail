@@ -1,7 +1,10 @@
-import { Form, Link, redirect, useNavigation } from "react-router";
+import { Form, Link, useNavigation } from "react-router";
 import type { Route } from "./+types/account";
 import { ApiError, apiFetch, type Address, type AppPassword, type Account } from "~/lib/api.server";
-import { getUser, isAdmin } from "~/lib/session.server";
+import { translate } from "~/i18n";
+import { useT } from "~/lib/i18n";
+import { getLocale } from "~/lib/locale.server";
+import { isAdmin, requireUser } from "~/lib/session.server";
 import {
   AddressChipList,
   AppPasswordRows,
@@ -9,6 +12,7 @@ import {
   Card,
   EmptyText,
   ErrorBanner,
+  LocaleSwitch,
   SecretReveal,
   TextInput,
 } from "~/components";
@@ -18,10 +22,7 @@ import {
 // Accounts appear via JIT provisioning on first login; address changes are admin-only.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = await getUser(request);
-  if (!user) {
-    throw redirect(`/login?returnTo=${encodeURIComponent("/account")}`);
-  }
+  const user = await requireUser(request);
 
   let account: Account | null = null;
   let appPasswordList: AppPassword[] = [];
@@ -52,8 +53,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
-  const user = await getUser(request);
-  if (!user) throw redirect("/login");
+  const user = await requireUser(request);
   const form = await request.formData();
   const intent = form.get("intent");
 
@@ -74,7 +74,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
         return { ok: true as const };
       }
       default:
-        return { ok: false as const, error: "알 수 없는 요청" };
+        return {
+          ok: false as const,
+          error: translate(await getLocale(request), "common.unknownIntent"),
+        };
     }
   } catch (e) {
     if (e instanceof ApiError) return { ok: false as const, error: e.message };
@@ -84,6 +87,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
 export default function Account({ loaderData, actionData }: Route.ComponentProps) {
   const { name, email, admin, appPasswordList, addressList, noAccount } = loaderData;
+  const t = useT();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
   const active = appPasswordList.filter((p) => !p.revoked);
@@ -99,12 +103,13 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
           <div className="flex items-center gap-3">
             {admin && (
               <Link to="/admin" className="text-xs text-text-2 hover:text-text-1">
-                관리 콘솔
+                {t("nav.adminConsole")}
               </Link>
             )}
             <span className="text-xs text-text-2">{name}</span>
+            <LocaleSwitch />
             <Link to="/logout" className="text-xs text-text-2 hover:text-text-1">
-              로그아웃
+              {t("common.logout")}
             </Link>
           </div>
         </div>
@@ -113,55 +118,48 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
       <main className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6">
         {noAccount ? (
           <Card className="p-6 text-center">
-            <p className="text-sm text-text-1">
-              <span className="font-mono">{email}</span> 에 연결된 메일 계정이 아직 없어요.
-            </p>
-            <p className="mt-1 text-xs text-text-2">다시 로그인하면 자동으로 만들어져요.</p>
+            <p className="text-sm text-text-1">{t("account.noAccount", { email })}</p>
+            <p className="mt-1 text-xs text-text-2">{t("account.noAccountHint")}</p>
           </Card>
         ) : (
           <>
             <Card className="p-4">
-              <h1 className="text-lg font-bold">내 메일 계정</h1>
+              <h1 className="text-lg font-bold">{t("account.title")}</h1>
               <p className="mt-1 font-mono text-sm text-text-1">{email}</p>
               {addressList.length > 0 && (
                 <div className="mt-2">
-                  <p className="text-xs text-text-2">내 메일 주소 — 이 주소들로 받고 보낼 수 있어요:</p>
+                  <p className="text-xs text-text-2">{t("account.addressIntro")}</p>
                   <div className="mt-1">
                     <AddressChipList list={addressList} />
                   </div>
-                  <p className="mt-1.5 text-xs text-text-2">주소 추가는 관리자에게 요청해 주세요.</p>
+                  <p className="mt-1.5 text-xs text-text-2">{t("account.addressAdminHint")}</p>
                 </div>
               )}
-              <p className="mt-2 text-xs text-text-2">
-                IMAP/SMTP 접속에는 아래에서 발급한 앱 비밀번호를 사용해요 (OIDC 비밀번호 아님).
-              </p>
+              <p className="mt-2 text-xs text-text-2">{t("account.appPasswordHint")}</p>
             </Card>
 
             <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
             {actionData?.ok && "plaintext" in actionData && actionData.plaintext && (
-              <SecretReveal
-                title="새 앱 비밀번호 — 지금만 표시돼요. 메일 앱에 바로 붙여넣으세요."
-                value={actionData.plaintext}
-              />
+              <SecretReveal title={t("account.secretIssued")} value={actionData.plaintext} />
             )}
 
             <section className="flex flex-col gap-3">
-              <h2 className="text-sm font-medium text-text-1">앱 비밀번호</h2>
+              <h2 className="text-sm font-medium text-text-1">{t("account.appPassword")}</h2>
               <Form method="post" className="flex gap-2">
                 <input type="hidden" name="intent" value="create-pw" />
                 <TextInput
                   name="label"
                   required
-                  placeholder="라벨 (예: Thunderbird 노트북)"
+                  placeholder={t("account.labelPlaceholder")}
                   className="flex-1"
                 />
-                <Button disabled={busy}>발급</Button>
+                <Button disabled={busy}>{t("common.issue")}</Button>
               </Form>
 
               {active.length === 0 ? (
                 <Card>
-                  <EmptyText>활성 앱 비밀번호가 없어요. 위에서 발급해 주세요.</EmptyText>
+                  <EmptyText>{t("account.noActivePassword")}</EmptyText>
                 </Card>
               ) : (
                 <Card className="px-4">
@@ -171,11 +169,14 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
 
               {revoked.length > 0 && (
                 <details className="text-xs text-text-2">
-                  <summary className="cursor-pointer">해제된 비밀번호 {revoked.length}개</summary>
+                  <summary className="cursor-pointer">
+                    {t("account.revokedCount", { count: revoked.length })}
+                  </summary>
                   <ul className="mt-2 flex flex-col gap-1">
                     {revoked.map((p) => (
                       <li key={p.id} className="rounded border border-line bg-bg-1 px-3 py-2">
-                        {p.label || "(라벨 없음)"} — 발급 {p.createdAt.slice(0, 10)}
+                        {p.label || t("mail.noLabel")} —{" "}
+                        {t("mail.issuedAt", { date: p.createdAt.slice(0, 10) })}
                       </li>
                     ))}
                   </ul>

@@ -1,0 +1,133 @@
+import type { ko } from "./ko";
+
+/** 日本語 dictionary. Keys mirror ko 1:1. */
+export const ja: Record<keyof typeof ko, string> = {
+  "common.add": "追加",
+  "common.save": "保存",
+  "common.delete": "削除",
+  "common.issue": "発行",
+  "common.assign": "割り当て",
+  "common.retry": "再試行",
+  "common.active": "有効",
+  "common.inactive": "無効",
+  "common.ok": "正常",
+  "common.error": "エラー",
+  "common.login": "ログイン",
+  "common.logout": "ログアウト",
+  "common.unknownIntent": "不明なリクエストです。",
+
+  "nav.dashboard": "ダッシュボード",
+  "nav.domain": "ドメイン",
+  "nav.account": "アカウント",
+  "nav.relay": "リレー",
+  "nav.queue": "送信キュー",
+  "nav.system": "システム",
+  "nav.adminConsole": "管理コンソール",
+  "nav.myAccount": "マイアカウント",
+
+  "error.title": "エラー",
+  "error.unknown": "不明なエラーが発生しました。",
+  "error.notFound": "ページが見つかりません。",
+  "error.home": "ホームへ",
+
+  "auth.invalidResponse": "不正な認証レスポンスです。",
+  "auth.provisionFailed": "ログインの確認に失敗しました: {{message}}",
+  "auth.adminRequired": "管理者権限が必要です。",
+
+  "account.noAccount": "{{email}} に紐づくメールアカウントはまだありません。",
+  "account.noAccountHint": "再ログインすると自動的に作成されます。",
+  "account.title": "マイメールアカウント",
+  "account.addressIntro": "メールアドレス — 以下のアドレスで送受信できます:",
+  "account.addressAdminHint": "アドレスの追加は管理者にご依頼ください。",
+  "account.appPasswordHint":
+    "IMAP/SMTP 接続には下で発行するアプリパスワードを使用します (OIDC のパスワードではありません)。",
+  "account.secretIssued":
+    "新しいアプリパスワード — 今回のみ表示されます。メールアプリに貼り付けてください。",
+  "account.appPassword": "アプリパスワード",
+  "account.labelPlaceholder": "ラベル (例: Thunderbird ノート)",
+  "account.noActivePassword": "有効なアプリパスワードがありません。上で発行してください。",
+  "account.revokedCount": "無効化されたパスワード {{count}} 件",
+
+  "mail.noAddress": "アドレスなし",
+  "mail.deleteAddress": "アドレスを削除",
+  "mail.noLabel": "(ラベルなし)",
+  "mail.issuedAt": "発行 {{date}}",
+  "mail.lastUsedAt": "最終使用 {{date}}",
+  "mail.neverUsed": "未使用",
+  "mail.revoke": "無効化",
+
+  "dashboard.title": "ダッシュボード",
+  "dashboard.activeDomain": "有効なドメイン",
+  "dashboard.account": "アカウント",
+  "dashboard.queuePending": "送信待ち",
+  "dashboard.queueFailed": "送信失敗",
+  "dashboard.domain": "ドメイン",
+  "dashboard.manage": "管理 →",
+  "dashboard.noDomain": "ドメインはまだありません。",
+
+  "domain.title": "ドメイン",
+  "domain.description":
+    "メールを送受信するドメインを管理します。アドレスとアカウントの紐づけはアカウントページで行います。",
+  "domain.dkimIssued": "DKIM キーを作成しました — 以下の DNS TXT レコードを登録してください:",
+  "domain.dnsVerifyPrefix": "DNS 検証 —",
+  "domain.expectedValue": "登録する値",
+  "domain.none": "ドメインはまだありません。",
+  "domain.dnsVerify": "DNS 検証",
+  "domain.dkimClear": "解除",
+  "domain.dkimCreate": "DKIM キー作成",
+  "domain.rsaCompat": "RSA-2048 (互換性 ◎)",
+
+  "adminAccount.title": "アカウント",
+  "adminAccount.description":
+    "ユーザーアカウントは初回ログイン時に自動作成されます (OIDC の ID 基準)。サービスアカウントはログインなしで、アドレスとアプリパスワードのみを持つシステム用です。",
+  "adminAccount.secretIssued": "アプリパスワード — 今回のみ表示されます。",
+  "adminAccount.createService": "サービスアカウント追加",
+  "adminAccount.empty":
+    "アカウントはまだありません — ユーザーがログインするか、サービスアカウントを作成すると表示されます。",
+  "adminAccount.service": "サービス",
+  "adminAccount.address": "アドレス",
+  "adminAccount.addressPlaceholder": "hello または *",
+  "adminAccount.appPassword": "アプリパスワード",
+  "adminAccount.labelPlaceholder": "ラベル (例: Thunderbird)",
+
+  "relay.title": "送信リレー",
+  "relay.description":
+    "外部ドメイン宛のメールが経由する SMTP リレーです。サーバー内ドメイン同士はリレーなしで内部配送されます。ドメイン別の指定がなければデフォルトリレーを使用します。",
+  "relay.new": "新しいリレー",
+  "relay.namePlaceholder": "名前 (resend)",
+  "relay.passwordPlaceholder": "パスワード / API キー",
+  "relay.passwordKeep": "(設定済み — 空欄で維持)",
+  "relay.default": "デフォルト",
+  "relay.defaultRelay": "デフォルトリレー",
+  "relay.empty": "リレーがありません — 外部宛はキューに溜まり、リレーを追加すると送信されます。",
+  "relay.perDomain": "ドメイン別送信リレー",
+  "relay.defaultOption": "(デフォルトリレー)",
+
+  "queue.title": "送信キュー",
+  "queue.stat": "待機 {{pending}} · 完了 {{sent}} · 失敗 {{failed}}",
+  "queue.filterAll": "すべて",
+  "queue.filterPending": "待機",
+  "queue.filterSent": "完了",
+  "queue.filterFailed": "失敗",
+  "queue.empty": "項目がありません。",
+  "queue.attemptCount": "試行 {{count}} 回",
+
+  "system.title": "システムチェック",
+  "system.recheck": "再チェック",
+  "system.uptime": "稼働時間",
+  "system.db": "データベース",
+  "system.queue": "送信キュー",
+  "system.externalPrefix": "外部到達性 —",
+  "system.externalDesc":
+    "公開ホスト名の標準ポートへ実際に接続します — メールクライアントが通る経路です。LB とルーターのポート転送が開いている必要があります。ヘアピン NAT 非対応ルーターでは誤検知の可能性があります。",
+  "system.checking": "チェック中… (ブロックされたポートはタイムアウトまで数秒かかります)",
+  "system.reachable": "到達",
+  "system.blocked": "遮断",
+  "system.listener": "内部リスナー",
+  "system.listenerDesc":
+    "デーモンのセルフチェック (self-dial) です — プロセスが listen 中でプロトコル応答が正常かのみ確認します。外部からの到達性とは別物です。",
+  "system.up": "正常",
+  "system.down": "停止",
+
+  "locale.label": "言語",
+};

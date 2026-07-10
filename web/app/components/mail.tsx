@@ -1,5 +1,6 @@
 import { Form } from "react-router";
 import type { Address, AppPassword } from "~/lib/api.server";
+import { useT } from "~/lib/i18n";
 
 // Mail domain molecules — shared between self-service (/account) and admin pages.
 
@@ -15,9 +16,10 @@ export const AddressChipList = ({
   list: Address[];
   busy?: boolean;
   deletable?: boolean;
-}) =>
-  list.length === 0 ? (
-    <p className="text-xs text-muted">주소 없음</p>
+}) => {
+  const t = useT();
+  return list.length === 0 ? (
+    <p className="text-xs text-muted">{t("mail.noAddress")}</p>
   ) : (
     <ul className="flex flex-wrap gap-1.5">
       {list.map((a) => (
@@ -34,7 +36,7 @@ export const AddressChipList = ({
                 type="submit"
                 disabled={busy}
                 className="text-[10px] text-bad hover:underline"
-                title="주소 삭제"
+                title={t("mail.deleteAddress")}
               >
                 ×
               </button>
@@ -44,23 +46,27 @@ export const AddressChipList = ({
       ))}
     </ul>
   );
+};
 
 /**
  * App password rows with revoke buttons. Each revoke submits a Form
  * (intent=revoke-pw, id) — the page's action must handle it.
  */
-export const AppPasswordRows = ({ list, busy = false }: { list: AppPassword[]; busy?: boolean }) =>
-  list.length === 0 ? null : (
+export const AppPasswordRows = ({ list, busy = false }: { list: AppPassword[]; busy?: boolean }) => {
+  const t = useT();
+  return list.length === 0 ? null : (
     <ul className="divide-y divide-line/50">
       {list.map((p) => (
         <li key={p.id} className="flex items-center justify-between py-1.5">
           <div className="flex items-center gap-2">
             <span className={`text-xs ${p.revoked ? "text-muted line-through" : "text-text-1"}`}>
-              {p.label || "(라벨 없음)"}
+              {p.label || t("mail.noLabel")}
             </span>
             <span className="text-[10px] text-text-2">
-              발급 {p.createdAt.slice(0, 10)}
-              {p.lastUsed ? ` · 마지막 사용 ${p.lastUsed.slice(0, 10)}` : " · 미사용"}
+              {t("mail.issuedAt", { date: p.createdAt.slice(0, 10) })}
+              {p.lastUsed
+                ? ` · ${t("mail.lastUsedAt", { date: p.lastUsed.slice(0, 10) })}`
+                : ` · ${t("mail.neverUsed")}`}
             </span>
           </div>
           {!p.revoked && (
@@ -72,7 +78,7 @@ export const AppPasswordRows = ({ list, busy = false }: { list: AppPassword[]; b
                 disabled={busy}
                 className="text-[10px] text-bad hover:underline"
               >
-                revoke
+                {t("mail.revoke")}
               </button>
             </Form>
           )}
@@ -80,3 +86,4 @@ export const AppPasswordRows = ({ list, busy = false }: { list: AppPassword[]; b
       ))}
     </ul>
   );
+};

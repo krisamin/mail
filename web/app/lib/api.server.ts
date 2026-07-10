@@ -1,5 +1,6 @@
-// Go Admin API 호출 헬퍼 — RR7 loader/action에서 서버사이드로만 호출.
-// 세션의 id_token을 Bearer로 전달, Go 쪽이 JWKS 검증 + 그룹 재확인 (이중 방어).
+// Go Admin API helpers — called server-side only, from RR7 loaders/actions.
+// The session's id_token is forwarded as Bearer; the Go side re-verifies via
+// JWKS and re-checks groups (defense in depth).
 
 const API_BASE = process.env.MAIL_API_URL ?? "http://localhost:8080";
 
@@ -33,7 +34,7 @@ export const apiFetch = async <T>(
   return body as T;
 };
 
-// ── DTO 타입 (Go internal/api와 동기) ───────────────────────
+// ── DTO types (kept in sync with Go internal/api) ───────────
 
 export type Domain = {
   id: number;
