@@ -11,7 +11,7 @@ import {
 import { translate } from "~/i18n";
 import { useT } from "~/lib/i18n";
 import { getLocale } from "~/lib/locale.server";
-import { requireUser } from "~/lib/session.server";
+import { requireAdmin } from "~/lib/session.server";
 import {
   ActiveToggle,
   AddressChipList,
@@ -32,7 +32,7 @@ import {
 // accounts (no login, address + app password only) are created here.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = await requireUser(request);
+  const user = await requireAdmin(request);
 
   const [accountList, domainList] = await Promise.all([
     apiFetch<Account[]>(user.idToken, "/api/admin/account").then((r) => r ?? []),
@@ -61,7 +61,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
-  const user = await requireUser(request);
+  const user = await requireAdmin(request);
   const form = await request.formData();
   const intent = form.get("intent");
 
@@ -130,6 +130,11 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
   const t = useT();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
+  // Which form is in flight — label only that button, not every control.
+  const pending = (intent: string, idField?: string, idValue?: number) =>
+    busy &&
+    nav.formData?.get("intent") === intent &&
+    (idField === undefined || nav.formData?.get(idField) === String(idValue));
 
   return (
     <div className="flex flex-col gap-6">
@@ -160,7 +165,9 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
             ))}
           </SelectInput>
         </div>
-        <Button disabled={busy || domainList.length === 0}>{t("adminAccount.createService")}</Button>
+        <Button disabled={busy || domainList.length === 0} pending={pending("create-service")}>
+          {t("adminAccount.createService")}
+        </Button>
       </Form>
 
       <div className="flex flex-col gap-3">
@@ -211,7 +218,11 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                       </option>
                     ))}
                   </SelectInput>
-                  <Button variant="link" disabled={busy}>
+                  <Button
+                    variant="link"
+                    disabled={busy}
+                    pending={pending("create-address", "accountId", u.id)}
+                  >
                     {t("common.add")}
                   </Button>
                 </Form>
@@ -230,7 +241,11 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                       fieldSize="sm"
                       className="w-40"
                     />
-                    <Button variant="link" disabled={busy}>
+                    <Button
+                      variant="link"
+                      disabled={busy}
+                      pending={pending("create-pw", "accountId", u.id)}
+                    >
                       {t("common.issue")}
                     </Button>
                   </Form>

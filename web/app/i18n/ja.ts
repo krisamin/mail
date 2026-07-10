@@ -15,6 +15,14 @@ export const ja: Record<keyof typeof ko, string> = {
   "common.login": "ログイン",
   "common.logout": "ログアウト",
   "common.unknownIntent": "不明なリクエストです。",
+  "common.copy": "コピー",
+  "common.copied": "コピーしました",
+  "common.working": "処理中…",
+  "common.confirmDelete": "本当に削除しますか？元に戻せません。",
+  "common.confirmDkimClear": "DKIMキーを解除しますか？DNSのレコードと食い違い、送信署名がすぐに壊れます。",
+  "common.confirmRevoke": "このアプリパスワードを無効化しますか？使用中のクライアントは接続できなくなります。",
+  "common.refreshedAt": "{{time}} 更新",
+  "common.invalidValue": "不正な値です。",
 
   "nav.dashboard": "ダッシュボード",
   "nav.domain": "ドメイン",
@@ -24,6 +32,8 @@ export const ja: Record<keyof typeof ko, string> = {
   "nav.system": "システム",
   "nav.adminConsole": "管理コンソール",
   "nav.myAccount": "マイアカウント",
+
+  "home.tagline": "マルチテナント・メールサーバー",
 
   "error.title": "エラー",
   "error.unknown": "不明なエラーが発生しました。",

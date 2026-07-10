@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 /** Action error feedback — renders nothing when message is empty. */
 export const ErrorBanner = ({ message }: { message?: string | null }) =>
   message ? (
-    <p className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
+    <p role="alert" className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       {message}
     </p>
   ) : null;

@@ -2,11 +2,13 @@ import { useEffect } from "react";
 import { Form, useFetcher, useNavigation, useRevalidator } from "react-router";
 import type { Route } from "./+types/system";
 import { ApiError, apiFetch } from "~/lib/api.server";
+import { translate } from "~/i18n";
 import { useT } from "~/lib/i18n";
 import { LOCALE_LABEL_MAP, LOCALE_LIST } from "~/lib/locale";
 import { isLocaleSetting, primeLocaleSetting } from "~/lib/locale.server";
-import { requireUser } from "~/lib/session.server";
-import { Badge, Banner, Button, Card, ErrorBanner, PageTitle, SelectInput } from "~/components";
+import { getLocale } from "~/lib/locale.server";
+import { requireAdmin } from "~/lib/session.server";
+import { Badge, Banner, Button, Card, ErrorBanner, PageTitle, SelectInput, TimeText } from "~/components";
 
 // System check — fast page load: listener/DB/queue only.
 // External reachability is slow (blocked port = dial timeout) so it loads
@@ -38,12 +40,14 @@ type ExternalStatus = {
 };
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = await requireUser(request);
+  const user = await requireAdmin(request);
   const url = new URL(request.url);
 
   // Fetcher path: ?external=1 runs only the slow external reachability check.
   if (url.searchParams.get("external") === "1") {
-    const external = await apiFetch<ExternalStatus>(user.idToken, "/api/admin/system/external");
+    const external = await apiFetch<ExternalStatus>(user.idToken, "/api/admin/system/external", {
+      timeoutMs: 30_000, // slow port probes — dial timeouts add up
+    });
     return { kind: "external" as const, external };
   }
 
@@ -59,10 +63,14 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
 // Save the global display language (admin only; applies to every visitor).
 export const action = async ({ request }: Route.ActionArgs) => {
-  const user = await requireUser(request);
+  const user = await requireAdmin(request);
   const form = await request.formData();
   const locale = String(form.get("locale") ?? "");
-  if (!isLocaleSetting(locale)) return { ok: false as const, error: "invalid locale" };
+  if (!isLocaleSetting(locale))
+    return {
+      ok: false as const,
+      error: translate(await getLocale(request), "common.invalidValue"),
+    };
   try {
     await apiFetch(user.idToken, "/api/admin/setting/locale", {
       method: "PUT",
@@ -129,9 +137,7 @@ export default function System({ loaderData, actionData }: Route.ComponentProps)
         title={t("system.title")}
         aside={
           <div className="flex items-center gap-3">
-            <span className="text-xs text-text-2" suppressHydrationWarning>
-              {checkedAt.replace("T", " ").slice(0, 19)}
-            </span>
+            <TimeText value={checkedAt} className="text-xs text-text-2" />
             <Button
               variant="outline"
               onClick={recheck}

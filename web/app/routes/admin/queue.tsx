@@ -1,14 +1,15 @@
-import { Form, useNavigation, useSearchParams } from "react-router";
+import { useEffect } from "react";
+import { Form, useNavigation, useRevalidator, useSearchParams } from "react-router";
 import type { Route } from "./+types/queue";
 import { ApiError, apiFetch, type QueueItem } from "~/lib/api.server";
 import { useT } from "~/lib/i18n";
-import { requireUser } from "~/lib/session.server";
-import { Badge, Button, Card, EmptyText, ErrorBanner, PageTitle, type BadgeTone } from "~/components";
+import { requireAdmin } from "~/lib/session.server";
+import { Badge, Button, Card, EmptyText, ErrorBanner, PageTitle, TimeText, type BadgeTone } from "~/components";
 
 // Outbound queue — filter by status, retry failed entries.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = await requireUser(request);
+  const user = await requireAdmin(request);
   const url = new URL(request.url);
   const status = url.searchParams.get("status") ?? "";
 
@@ -20,7 +21,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
-  const user = await requireUser(request);
+  const user = await requireAdmin(request);
   const form = await request.formData();
   try {
     await apiFetch(user.idToken, `/api/admin/queue/${form.get("id")}/retry`, { method: "POST" });
@@ -50,6 +51,17 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
   const [, setSearchParams] = useSearchParams();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
+  const revalidator = useRevalidator();
+
+  // Queue state is inherently live — poll every 10s while the tab is visible.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible" && revalidator.state === "idle") {
+        revalidator.revalidate();
+      }
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [revalidator]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -73,8 +85,9 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
           <button
             key={f.value}
             type="button"
+            aria-pressed={status === f.value}
             onClick={() => setSearchParams(f.value ? { status: f.value } : {})}
-            className={`rounded-md px-3 py-1.5 text-xs ${
+            className={`rounded-md px-3 py-1.5 text-xs transition-colors duration-100 ${
               status === f.value ? "bg-bg-3 text-text-0" : "text-text-2 hover:bg-bg-2"
             }`}
           >
@@ -110,9 +123,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
                 </div>
                 <div className="flex items-center gap-3 text-[11px] text-text-2">
                   <span>{t("queue.attemptCount", { count: m.attemptCount })}</span>
-                  <span suppressHydrationWarning>
-                    {m.createdAt.replace("T", " ").replace("Z", "")}
-                  </span>
+                  <TimeText value={m.createdAt} />
                   {m.lastError && (
                     <span className="truncate text-bad" title={m.lastError}>
                       {m.lastError}

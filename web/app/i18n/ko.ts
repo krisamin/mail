@@ -14,6 +14,14 @@ export const ko = {
   "common.login": "로그인",
   "common.logout": "로그아웃",
   "common.unknownIntent": "알 수 없는 요청이에요.",
+  "common.copy": "복사",
+  "common.copied": "복사됨",
+  "common.working": "처리 중…",
+  "common.confirmDelete": "정말 삭제할까요? 되돌릴 수 없어요.",
+  "common.confirmDkimClear": "DKIM 키를 해제할까요? DNS에 등록된 키와 어긋나 발송 서명이 즉시 깨져요.",
+  "common.confirmRevoke": "이 앱 비밀번호를 해제할까요? 이 비밀번호를 쓰는 클라이언트는 로그인이 끊겨요.",
+  "common.refreshedAt": "{{time}} 갱신",
+  "common.invalidValue": "잘못된 값이에요.",
 
   // ── navigation ──────────────────────────────────────────
   "nav.dashboard": "대시보드",
@@ -24,6 +32,8 @@ export const ko = {
   "nav.system": "시스템",
   "nav.adminConsole": "관리 콘솔",
   "nav.myAccount": "내 계정",
+
+  "home.tagline": "멀티테넌트 메일 서버",
 
   // ── error page ──────────────────────────────────────────
   "error.title": "오류",

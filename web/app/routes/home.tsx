@@ -15,7 +15,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-6 p-8">
       <div className="text-center">
         <h1 className="text-4xl font-bold tracking-tight">mail</h1>
-        <p className="mt-2 text-sm text-text-2">multi-tenant mail server</p>
+        <p className="mt-2 text-sm text-text-2">{t("home.tagline")}</p>
       </div>
 
       {user ? (

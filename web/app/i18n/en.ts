@@ -15,6 +15,14 @@ export const en: Record<keyof typeof ko, string> = {
   "common.login": "Sign in",
   "common.logout": "Sign out",
   "common.unknownIntent": "Unknown request.",
+  "common.copy": "Copy",
+  "common.copied": "Copied",
+  "common.working": "Working…",
+  "common.confirmDelete": "Delete this? This cannot be undone.",
+  "common.confirmDkimClear": "Clear the DKIM key? It will diverge from the DNS record and break outgoing signatures immediately.",
+  "common.confirmRevoke": "Revoke this app password? Clients using it will lose access.",
+  "common.refreshedAt": "Refreshed {{time}}",
+  "common.invalidValue": "Invalid value.",
 
   "nav.dashboard": "Dashboard",
   "nav.domain": "Domains",
@@ -24,6 +32,8 @@ export const en: Record<keyof typeof ko, string> = {
   "nav.system": "System",
   "nav.adminConsole": "Admin console",
   "nav.myAccount": "My account",
+
+  "home.tagline": "multi-tenant mail server",
 
   "error.title": "Error",
   "error.unknown": "Something went wrong.",

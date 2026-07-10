@@ -24,7 +24,9 @@ const discover = async (): Promise<Discovery> => {
   if (discoveryCache) return discoveryCache;
   // Some IdPs (Authentik) end the issuer with a slash — avoid double slashes.
   const base = ISSUER.replace(/\/$/, "");
-  const res = await fetch(`${base}/.well-known/openid-configuration`);
+  const res = await fetch(`${base}/.well-known/openid-configuration`, {
+    signal: AbortSignal.timeout(10_000),
+  });
   if (!res.ok) throw new Error(`OIDC discovery failed: ${res.status}`);
   discoveryCache = (await res.json()) as Discovery;
   return discoveryCache;
@@ -60,6 +62,7 @@ export const exchangeCode = async (code: string, redirectUri: string): Promise<T
       code,
       redirect_uri: redirectUri,
     }),
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`token exchange failed: ${res.status} ${await res.text()}`);
   const body = (await res.json()) as { id_token: string; access_token: string };

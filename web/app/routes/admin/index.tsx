@@ -2,13 +2,13 @@ import { Link } from "react-router";
 import type { Route } from "./+types/index";
 import { apiFetch, type Account, type Domain } from "~/lib/api.server";
 import { useT } from "~/lib/i18n";
-import { requireUser } from "~/lib/session.server";
+import { requireAdmin } from "~/lib/session.server";
 import { Badge, Card, EmptyText, PageTitle, StatCard } from "~/components";
 
 // Admin dashboard — high-level stat cards and quick links.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = await requireUser(request);
+  const user = await requireAdmin(request);
   const [domainList, accountList, queueStatMap] = await Promise.all([
     apiFetch<Domain[]>(user.idToken, "/api/admin/domain").then((r) => r ?? []),
     apiFetch<Account[]>(user.idToken, "/api/admin/account").then((r) => r ?? []),

@@ -4,7 +4,7 @@ import { ApiError, apiFetch, type Domain, type Relay } from "~/lib/api.server";
 import { translate } from "~/i18n";
 import { useT } from "~/lib/i18n";
 import { getLocale } from "~/lib/locale.server";
-import { requireUser } from "~/lib/session.server";
+import { requireAdmin } from "~/lib/session.server";
 import {
   Badge,
   Button,
@@ -21,7 +21,7 @@ import {
 // Passwords are write-only: the server never returns them (hasPassword flag only).
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = await requireUser(request);
+  const user = await requireAdmin(request);
   const [relayList, domainList] = await Promise.all([
     apiFetch<Relay[]>(user.idToken, "/api/admin/relay"),
     apiFetch<Domain[]>(user.idToken, "/api/admin/domain"),
@@ -30,7 +30,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
-  const user = await requireUser(request);
+  const user = await requireAdmin(request);
   const form = await request.formData();
   const intent = form.get("intent");
 
@@ -115,11 +115,12 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
             <TextInput name="name" required placeholder={t("relay.namePlaceholder")} />
             <TextInput name="host" required placeholder="smtp.resend.com" />
             <TextInput name="port" type="number" defaultValue={587} />
-            <TextInput name="username" placeholder="username" />
+            <TextInput name="username" placeholder="username" autoComplete="off" />
             <TextInput
               name="password"
               type="password"
               placeholder={t("relay.passwordPlaceholder")}
+              autoComplete="new-password"
               className="col-span-2"
             />
             <CheckboxLabel name="starttls" defaultChecked label="STARTTLS" />
@@ -154,11 +155,12 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                     <TextInput name="name" defaultValue={r.name} />
                     <TextInput name="host" defaultValue={r.host} />
                     <TextInput name="port" type="number" defaultValue={r.port} />
-                    <TextInput name="username" defaultValue={r.username} />
+                    <TextInput name="username" defaultValue={r.username} autoComplete="off" />
                     <TextInput
                       name="password"
                       type="password"
                       placeholder={r.hasPassword ? t("relay.passwordKeep") : t("relay.passwordPlaceholder")}
+                      autoComplete="new-password"
                       className="col-span-2"
                     />
                     <CheckboxLabel name="starttls" defaultChecked={r.starttls} label="STARTTLS" />
@@ -174,7 +176,11 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                 <Form method="post" className="mt-1">
                   <input type="hidden" name="intent" value="delete" />
                   <input type="hidden" name="id" value={r.id} />
-                  <Button variant="linkDanger" disabled={busy}>
+                  <Button
+                    variant="linkDanger"
+                    disabled={busy}
+                    confirmMessage={t("common.confirmDelete")}
+                  >
                     {t("common.delete")}
                   </Button>
                 </Form>

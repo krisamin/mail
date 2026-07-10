@@ -23,10 +23,39 @@ export type ButtonVariant = keyof typeof styleMap;
 export const Button = ({
   variant = "primary",
   className = "",
+  pending = false,
+  confirmMessage,
+  children,
+  disabled,
+  onClick,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) => (
-  <button type="submit" {...props} className={`${styleMap[variant]} ${className}`} />
-);
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: ButtonVariant;
+  /** Show a working label + disable while the owning form is submitting. */
+  pending?: boolean;
+  /** Destructive-action guard — window.confirm before the submit goes out. */
+  confirmMessage?: string;
+}) => {
+  const t = useT();
+  return (
+    <button
+      type="submit"
+      {...props}
+      disabled={disabled || pending}
+      aria-busy={pending || undefined}
+      onClick={(e) => {
+        if (confirmMessage && !window.confirm(confirmMessage)) {
+          e.preventDefault();
+          return;
+        }
+        onClick?.(e);
+      }}
+      className={`${styleMap[variant]} ${className}`}
+    >
+      {pending ? t("common.working") : children}
+    </button>
+  );
+};
 
 export const ButtonLink = ({
   variant = "primary",
@@ -43,7 +72,8 @@ export const ActiveToggle = ({ active, disabled }: { active: boolean; disabled?:
     <button
       type="submit"
       disabled={disabled}
-      className={`rounded px-2 py-1 text-xs ${
+      aria-pressed={active}
+      className={`rounded px-2 py-1 text-xs transition-colors duration-100 ${
         active ? "bg-ok/20 text-ok hover:bg-ok/30" : "bg-bg-3 text-muted hover:bg-bg-2"
       }`}
     >

@@ -29,13 +29,20 @@ export const AddressChipList = ({
         >
           {a.localPart === "*" ? <span className="text-warn">*</span> : a.localPart}@{a.domainName}
           {deletable && (
-            <Form method="post" className="inline">
+            <Form
+              method="post"
+              className="inline"
+              onSubmit={(e) => {
+                if (!window.confirm(t("common.confirmDelete"))) e.preventDefault();
+              }}
+            >
               <input type="hidden" name="intent" value="delete-address" />
               <input type="hidden" name="id" value={a.id} />
               <button
                 type="submit"
                 disabled={busy}
-                className="text-[10px] text-bad hover:underline"
+                className="px-1 text-[10px] text-bad hover:underline"
+                aria-label={t("mail.deleteAddress")}
                 title={t("mail.deleteAddress")}
               >
                 ×
@@ -70,7 +77,12 @@ export const AppPasswordRows = ({ list, busy = false }: { list: AppPassword[]; b
             </span>
           </div>
           {!p.revoked && (
-            <Form method="post">
+            <Form
+              method="post"
+              onSubmit={(e) => {
+                if (!window.confirm(t("common.confirmRevoke"))) e.preventDefault();
+              }}
+            >
               <input type="hidden" name="intent" value="revoke-pw" />
               <input type="hidden" name="id" value={p.id} />
               <button

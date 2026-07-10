@@ -81,3 +81,14 @@ export const ADMIN_GROUP = process.env.MAIL_ADMIN_GROUP ?? "mail-admin";
 
 export const isAdmin = (user: SessionUser | null): boolean =>
   !!user && user.groupList.some((g) => g === ADMIN_GROUP || g === `/${ADMIN_GROUP}`);
+
+/** For admin routes. RR7 runs parent/child loaders in PARALLEL, so the
+ *  layout's 403 does not stop child loaders from hitting the Go API — every
+ *  admin child loader must guard itself with this. */
+export const requireAdmin = async (request: Request): Promise<SessionUser> => {
+  const user = await requireUser(request);
+  if (!isAdmin(user)) {
+    throw new Response("admin group required", { status: 403 });
+  }
+  return user;
+};
