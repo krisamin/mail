@@ -10,41 +10,41 @@ import (
 	"time"
 )
 
-// 서버 점검 (/api/admin/system) — 운영 중 상태를 한 화면에서 확인한다.
-//   - 내부 리스너: 데몬이 실제 listen 중이고 배너가 정상인지 (self-dial)
-//   - 외부 도달성: MAIL_HOSTNAME의 공인 경로로 표준 포트에 접속되는지
-//     (LB/라우터 포워딩까지 뚫려야 성공 — 실제 클라이언트가 겪는 경로)
-//   - DB 연결/지연, 발송 큐 상태, 프로세스 가동 시간
+// Server check (/api/admin/system) — view operational status on one screen.
+//   - Internal listeners: whether the daemon is actually listening and the banner is healthy (self-dial)
+//   - External reachability: whether the standard ports are reachable via MAIL_HOSTNAME's
+//     public path (LB/router forwarding must be open too — the path real clients experience)
+//   - DB connectivity/latency, outbound queue status, process uptime
 //
-// 내부 self-dial 성공 ≠ 외부에서 접속 가능. 두 점검을 분리해서 보여준다.
-// 외부 점검도 pod에서 나가는 것이라 헤어핀 NAT이 안 되는 라우터에선
-// 실제 외부와 다르게 나올 수 있다 — 결과에 명시.
+// Internal self-dial success ≠ reachable from outside. The two checks are shown separately.
+// The external check also originates from the pod, so on routers without hairpin NAT
+// it may differ from the real outside view — noted in the result.
 
-// SystemPort는 점검 대상 리스너 하나를 기술한다.
+// SystemPort describes one listener to check.
 type SystemPort struct {
 	Name  string // "imap" | "smtp" | "submission"
-	Addr  string // listen 주소 (":1143" 등)
-	Kind  string // "imap" | "smtp" — 배너 프로토콜
-	TLS   bool   // implicit TLS 여부 (배너 확인 생략, 연결만)
-	Check bool   // false면 결과에서 제외
+	Addr  string // listen address (e.g. ":1143")
+	Kind  string // "imap" | "smtp" — banner protocol
+	TLS   bool   // whether implicit TLS (skip banner check, connect only)
+	Check bool   // false excludes it from the results
 }
 
-// ExternalPort는 외부 도달성 점검 대상 — 클라이언트가 쓰는 표준 포트.
+// ExternalPort is an external reachability check target — the standard ports clients use.
 type ExternalPort struct {
-	Name string // "imaps(993)" 등 표시용
+	Name string // display label, e.g. "imaps(993)"
 	Port string // "993"
-	// Mode: "tls" = implicit TLS 핸드셰이크까지, "banner" = 평문 배너 읽기
+	// Mode: "tls" = up to the implicit TLS handshake, "banner" = read the plaintext banner
 	Mode string
 }
 
-// WithSystemPort는 내부 리스너 점검 목록을 등록한다 (main.go에서 조립).
+// WithSystemPort registers the internal listener check list (assembled in main.go).
 func (s *Server) WithSystemPort(portList []SystemPort) *Server {
 	s.systemPortList = portList
 	return s
 }
 
-// WithExternalPort는 외부 도달성 점검 목록을 등록한다.
-// host는 보통 MAIL_HOSTNAME (mail.krisam.in).
+// WithExternalPort registers the external reachability check list.
+// host is usually MAIL_HOSTNAME (mail.krisam.in).
 func (s *Server) WithExternalPort(host string, portList []ExternalPort) *Server {
 	s.externalHost = host
 	s.externalPortList = portList
@@ -62,8 +62,8 @@ type portCheckDTO struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// handleSystemCheck는 리스너/DB/큐 상태를 모아 돌려준다 (빠른 점검만).
-// 외부 도달성은 느려서(차단 포트 = 타임아웃 대기) 별도 엔드포인트로 분리.
+// handleSystemCheck gathers listener/DB/queue status (fast checks only).
+// External reachability is slow (blocked ports wait for timeout), so it's a separate endpoint.
 func (s *Server) handleSystemCheck(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -80,7 +80,7 @@ func (s *Server) handleSystemCheck(w http.ResponseWriter, r *http.Request) {
 		dbStatus["error"] = dbErr.Error()
 	}
 
-	// ── 발송 큐
+	// ── Outbound queue
 	var queueStatus map[string]any
 	if statMap, err := s.store.OutboundStat(ctx); err == nil {
 		queueStatus = map[string]any{"ok": true, "statMap": statMap}
@@ -88,7 +88,7 @@ func (s *Server) handleSystemCheck(w http.ResponseWriter, r *http.Request) {
 		queueStatus = map[string]any{"ok": false, "error": err.Error()}
 	}
 
-	// ── 내부 리스너 self-dial (로컬이라 즉시)
+	// ── Internal listener self-dial (local, so immediate)
 	listenerList := make([]portCheckDTO, 0, len(s.systemPortList))
 	for _, p := range s.systemPortList {
 		if !p.Check {
@@ -104,13 +104,13 @@ func (s *Server) handleSystemCheck(w http.ResponseWriter, r *http.Request) {
 		"queue":        queueStatus,
 		"listener":     listenerList,
 		"externalHost": s.externalHost,
-		"note": "리스너=프로세스 내부 self-dial (데몬 정상 여부만). " +
-			"외부 도달성은 /api/admin/system/external (별도 — 차단 포트는 타임아웃까지 걸림).",
+		"note": "listener = in-process self-dial (only whether the daemon is healthy). " +
+			"External reachability is at /api/admin/system/external (separate — blocked ports wait until timeout).",
 	})
 }
 
-// handleSystemExternal은 외부 도달성만 점검한다 (느림 — 차단 포트는
-// 다이얼 타임아웃 5초까지 대기. 병렬이라 최대 ~5초).
+// handleSystemExternal checks external reachability only (slow — blocked ports
+// wait up to the 5s dial timeout. Runs in parallel, so at most ~5s).
 func (s *Server) handleSystemExternal(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -132,19 +132,19 @@ func (s *Server) handleSystemExternal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"externalHost": s.externalHost,
 		"external":     externalList,
-		"note": "공인 호스트네임으로 실접속 (LB/라우터 포워딩 포함) — " +
-			"단, 서버에서 나가는 경로라 헤어핀 NAT 미지원 라우터에선 오탐 가능.",
+		"note": "real connection via the public hostname (including LB/router forwarding) — " +
+			"however, since the path originates from the server, routers without hairpin NAT may give false results.",
 	})
 }
 
-// checkListener는 내부 리스너에 접속해 배너까지 확인한다.
+// checkListener connects to an internal listener and verifies up to the banner.
 func checkListener(ctx context.Context, p SystemPort) portCheckDTO {
 	out := portCheckDTO{Name: p.Name, Addr: p.Addr}
 
-	// listen 주소(":1143")를 다이얼 주소("127.0.0.1:1143")로
+	// Turn the listen address (":1143") into a dial address ("127.0.0.1:1143")
 	host, port, err := net.SplitHostPort(p.Addr)
 	if err != nil {
-		out.Error = "주소 파싱 실패: " + err.Error()
+		out.Error = "address parsing failed: " + err.Error()
 		return out
 	}
 	if host == "" || host == "0.0.0.0" || host == "::" {
@@ -161,7 +161,7 @@ func checkListener(ctx context.Context, p SystemPort) portCheckDTO {
 	defer conn.Close()
 	out.Open = true
 
-	// 배너 읽기 — implicit TLS 리스너는 TLS 핸드셰이크 전에 배너가 없으니 생략
+	// Read the banner — implicit TLS listeners have no banner before the TLS handshake, so skip
 	if !p.TLS {
 		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 		if line, err := bufio.NewReader(conn).ReadString('\n'); err == nil {
@@ -172,9 +172,9 @@ func checkListener(ctx context.Context, p SystemPort) portCheckDTO {
 	return out
 }
 
-// checkExternal은 공인 호스트네임 + 표준 포트로 실제 접속을 시도한다.
-//   - mode "tls": TCP + TLS 핸드셰이크 (인증서 검증 포함 — 만료/이름 불일치 감지)
-//   - mode "banner": TCP + 프로토콜 배너 한 줄
+// checkExternal attempts a real connection via the public hostname + standard port.
+//   - mode "tls": TCP + TLS handshake (including certificate validation — detects expiry/name mismatch)
+//   - mode "banner": TCP + one line of protocol banner
 func checkExternal(ctx context.Context, host string, p ExternalPort) portCheckDTO {
 	out := portCheckDTO{Name: p.Name, Addr: net.JoinHostPort(host, p.Port)}
 
@@ -192,19 +192,19 @@ func checkExternal(ctx context.Context, host string, p ExternalPort) portCheckDT
 		tconn := tls.Client(conn, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
 		tconn.SetDeadline(time.Now().Add(5 * time.Second))
 		if err := tconn.HandshakeContext(ctx); err != nil {
-			out.Error = "TLS 핸드셰이크 실패: " + err.Error()
+			out.Error = "TLS handshake failed: " + err.Error()
 			return out
 		}
 		cert := tconn.ConnectionState().PeerCertificates
 		if len(cert) > 0 {
 			out.Banner = "TLS OK · " + cert[0].Subject.CommonName +
-				" (만료 " + cert[0].NotAfter.Format("2006-01-02") + ")"
+				" (expires " + cert[0].NotAfter.Format("2006-01-02") + ")"
 		}
 	default: // banner
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		line, err := bufio.NewReader(conn).ReadString('\n')
 		if err != nil {
-			out.Error = "배너 읽기 실패: " + err.Error()
+			out.Error = "banner read failed: " + err.Error()
 			return out
 		}
 		out.Banner = strings.TrimSpace(line)

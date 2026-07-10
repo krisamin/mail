@@ -9,58 +9,59 @@ import (
 	gosmtp "github.com/emersion/go-smtp"
 )
 
-// 추가 주소 + 멀티도메인 내부 라우팅 e2e.
+// Extra addresses + multi-domain internal routing e2e.
 //
-// 마로 시나리오: 서버에 krisam.in과 kirby.so가 둘 다 있으면
-// 둘 사이 메일은 relay(Resend)를 안 거치고 내부 배달돼야 한다.
-// 여기에 추가 주소(hello@)와 catch-all(*@kirby.so)까지 검증.
+// Maro's scenario: when the server hosts both krisam.in and kirby.so,
+// mail between them must be delivered internally without going through
+// relay (Resend). Also verifies extra addresses (hello@) and the
+// catch-all (*@kirby.so).
 
-// TestAliasDelivery: MX 수신 경로에서 추가 주소/와일드카드로 배달.
+// TestAliasDelivery: delivery via extra addresses/wildcards on the MX inbound path.
 func TestAliasDelivery(t *testing.T) {
 	env := setupServers(t)
 	ctx := context.Background()
 
-	// 시드: kirby.so 도메인 + 추가 주소 2개 (maro 계정에)
+	// seed: kirby.so domain + 2 extra addresses (on the maro account)
 	var kirbyID, krisamID int64
 	if err := env.store.Pool().QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
-		t.Fatalf("kirby.so 시드: %v", err)
+		t.Fatalf("kirby.so seed: %v", err)
 	}
 	if err := env.store.Pool().QueryRow(ctx,
 		`SELECT id FROM domain WHERE name = 'krisam.in'`).Scan(&krisamID); err != nil {
-		t.Fatalf("krisam.in 조회: %v", err)
+		t.Fatalf("krisam.in lookup: %v", err)
 	}
 	maro, err := env.store.FindAccountByAddress(ctx, testAddr)
 	if err != nil {
-		t.Fatalf("maro 조회: %v", err)
+		t.Fatalf("maro lookup: %v", err)
 	}
 	if _, err := env.store.CreateAddress(ctx, krisamID, "hello", maro.ID); err != nil {
-		t.Fatalf("추가 주소: %v", err)
+		t.Fatalf("extra address: %v", err)
 	}
 	if _, err := env.store.CreateAddress(ctx, kirbyID, "*", maro.ID); err != nil {
 		t.Fatalf("catch-all: %v", err)
 	}
 
-	// 1) 정확 별칭 hello@krisam.in으로 수신 → maro INBOX
+	// 1) receive to the exact alias hello@krisam.in → maro INBOX
 	if err := sendSMTP(t, env.smtpAddr, "ext@example.com", []string{"hello@krisam.in"},
 		"From: ext@example.com\r\nTo: hello@krisam.in\r\nSubject: to alias\r\n\r\nalias mail\r\n"); err != nil {
-		t.Fatalf("별칭 수신: %v", err)
+		t.Fatalf("alias reception: %v", err)
 	}
 
-	// 2) catch-all: 아무 주소나 @kirby.so → maro INBOX
+	// 2) catch-all: any address @kirby.so → maro INBOX
 	if err := sendSMTP(t, env.smtpAddr, "ext@example.com", []string{"whatever-12345@kirby.so"},
 		"From: ext@example.com\r\nTo: whatever-12345@kirby.so\r\nSubject: to catchall\r\n\r\ncatchall mail\r\n"); err != nil {
-		t.Fatalf("catch-all 수신: %v", err)
+		t.Fatalf("catch-all reception: %v", err)
 	}
 
-	// 3) 별칭 없는 주소는 여전히 550
+	// 3) an address with no alias is still 550
 	if err := trySend(env.smtpAddr, "ext@example.com", "nobody@krisam.in"); err == nil {
-		t.Fatal("nobody@krisam.in이 수락됨 (550이어야)")
+		t.Fatal("nobody@krisam.in was accepted (should be 550)")
 	} else if !strings.Contains(err.Error(), "550") {
-		t.Fatalf("550이어야: %v", err)
+		t.Fatalf("should be 550: %v", err)
 	}
 
-	// maro INBOX에서 두 통 다 확인
+	// check both mails in maro's INBOX
 	messageList := readInbox(t, env.imapAddr, testAddr, testPass)
 	var subjects []string
 	for _, m := range messageList {
@@ -77,32 +78,32 @@ func TestAliasDelivery(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatalf("INBOX에 %q 없음: %v", want, subjects)
+			t.Fatalf("INBOX missing %q: %v", want, subjects)
 		}
 	}
-	t.Logf("✔ 별칭 + catch-all 배달 확인 (INBOX %d통): %v", len(subjects), subjects)
-	t.Log("✔ 미등록 주소 550 유지")
+	t.Logf("✔ alias + catch-all delivery verified (INBOX %d mails): %v", len(subjects), subjects)
+	t.Log("✔ unregistered address still 550")
 }
 
-// TestInternalRoutingTwoDomains: 우리 서버의 두 도메인 간 제출은
-// 발송 큐(relay)를 거치지 않고 내부 배달된다.
+// TestInternalRoutingTwoDomains: submission between two domains on our
+// server is delivered internally without going through the outbound queue (relay).
 func TestInternalRoutingTwoDomains(t *testing.T) {
-	env, subAddr := setupSubmission(t) // enqueueEnabled=false — relay 없는 구성
+	env, subAddr := setupSubmission(t) // enqueueEnabled=false — configuration without relay
 	ctx := context.Background()
 
-	// kirby.so + catch-all(maro)
+	// kirby.so + catch-all (maro)
 	var kirbyID int64
 	if err := env.store.Pool().QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
-		t.Fatalf("kirby.so 시드: %v", err)
+		t.Fatalf("kirby.so seed: %v", err)
 	}
 	maro, _ := env.store.FindAccountByAddress(ctx, testAddr)
 	if _, err := env.store.CreateAddress(ctx, kirbyID, "*", maro.ID); err != nil {
 		t.Fatalf("catch-all: %v", err)
 	}
 
-	// shiro가 인증하고 team@kirby.so로 제출 —
-	// kirby.so는 우리 도메인이므로 큐 비활성이어도 배달돼야 한다 (내부 라우팅)
+	// shiro authenticates and submits to team@kirby.so —
+	// kirby.so is our domain, so it must be delivered even with the queue disabled (internal routing)
 	c := dialSubmission(t, subAddr)
 	if err := c.Auth(sasl.NewPlainClient("", testAddr2, testPass)); err != nil {
 		t.Fatalf("AUTH: %v", err)
@@ -111,7 +112,7 @@ func TestInternalRoutingTwoDomains(t *testing.T) {
 		t.Fatalf("MAIL: %v", err)
 	}
 	if err := c.Rcpt("team@kirby.so", nil); err != nil {
-		t.Fatalf("RCPT team@kirby.so (내부 도메인인데 거절됨): %v", err)
+		t.Fatalf("RCPT team@kirby.so (internal domain but rejected): %v", err)
 	}
 	w, err := c.Data()
 	if err != nil {
@@ -125,14 +126,14 @@ func TestInternalRoutingTwoDomains(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	// 발송 큐는 비어있어야 (relay 안 거침)
+	// the outbound queue must be empty (relay not involved)
 	var queued int
 	_ = env.store.Pool().QueryRow(ctx, `SELECT count(*) FROM outbound_queue`).Scan(&queued)
 	if queued != 0 {
-		t.Fatalf("내부 라우팅인데 큐에 %d건 들어감", queued)
+		t.Fatalf("internal routing but %d entries went into the queue", queued)
 	}
 
-	// maro INBOX에 도착 확인 (catch-all이 maro니까)
+	// verify arrival in maro's INBOX (the catch-all is maro)
 	messageList := readInbox(t, env.imapAddr, testAddr, testPass)
 	found := false
 	for _, m := range messageList {
@@ -141,13 +142,13 @@ func TestInternalRoutingTwoDomains(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("내부 배달 안 됨 (%d통)", len(messageList))
+		t.Fatalf("not delivered internally (%d mails)", len(messageList))
 	}
-	t.Log("✔ krisam.in → kirby.so 제출이 relay 없이 내부 배달 (큐 0건)")
+	t.Log("✔ krisam.in → kirby.so submission delivered internally without relay (queue empty)")
 }
 
-// TestSubmissionSendAsAlias: 소유한 추가 주소를 envelope from으로 발신 가능,
-// 남의 주소는 553.
+// TestSubmissionSendAsAlias: can send with an owned extra address as the
+// envelope from; someone else's address yields 553.
 func TestSubmissionSendAsAlias(t *testing.T) {
 	env, subAddr := setupSubmission(t)
 	ctx := context.Background()
@@ -155,39 +156,39 @@ func TestSubmissionSendAsAlias(t *testing.T) {
 	var krisamID int64
 	if err := env.store.Pool().QueryRow(ctx,
 		`SELECT id FROM domain WHERE name = 'krisam.in'`).Scan(&krisamID); err != nil {
-		t.Fatalf("krisam.in 조회: %v", err)
+		t.Fatalf("krisam.in lookup: %v", err)
 	}
 	maro, _ := env.store.FindAccountByAddress(ctx, testAddr)
 	if _, err := env.store.CreateAddress(ctx, krisamID, "hello", maro.ID); err != nil {
-		t.Fatalf("추가 주소: %v", err)
+		t.Fatalf("extra address: %v", err)
 	}
 
-	// maro가 hello@krisam.in으로 발신 → 허용
+	// maro sends as hello@krisam.in → allowed
 	c := dialSubmission(t, subAddr)
 	if err := c.Auth(sasl.NewPlainClient("", testAddr, testPass)); err != nil {
 		t.Fatalf("AUTH: %v", err)
 	}
 	if err := c.Mail("hello@krisam.in", nil); err != nil {
-		t.Fatalf("본인 별칭 발신이 거절됨: %v", err)
+		t.Fatalf("sending as own alias was rejected: %v", err)
 	}
-	t.Log("✔ 본인 별칭으로 MAIL FROM 허용")
+	t.Log("✔ MAIL FROM allowed with own alias")
 
-	// shiro가 hello@krisam.in으로 발신 → 553
+	// shiro sends as hello@krisam.in → 553
 	c2 := dialSubmission(t, subAddr)
 	if err := c2.Auth(sasl.NewPlainClient("", testAddr2, testPass)); err != nil {
 		t.Fatalf("AUTH2: %v", err)
 	}
 	err := c2.Mail("hello@krisam.in", nil)
 	if err == nil {
-		t.Fatal("남의 별칭 발신이 허용됨")
+		t.Fatal("sending as someone else's alias was allowed")
 	}
 	if !strings.Contains(err.Error(), "553") {
-		t.Fatalf("553이어야: %v", err)
+		t.Fatalf("expected 553: %v", err)
 	}
-	t.Logf("✔ 타인 별칭 발신 553: %v", err)
+	t.Logf("✔ sending as someone else's alias rejected with 553: %v", err)
 }
 
-// trySend는 한 통 보내기를 시도하고 RCPT 단계 에러를 돌려준다.
+// trySend attempts to send one mail and returns the RCPT-stage error.
 func trySend(smtpAddr, from, to string) error {
 	c, err := gosmtp.Dial(smtpAddr)
 	if err != nil {

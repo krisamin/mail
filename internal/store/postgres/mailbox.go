@@ -11,20 +11,20 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// newUIDValidity는 새 메일박스의 UIDVALIDITY를 생성한다.
-// 유닉스 초를 쓴다 (단조 증가, 재생성 시 달라짐 보장).
+// newUIDValidity generates the UIDVALIDITY for a new mailbox.
+// Uses unix seconds (monotonically increasing, guaranteed to differ on recreation).
 func newUIDValidity() uint32 {
 	return uint32(time.Now().Unix())
 }
 
-// ListMailbox는 유저의 모든 메일박스를 반환한다.
+// ListMailbox returns all mailboxes of a user.
 func (s *Store) ListMailbox(ctx context.Context, accountID int64) ([]*store.Mailbox, error) {
 	const q = `
 		SELECT id, account_id, name, uid_validity, uid_next, subscribed, created_at
 		FROM mailbox WHERE account_id = $1 ORDER BY name`
 	rows, err := s.pool.Query(ctx, q, accountID)
 	if err != nil {
-		return nil, fmt.Errorf("메일박스 목록: %w", err)
+		return nil, fmt.Errorf("mailbox list: %w", err)
 	}
 	defer rows.Close()
 
@@ -39,7 +39,7 @@ func (s *Store) ListMailbox(ctx context.Context, accountID int64) ([]*store.Mail
 	return out, rows.Err()
 }
 
-// GetMailbox는 이름으로 메일박스를 찾는다.
+// GetMailbox finds a mailbox by name.
 func (s *Store) GetMailbox(ctx context.Context, accountID int64, name string) (*store.Mailbox, error) {
 	const q = `
 		SELECT id, account_id, name, uid_validity, uid_next, subscribed, created_at
@@ -51,12 +51,12 @@ func (s *Store) GetMailbox(ctx context.Context, accountID int64, name string) (*
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("메일박스 조회: %w", err)
+		return nil, fmt.Errorf("mailbox lookup: %w", err)
 	}
 	return &m, nil
 }
 
-// CreateMailbox는 새 메일박스를 만든다.
+// CreateMailbox creates a new mailbox.
 func (s *Store) CreateMailbox(ctx context.Context, accountID int64, name string) (*store.Mailbox, error) {
 	const q = `
 		INSERT INTO mailbox (account_id, name, uid_validity, uid_next, subscribed)
@@ -66,16 +66,16 @@ func (s *Store) CreateMailbox(ctx context.Context, accountID int64, name string)
 	err := s.pool.QueryRow(ctx, q, accountID, name, newUIDValidity()).Scan(
 		&m.ID, &m.AccountID, &m.Name, &m.UIDValidity, &m.UIDNext, &m.Subscribed, &m.CreatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("메일박스 생성: %w", err)
+		return nil, fmt.Errorf("mailbox create: %w", err)
 	}
 	return &m, nil
 }
 
-// DeleteMailbox는 메일박스를 삭제한다 (메시지도 CASCADE).
+// DeleteMailbox deletes a mailbox (messages CASCADE too).
 func (s *Store) DeleteMailbox(ctx context.Context, accountID int64, name string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM mailbox WHERE account_id = $1 AND name = $2`, accountID, name)
 	if err != nil {
-		return fmt.Errorf("메일박스 삭제: %w", err)
+		return fmt.Errorf("mailbox delete: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -83,12 +83,12 @@ func (s *Store) DeleteMailbox(ctx context.Context, accountID int64, name string)
 	return nil
 }
 
-// RenameMailbox는 메일박스 이름을 바꾼다.
+// RenameMailbox renames a mailbox.
 func (s *Store) RenameMailbox(ctx context.Context, accountID int64, name, newName string) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE mailbox SET name = $3 WHERE account_id = $1 AND name = $2`, accountID, name, newName)
 	if err != nil {
-		return fmt.Errorf("메일박스 이름변경: %w", err)
+		return fmt.Errorf("mailbox rename: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -96,14 +96,14 @@ func (s *Store) RenameMailbox(ctx context.Context, accountID int64, name, newNam
 	return nil
 }
 
-// SetSubscribed는 구독 상태를 바꾼다.
+// SetSubscribed changes the subscription state.
 func (s *Store) SetSubscribed(ctx context.Context, mailboxID int64, subscribed bool) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE mailbox SET subscribed = $2 WHERE id = $1`, mailboxID, subscribed)
 	return err
 }
 
-// MailboxStatus는 SELECT/STATUS용 집계값을 계산한다.
+// MailboxStatus computes the aggregates for SELECT/STATUS.
 func (s *Store) MailboxStatus(ctx context.Context, mailboxID int64) (*store.MailboxStatus, error) {
 	const q = `
 		SELECT
@@ -123,12 +123,12 @@ func (s *Store) MailboxStatus(ctx context.Context, mailboxID int64) (*store.Mail
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("메일박스 상태: %w", err)
+		return nil, fmt.Errorf("mailbox status: %w", err)
 	}
 	st.UIDNext = uint32(uidNext)
 	st.UIDValidity = uint32(uidValidity)
 	st.MessageCount = uint32(numMessages)
 	st.UnseenCount = uint32(numUnseen)
-	st.NumRecent = 0 // RECENT는 obsolete, 0으로
+	st.NumRecent = 0 // RECENT is obsolete, keep 0
 	return &st, nil
 }

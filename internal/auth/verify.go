@@ -12,45 +12,46 @@ import (
 	"github.com/emersion/go-msgauth/dmarc"
 )
 
-// VerifyOptions는 수신 검증에 필요한 입력.
+// VerifyOptions holds the inputs required for inbound verification.
 type VerifyOptions struct {
-	// RemoteIP는 SMTP 클라이언트의 IP (SPF 대상).
+	// RemoteIP is the SMTP client's IP (SPF target).
 	RemoteIP net.IP
-	// HeloName은 EHLO/HELO 이름.
+	// HeloName is the EHLO/HELO name.
 	HeloName string
-	// EnvelopeFrom은 MAIL FROM 주소.
+	// EnvelopeFrom is the MAIL FROM address.
 	EnvelopeFrom string
-	// Hostname은 Authentication-Results의 authserv-id.
+	// Hostname is the authserv-id for Authentication-Results.
 	Hostname string
 
-	// LookupTXT는 테스트용 DNS 오버라이드 (nil이면 실 DNS).
+	// LookupTXT is a DNS override for tests (nil uses real DNS).
 	LookupTXT func(domain string) ([]string, error)
-	// SPFResolver는 테스트용 (nil이면 실 DNS).
+	// SPFResolver is for tests (nil uses real DNS).
 	SPFResolver spf.DNSResolver
 }
 
-// VerifyResult는 수신 검증 결과 요약.
+// VerifyResult summarizes the inbound verification result.
 type VerifyResult struct {
-	// Header는 메시지 앞에 붙일 Authentication-Results 헤더 (CRLF 포함).
+	// Header is the Authentication-Results header to prepend to the message (CRLF included).
 	Header []byte
-	// SPFPass / DKIMPass / DMARCPass — 정책 판단용 요약.
+	// SPFPass / DKIMPass / DMARCPass — summary for policy decisions.
 	SPFPass   bool
 	DKIMPass  bool
 	DMARCPass bool
-	// DMARCEvaluated는 발신 도메인에 DMARC 레코드가 있어 판정이 이뤄졌는지.
+	// DMARCEvaluated indicates the sending domain has a DMARC record and an evaluation took place.
 	DMARCEvaluated bool
-	// DMARCPolicy는 발신 도메인이 공표한 정책 ("none"|"quarantine"|"reject").
-	// DMARCEvaluated가 true일 때만 의미 있다.
+	// DMARCPolicy is the policy published by the sending domain ("none"|"quarantine"|"reject").
+	// Only meaningful when DMARCEvaluated is true.
 	DMARCPolicy string
-	// FromParsed는 From 헤더에서 도메인 추출에 성공했는지. false면 From이
-	// 없거나 기형 — DMARC 평가 자체가 불가능했다는 뜻이라, 집행 모드에서는
-	// fail-open이 아니라 의심 신호로 다뤄야 한다 (RFC 7489 §6.6.1).
+	// FromParsed indicates domain extraction from the From header succeeded. If false,
+	// the From header is missing or malformed — meaning DMARC evaluation itself was
+	// impossible, so in enforcement mode this should be treated as a suspicious signal
+	// rather than fail-open (RFC 7489 §6.6.1).
 	FromParsed bool
 }
 
-// VerifyInbound는 수신 메일의 SPF/DKIM/DMARC를 검증하고
-// Authentication-Results 헤더를 만든다. 검증 실패해도 에러가 아니라
-// 결과에 기록만 한다 (거절 정책은 Phase 4).
+// VerifyInbound verifies SPF/DKIM/DMARC of inbound mail and builds the
+// Authentication-Results header. Verification failures are not errors —
+// they are only recorded in the result (rejection policy is Phase 4).
 func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 	var resultList []authres.Result
 	res := &VerifyResult{}
@@ -74,7 +75,7 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 		dkimOpts = &dkim.VerifyOptions{LookupTXT: opts.LookupTXT}
 	}
 	verificationList, err := dkim.VerifyWithOptions(bytes.NewReader(raw), dkimOpts)
-	var dkimDomainList []string // pass한 서명 도메인 (DMARC 정렬용)
+	var dkimDomainList []string // signature domains that passed (for DMARC alignment)
 	if err != nil && len(verificationList) == 0 {
 		resultList = append(resultList, &authres.DKIMResult{Value: authres.ResultNone})
 	}
@@ -106,9 +107,9 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 		if err == nil && record != nil {
 			res.DMARCEvaluated = true
 			res.DMARCPolicy = string(record.Policy)
-			// SPF 정렬: envelope from 도메인 vs From 헤더 도메인
+			// SPF alignment: envelope from domain vs From header domain
 			spfAligned := res.SPFPass && domainAligned(envelopeDomain(opts.EnvelopeFrom), fromDomain)
-			// DKIM 정렬: pass한 서명 도메인 vs From 헤더 도메인
+			// DKIM alignment: passing signature domain vs From header domain
 			dkimAligned := false
 			for _, d := range dkimDomainList {
 				if domainAligned(d, fromDomain) {
@@ -133,7 +134,7 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 	return res
 }
 
-// authresValue는 SPF 결과 문자열을 authres 값으로 변환한다.
+// authresValue converts an SPF result string into an authres value.
 func authresValue(s string) authres.ResultValue {
 	switch strings.ToLower(s) {
 	case "pass":
@@ -153,7 +154,7 @@ func authresValue(s string) authres.ResultValue {
 	}
 }
 
-// envelopeDomain은 MAIL FROM 주소의 도메인.
+// envelopeDomain returns the domain of the MAIL FROM address.
 func envelopeDomain(addr string) string {
 	at := strings.LastIndex(addr, "@")
 	if at < 0 {
@@ -162,9 +163,9 @@ func envelopeDomain(addr string) string {
 	return strings.ToLower(addr[at+1:])
 }
 
-// headerFromDomain은 From 헤더의 주소 도메인을 뽑는다 (DMARC 기준 신원).
+// headerFromDomain extracts the address domain from the From header (the DMARC identity).
 func headerFromDomain(raw []byte) string {
-	// 헤더 블록만 스캔 (본문 앞 빈 줄까지)
+	// Scan only the header block (up to the blank line before the body)
 	lineList := bytes.Split(raw, []byte("\r\n"))
 	var fromLine string
 	for i := 0; i < len(lineList); i++ {
@@ -173,7 +174,7 @@ func headerFromDomain(raw []byte) string {
 		}
 		if bytes.HasPrefix(bytes.ToLower(lineList[i]), []byte("from:")) {
 			fromLine = string(lineList[i][5:])
-			// folded header 이어붙이기
+			// Unfold folded headers
 			for j := i + 1; j < len(lineList) && len(lineList[j]) > 0 &&
 				(lineList[j][0] == ' ' || lineList[j][0] == '\t'); j++ {
 				fromLine += string(lineList[j])
@@ -184,7 +185,7 @@ func headerFromDomain(raw []byte) string {
 	if fromLine == "" {
 		return ""
 	}
-	// "Name <addr@domain>" 또는 "addr@domain"
+	// "Name <addr@domain>" or "addr@domain"
 	addr := fromLine
 	if lt := strings.LastIndex(fromLine, "<"); lt >= 0 {
 		if gt := strings.Index(fromLine[lt:], ">"); gt > 0 {
@@ -194,9 +195,9 @@ func headerFromDomain(raw []byte) string {
 	return envelopeDomain(strings.TrimSpace(addr))
 }
 
-// domainAligned는 DMARC relaxed alignment — 같은 조직 도메인이면 정렬.
-// (간이 구현: 완전 일치 또는 서브도메인 관계. PSL 기반 조직 도메인
-// 판정은 Phase 4에서 정교화.)
+// domainAligned implements DMARC relaxed alignment — aligned if same organizational domain.
+// (Simplified implementation: exact match or subdomain relationship. PSL-based
+// organizational domain determination will be refined in Phase 4.)
 func domainAligned(a, b string) bool {
 	a, b = strings.ToLower(a), strings.ToLower(b)
 	if a == b {
@@ -205,7 +206,7 @@ func domainAligned(a, b string) bool {
 	return strings.HasSuffix(a, "."+b) || strings.HasSuffix(b, "."+a)
 }
 
-// FormatSPFError는 로그용 헬퍼.
+// FormatSPFError is a logging helper.
 func FormatSPFError(result string, err error) string {
 	if err != nil {
 		return fmt.Sprintf("%s (%v)", result, err)

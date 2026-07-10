@@ -16,7 +16,7 @@ import (
 	"github.com/emersion/go-msgauth/dkim"
 )
 
-// DNS 없이 도는 유닛 테스트 — LookupTXT/SPFResolver를 모의로 주입.
+// Unit tests that run without DNS — LookupTXT/SPFResolver are injected as mocks.
 
 const testMessage = "From: Maro <maro@krisam.in>\r\n" +
 	"To: Friend <friend@example.com>\r\n" +
@@ -25,12 +25,12 @@ const testMessage = "From: Maro <maro@krisam.in>\r\n" +
 	"\r\n" +
 	"sign me please\r\n"
 
-// genRSAKey는 테스트용 RSA 키를 만들고 (PEM, DNS TXT 값)을 돌려준다.
+// genRSAKey creates an RSA key for testing and returns (PEM, DNS TXT value).
 func genRSAKey(t *testing.T) (pemText, dnsTXT string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("키 생성: %v", err)
+		t.Fatalf("key generation: %v", err)
 	}
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
@@ -40,29 +40,29 @@ func genRSAKey(t *testing.T) (pemText, dnsTXT string) {
 
 	pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	if err != nil {
-		t.Fatalf("공개키: %v", err)
+		t.Fatalf("public key: %v", err)
 	}
 	dnsTXT = "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(pubDER)
 	return
 }
 
-// TestDKIMSignAndVerify: 서명 → 모의 DNS로 검증 왕복.
+// TestDKIMSignAndVerify: sign → verify round-trip with mock DNS.
 func TestDKIMSignAndVerify(t *testing.T) {
 	pemText, dnsTXT := genRSAKey(t)
 
 	signer, err := ParsePrivateKey(pemText)
 	if err != nil {
-		t.Fatalf("키 파싱: %v", err)
+		t.Fatalf("key parsing: %v", err)
 	}
 	signed, err := SignDKIM([]byte(testMessage), "krisam.in", "mail", signer)
 	if err != nil {
-		t.Fatalf("서명: %v", err)
+		t.Fatalf("signing: %v", err)
 	}
 	if !bytes.Contains(signed, []byte("DKIM-Signature:")) {
-		t.Fatalf("DKIM-Signature 헤더 없음:\n%.200s", signed)
+		t.Fatalf("missing DKIM-Signature header:\n%.200s", signed)
 	}
 
-	// 모의 DNS로 검증
+	// Verify with mock DNS
 	lookup := func(domain string) ([]string, error) {
 		if domain == "mail._domainkey.krisam.in" {
 			return []string{dnsTXT}, nil
@@ -71,33 +71,33 @@ func TestDKIMSignAndVerify(t *testing.T) {
 	}
 	verificationList, err := dkim.VerifyWithOptions(bytes.NewReader(signed), &dkim.VerifyOptions{LookupTXT: lookup})
 	if err != nil {
-		t.Fatalf("검증: %v", err)
+		t.Fatalf("verification: %v", err)
 	}
 	if len(verificationList) != 1 || verificationList[0].Err != nil {
-		t.Fatalf("서명 검증 실패: %+v", verificationList)
+		t.Fatalf("signature verification failed: %+v", verificationList)
 	}
 	if verificationList[0].Domain != "krisam.in" {
-		t.Fatalf("서명 도메인 이상: %s", verificationList[0].Domain)
+		t.Fatalf("unexpected signature domain: %s", verificationList[0].Domain)
 	}
-	t.Log("✔ DKIM 서명 → 검증 왕복 (RSA-2048, relaxed/relaxed)")
+	t.Log("✔ DKIM sign → verify round-trip (RSA-2048, relaxed/relaxed)")
 }
 
-// TestDKIMEd25519: Ed25519 키도 동작.
+// TestDKIMEd25519: Ed25519 keys work too.
 func TestDKIMEd25519(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("키 생성: %v", err)
+		t.Fatalf("key generation: %v", err)
 	}
 	der, _ := x509.MarshalPKCS8PrivateKey(priv)
 	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 
 	signer, err := ParsePrivateKey(pemText)
 	if err != nil {
-		t.Fatalf("키 파싱: %v", err)
+		t.Fatalf("key parsing: %v", err)
 	}
 	signed, err := SignDKIM([]byte(testMessage), "krisam.in", "ed", signer)
 	if err != nil {
-		t.Fatalf("서명: %v", err)
+		t.Fatalf("signing: %v", err)
 	}
 
 	dnsTXT := "v=DKIM1; k=ed25519; p=" + base64.StdEncoding.EncodeToString(pub)
@@ -106,18 +106,18 @@ func TestDKIMEd25519(t *testing.T) {
 	}
 	verificationList, err := dkim.VerifyWithOptions(bytes.NewReader(signed), &dkim.VerifyOptions{LookupTXT: lookup})
 	if err != nil || len(verificationList) != 1 || verificationList[0].Err != nil {
-		t.Fatalf("Ed25519 검증 실패: %v %+v", err, verificationList)
+		t.Fatalf("Ed25519 verification failed: %v %+v", err, verificationList)
 	}
-	t.Log("✔ Ed25519 DKIM 서명/검증")
+	t.Log("✔ Ed25519 DKIM sign/verify")
 }
 
-// TestVerifyInbound: SPF pass + DKIM pass + DMARC pass 시나리오 (모의 DNS).
+// TestVerifyInbound: SPF pass + DKIM pass + DMARC pass scenario (mock DNS).
 func TestVerifyInbound(t *testing.T) {
 	pemText, dnsTXT := genRSAKey(t)
 	signer, _ := ParsePrivateKey(pemText)
 	signed, err := SignDKIM([]byte(testMessage), "krisam.in", "mail", signer)
 	if err != nil {
-		t.Fatalf("서명: %v", err)
+		t.Fatalf("signing: %v", err)
 	}
 
 	lookup := func(domain string) ([]string, error) {
@@ -130,7 +130,7 @@ func TestVerifyInbound(t *testing.T) {
 		return nil, fmt.Errorf("no record for %s", domain)
 	}
 
-	// SPF는 실 DNS를 타므로 여기선 결과만 관찰 (fail이어도 DKIM 정렬로 DMARC pass)
+	// SPF goes through real DNS, so here we only observe the result (even if it fails, DKIM alignment yields DMARC pass)
 	vr := VerifyInbound(signed, VerifyOptions{
 		RemoteIP:     net.ParseIP("192.0.2.1"),
 		HeloName:     "sender.test",
@@ -141,27 +141,27 @@ func TestVerifyInbound(t *testing.T) {
 
 	header := string(vr.Header)
 	if !strings.HasPrefix(header, "Authentication-Results: mx.krisam.in;") {
-		t.Fatalf("헤더 형식 이상: %q", header)
+		t.Fatalf("unexpected header format: %q", header)
 	}
 	if !vr.DKIMPass {
-		t.Fatalf("DKIM pass여야: %s", header)
+		t.Fatalf("DKIM should pass: %s", header)
 	}
 	if !vr.DMARCPass {
-		t.Fatalf("DMARC pass여야 (DKIM 정렬): %s", header)
+		t.Fatalf("DMARC should pass (DKIM alignment): %s", header)
 	}
 	if !strings.Contains(header, "dkim=pass") || !strings.Contains(header, "dmarc=pass") {
-		t.Fatalf("헤더 값 이상: %s", header)
+		t.Fatalf("unexpected header values: %s", header)
 	}
-	t.Logf("✔ 수신 검증: %s", strings.TrimSpace(header))
+	t.Logf("✔ inbound verification: %s", strings.TrimSpace(header))
 }
 
-// TestVerifyInboundDKIMFail: 본문 변조 시 DKIM fail + DMARC fail.
+// TestVerifyInboundDKIMFail: tampered body causes DKIM fail + DMARC fail.
 func TestVerifyInboundDKIMFail(t *testing.T) {
 	pemText, dnsTXT := genRSAKey(t)
 	signer, _ := ParsePrivateKey(pemText)
 	signed, _ := SignDKIM([]byte(testMessage), "krisam.in", "mail", signer)
 
-	// 본문 변조
+	// Tamper with the body
 	tampered := bytes.Replace(signed, []byte("sign me please"), []byte("tampered body!!"), 1)
 
 	lookup := func(domain string) ([]string, error) {
@@ -181,22 +181,22 @@ func TestVerifyInboundDKIMFail(t *testing.T) {
 		LookupTXT:    lookup,
 	})
 	if vr.DKIMPass {
-		t.Fatal("변조됐는데 DKIM pass")
+		t.Fatal("tampered but DKIM passed")
 	}
 	if !strings.Contains(string(vr.Header), "dkim=fail") {
-		t.Fatalf("dkim=fail이어야: %s", vr.Header)
+		t.Fatalf("should be dkim=fail: %s", vr.Header)
 	}
-	// 정책 집행 판단용 필드 — p=reject 레코드가 읽혔어야 한다
+	// Fields used for policy enforcement decisions — the p=reject record must have been read
 	if !vr.DMARCEvaluated || vr.DMARCPolicy != "reject" {
-		t.Fatalf("DMARC 정책 판독 실패: evaluated=%v policy=%q", vr.DMARCEvaluated, vr.DMARCPolicy)
+		t.Fatalf("failed to read DMARC policy: evaluated=%v policy=%q", vr.DMARCEvaluated, vr.DMARCPolicy)
 	}
 	if vr.DMARCPass {
-		t.Fatal("변조 메일이 DMARC pass면 안 됨")
+		t.Fatal("tampered mail must not pass DMARC")
 	}
-	t.Logf("✔ 변조 감지 + 정책 판독 (p=%s): %s", vr.DMARCPolicy, strings.TrimSpace(string(vr.Header)))
+	t.Logf("✔ tamper detection + policy read (p=%s): %s", vr.DMARCPolicy, strings.TrimSpace(string(vr.Header)))
 }
 
-// TestVerifyInboundQuarantinePolicy: p=quarantine 판독.
+// TestVerifyInboundQuarantinePolicy: reads p=quarantine.
 func TestVerifyInboundQuarantinePolicy(t *testing.T) {
 	pemText, dnsTXT := genRSAKey(t)
 	signer, _ := ParsePrivateKey(pemText)
@@ -220,13 +220,13 @@ func TestVerifyInboundQuarantinePolicy(t *testing.T) {
 		LookupTXT:    lookup,
 	})
 	if !vr.DMARCEvaluated || vr.DMARCPolicy != "quarantine" || vr.DMARCPass {
-		t.Fatalf("quarantine 판독 실패: evaluated=%v policy=%q pass=%v",
+		t.Fatalf("failed to read quarantine policy: evaluated=%v policy=%q pass=%v",
 			vr.DMARCEvaluated, vr.DMARCPolicy, vr.DMARCPass)
 	}
-	t.Log("✔ p=quarantine 판독 (→ Junk 배달 대상)")
+	t.Log("✔ p=quarantine read (→ deliver to Junk)")
 }
 
-// TestVerifyInboundNoDMARCRecord: 레코드 없으면 집행 안 함.
+// TestVerifyInboundNoDMARCRecord: no record means no enforcement.
 func TestVerifyInboundNoDMARCRecord(t *testing.T) {
 	vr := VerifyInbound([]byte(testMessage), VerifyOptions{
 		RemoteIP:     net.ParseIP("192.0.2.1"),
@@ -236,12 +236,12 @@ func TestVerifyInboundNoDMARCRecord(t *testing.T) {
 		LookupTXT:    func(string) ([]string, error) { return nil, fmt.Errorf("no record") },
 	})
 	if vr.DMARCEvaluated {
-		t.Fatal("레코드 없는데 evaluated=true")
+		t.Fatal("no record but evaluated=true")
 	}
-	t.Log("✔ DMARC 레코드 없음 → 집행 대상 아님")
+	t.Log("✔ no DMARC record → not subject to enforcement")
 }
 
-// TestHeaderFromDomain: From 헤더 도메인 추출.
+// TestHeaderFromDomain: From header domain extraction.
 func TestHeaderFromDomain(t *testing.T) {
 	cases := []struct{ raw, want string }{
 		{"From: Maro <maro@krisam.in>\r\n\r\nbody", "krisam.in"},
@@ -254,5 +254,5 @@ func TestHeaderFromDomain(t *testing.T) {
 			t.Fatalf("headerFromDomain(%q) = %q, want %q", c.raw, got, c.want)
 		}
 	}
-	t.Log("✔ From 도메인 추출 (본문의 From: 오탐 없음)")
+	t.Log("✔ From domain extraction (no false positives on From: in the body)")
 }

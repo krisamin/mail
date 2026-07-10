@@ -1,11 +1,13 @@
-// Package queue는 발송 큐 워커를 구현한다 (Phase 2-3).
+// Package queue implements the outbound queue worker (Phase 2-3).
 //
-// submission이 외부 도메인 수신자를 store의 outbound_queue에 넣으면,
-// 워커가 주기적으로 due 항목을 꺼내 Sender로 발송한다.
+// When submission puts external-domain recipients into the store's
+// outbound_queue, the worker periodically picks up due entries and sends
+// them via a Sender.
 //
-// ★발송 정책 (DD-04): 직접 MX 발송은 하지 않는다. Sender 구현은
-// SMTP relay(SES/Postmark 등) 경유가 기본 — relay 선택은 아직 미정이라
-// Sender 인터페이스 뒤로 추상화해뒀다. 설정만 채우면 붙는다.
+// ★Sending policy (DD-04): no direct MX sending. The default Sender
+// implementation goes through an SMTP relay (SES/Postmark etc.) — the relay
+// choice is still undecided, so it's abstracted behind the Sender interface.
+// Fill in the config and it plugs in.
 package queue
 
 import (
@@ -18,16 +20,16 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// Sender는 한 통을 실제로 내보내는 책임. 구현:
-//   - RelaySender: SMTP relay 경유 (프로덕션 기본)
-//   - 테스트: mock
+// Sender is responsible for actually sending one message. Implementations:
+//   - RelaySender: via SMTP relay (production default)
+//   - tests: mock
 type Sender interface {
-	// Send는 envelope from/rcpt와 원문으로 발송한다.
-	// PermanentError를 돌려주면 재시도 없이 즉시 실패 처리된다.
+	// Send sends using the envelope from/rcpt and the raw message.
+	// Returning a PermanentError marks it failed immediately without retry.
 	Send(ctx context.Context, from, rcpt string, raw []byte) error
 }
 
-// PermanentError는 재시도해도 소용없는 실패 (5xx 등).
+// PermanentError is a failure that retrying won't fix (5xx etc.).
 type PermanentError struct {
 	Err error
 }
@@ -35,15 +37,15 @@ type PermanentError struct {
 func (e *PermanentError) Error() string { return e.Err.Error() }
 func (e *PermanentError) Unwrap() error { return e.Err }
 
-// Config는 워커 동작 파라미터.
+// Config holds the worker behavior parameters.
 type Config struct {
-	// PollInterval은 due 스캔 주기. 기본 10초.
+	// PollInterval is the due-scan interval. Default 10s.
 	PollInterval time.Duration
-	// BatchSize는 한 번에 가져올 최대 항목 수. 기본 10.
+	// BatchSize is the max number of entries fetched at once. Default 10.
 	BatchSize int
-	// MaxAttempts를 넘으면 영구 실패. 기본 6 (백오프 합계 ≈ 2시간).
+	// Exceeding MaxAttempts means permanent failure. Default 6 (total backoff ≈ 2 hours).
 	MaxAttemptCount int
-	// BaseBackoff는 지수 백오프의 밑. 기본 1분: 1m→2m→4m→8m→16m→32m.
+	// BaseBackoff is the base of the exponential backoff. Default 1 minute: 1m→2m→4m→8m→16m→32m.
 	BaseBackoff time.Duration
 }
 
@@ -63,66 +65,67 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// Worker는 발송 큐를 소비한다.
+// Worker consumes the outbound queue.
 type Worker struct {
 	store  store.Store
 	sender Sender
 	cfg    Config
-	// signer는 발송 전 DKIM 서명 훅 (nil이면 서명 없이 발송).
+	// signer is the pre-send DKIM signing hook (nil sends unsigned).
 	signer SignFunc
-	// hostname은 DSN의 Reporting-MTA/mailer-daemon 주소용.
+	// hostname is for the DSN's Reporting-MTA/mailer-daemon address.
 	hostname string
 }
 
-// SignFunc는 발송 직전 메시지를 서명한다. 실패하면 원문 그대로 발송
-// (서명은 best-effort — 서명 실패로 발송을 막지 않는다).
+// SignFunc signs the message right before sending. On failure the raw
+// message is sent as-is (signing is best-effort — a signing failure doesn't
+// block sending).
 type SignFunc func(ctx context.Context, envelopeFrom string, raw []byte) ([]byte, error)
 
-// NewWorker는 워커를 만든다.
+// NewWorker creates a worker.
 func NewWorker(st store.Store, sender Sender, cfg Config) *Worker {
 	return &Worker{store: st, sender: sender, cfg: cfg.withDefaults()}
 }
 
-// WithSigner는 DKIM 서명 훅을 단다.
+// WithSigner attaches the DKIM signing hook.
 func (w *Worker) WithSigner(f SignFunc) *Worker {
 	w.signer = f
 	return w
 }
 
-// WithHostname은 DSN 생성에 쓸 호스트명을 단다 (미설정이면 DSN 비활성).
+// WithHostname attaches the hostname used for DSN generation (unset disables DSN).
 func (w *Worker) WithHostname(hostname string) *Worker {
 	w.hostname = hostname
 	return w
 }
 
-// Run은 ctx가 취소될 때까지 주기적으로 큐를 처리한다.
+// Run processes the queue periodically until ctx is canceled.
 func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.cfg.PollInterval)
 	defer ticker.Stop()
 
-	log.Printf("queue: 발송 워커 시작 (poll=%s batch=%d maxAttemptCount=%d)",
+	log.Printf("queue: outbound worker started (poll=%s batch=%d maxAttemptCount=%d)",
 		w.cfg.PollInterval, w.cfg.BatchSize, w.cfg.MaxAttemptCount)
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("queue: 발송 워커 종료")
+			log.Printf("queue: outbound worker stopped")
 			return
 		case <-ticker.C:
 			if n, err := w.ProcessOnce(ctx); err != nil {
-				log.Printf("queue: 처리 오류: %v", err)
+				log.Printf("queue: processing error: %v", err)
 			} else if n > 0 {
-				log.Printf("queue: %d건 처리", n)
+				log.Printf("queue: processed %d entries", n)
 			}
 		}
 	}
 }
 
-// ProcessOnce는 due 항목 한 배치를 처리하고 처리 건수를 돌려준다.
-// (테스트와 Run 루프가 공유하는 단위)
+// ProcessOnce processes one batch of due entries and returns the count.
+// (The unit shared by tests and the Run loop.)
 func (w *Worker) ProcessOnce(ctx context.Context) (int, error) {
 	due, err := w.store.DueOutbound(ctx, w.cfg.BatchSize)
 	if err != nil {
-		return 0, fmt.Errorf("due 조회: %w", err)
+		return 0, fmt.Errorf("due lookup: %w", err)
 	}
 
 	for _, m := range due {
@@ -132,8 +135,9 @@ func (w *Worker) ProcessOnce(ctx context.Context) (int, error) {
 }
 
 func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
-	// per-message 타임아웃 — relay TCP가 행에 걸리면 배치 전체(직렬 루프)가
-	// 멈추므로, 한 통이 워커를 인질로 잡지 못하게 상한을 건다.
+	// per-message timeout — a hung relay TCP connection would stall the whole
+	// batch (serial loop), so cap it to keep one message from holding the
+	// worker hostage.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
@@ -141,7 +145,7 @@ func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
 	if w.signer != nil {
 		signed, err := w.signer(ctx, m.EnvelopeFrom, raw)
 		if err != nil {
-			log.Printf("queue: DKIM 서명 실패 id=%d (서명 없이 발송): %v", m.ID, err)
+			log.Printf("queue: DKIM signing failed id=%d (sending unsigned): %v", m.ID, err)
 		} else {
 			raw = signed
 		}
@@ -150,29 +154,30 @@ func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
 	err := w.sender.Send(ctx, m.EnvelopeFrom, m.EnvelopeRcpt, raw)
 	if err == nil {
 		if err := w.store.MarkOutboundSent(ctx, m.ID); err != nil {
-			log.Printf("queue: sent 마킹 실패 id=%d: %v", m.ID, err)
+			log.Printf("queue: marking sent failed id=%d: %v", m.ID, err)
 		}
-		log.Printf("queue: 발송 완료 id=%d to=%s (attempt %d)", m.ID, m.EnvelopeRcpt, m.AttemptCount+1)
+		log.Printf("queue: sent id=%d to=%s (attempt %d)", m.ID, m.EnvelopeRcpt, m.AttemptCount+1)
 		return
 	}
 
-	// 영구 오류 또는 재시도 소진 → failed
+	// permanent error or retries exhausted → failed
 	var perm *PermanentError
 	if errors.As(err, &perm) || m.AttemptCount+1 >= w.cfg.MaxAttemptCount {
 		if merr := w.store.MarkOutboundFailed(ctx, m.ID, err.Error()); merr != nil {
-			log.Printf("queue: failed 마킹 실패 id=%d: %v", m.ID, merr)
+			log.Printf("queue: marking failed failed id=%d: %v", m.ID, merr)
 		}
-		log.Printf("queue: 영구 실패 id=%d to=%s: %v (attempt %d/%d)",
+		log.Printf("queue: permanent failure id=%d to=%s: %v (attempt %d/%d)",
 			m.ID, m.EnvelopeRcpt, err, m.AttemptCount+1, w.cfg.MaxAttemptCount)
-		// 발신자에게 bounce DSN (RFC 3464) — 발신자는 로컬 유저라 INBOX 직행
+		// bounce DSN to the sender (RFC 3464) — the sender is a local user, so straight to INBOX
 		if w.hostname != "" {
 			w.deliverDSN(ctx, m, err.Error())
 		}
 		return
 	}
 
-	// 일시 오류 → 지수 백오프 재시도 (상한 1시간 — AttemptCount가 크면
-	// int64 시프트 오버플로로 음수/0 백오프 → 즉시 재시도 핫루프가 된다)
+	// transient error → exponential backoff retry (capped at 1 hour — a large
+	// AttemptCount overflows the int64 shift into a negative/zero backoff →
+	// an immediate-retry hot loop)
 	const maxBackoff = time.Hour
 	backoff := w.cfg.BaseBackoff
 	for i := 0; i < m.AttemptCount && backoff < maxBackoff; i++ {
@@ -183,8 +188,8 @@ func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
 	}
 	next := time.Now().Add(backoff)
 	if merr := w.store.MarkOutboundRetry(ctx, m.ID, err.Error(), next); merr != nil {
-		log.Printf("queue: retry 마킹 실패 id=%d: %v", m.ID, merr)
+		log.Printf("queue: marking retry failed id=%d: %v", m.ID, merr)
 	}
-	log.Printf("queue: 재시도 예약 id=%d to=%s in %s: %v (attempt %d/%d)",
+	log.Printf("queue: retry scheduled id=%d to=%s in %s: %v (attempt %d/%d)",
 		m.ID, m.EnvelopeRcpt, backoff, err, m.AttemptCount+1, w.cfg.MaxAttemptCount)
 }

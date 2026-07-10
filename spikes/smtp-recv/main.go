@@ -1,17 +1,20 @@
-// Phase 0 스파이크: go-smtp 수신 서버
+// Phase 0 spike: go-smtp receiving server
 //
-// 목적: SMTP가 "그냥 텍스트 상태머신"이라는 걸 몸으로 이해한다.
-// 클라이언트(swaks 등)가 보내는 EHLO -> MAIL FROM -> RCPT TO -> DATA
-// 흐름을 각 콜백에서 로그로 관찰하고, 받은 메일 본문을 go-message로
-// 파싱해서 헤더/본문을 뜯어본다.
+// Purpose: internalize that SMTP is "just a text state machine".
+// Observe the EHLO -> MAIL FROM -> RCPT TO -> DATA flow a client
+// (swaks etc.) sends by logging each callback, and dissect the received
+// mail body's headers/parts by parsing it with go-message.
 //
-// 저장 안 함. 인증 안 함. 오직 프로토콜 흐름 관찰용 (버리는 코드).
+// No storage. No auth. Protocol-flow observation only (throwaway code).
 //
-// 실행:
-//   go run ./spikes/smtp-recv
-// 다른 터미널에서:
-//   swaks --to test@localhost --from me@example.com \
-//         --server localhost:2525 --body "hello shiro"
+// Run:
+//
+//	go run ./spikes/smtp-recv
+//
+// In another terminal:
+//
+//	swaks --to test@localhost --from me@example.com \
+//	      --server localhost:2525 --body "hello shiro"
 package main
 
 import (
@@ -26,53 +29,53 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────
-// Backend: 서버 전체. 새 연결마다 NewSession이 불린다.
+// Backend: the whole server. NewSession is called per connection.
 // ─────────────────────────────────────────────────────────────
 type Backend struct{}
 
 func (b *Backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
-	log.Printf("┌─ 새 연결: %s", c.Conn().RemoteAddr())
+	log.Printf("┌─ new connection: %s", c.Conn().RemoteAddr())
 	return &Session{}, nil
 }
 
 // ─────────────────────────────────────────────────────────────
-// Session: 하나의 SMTP 대화(트랜잭션). 상태머신의 상태를 담는다.
-// go-smtp가 프로토콜 파싱을 다 해주고, 우리는 각 명령의 콜백만 채운다.
+// Session: one SMTP conversation (transaction). Holds the state machine's state.
+// go-smtp does all the protocol parsing; we only fill each command's callback.
 // ─────────────────────────────────────────────────────────────
 type Session struct {
 	from string
 	to   []string
 }
 
-// MAIL FROM:<...> 이 도착하면 호출
+// called when MAIL FROM:<...> arrives
 func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 	log.Printf("│  MAIL FROM: %s", from)
 	s.from = from
 	return nil
 }
 
-// RCPT TO:<...> 가 도착하면 호출 (수신자 여러 명이면 여러 번)
+// called when RCPT TO:<...> arrives (multiple times for multiple recipients)
 func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	log.Printf("│  RCPT TO:   %s", to)
 	s.to = append(s.to, to)
 	return nil
 }
 
-// DATA 이후 실제 메일 본문(raw)이 r로 흘러들어온다.
+// after DATA, the actual raw mail body streams in via r.
 func (s *Session) Data(r io.Reader) error {
-	log.Printf("│  DATA 수신 시작...")
+	log.Printf("│  DATA receiving...")
 
-	// 1) raw 전체를 읽어둔다 (스파이크니까 통째로)
+	// 1) read the entire raw body (it's a spike — whole thing)
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
-	log.Printf("│  raw 크기: %d bytes", len(raw))
+	log.Printf("│  raw size: %d bytes", len(raw))
 
-	// 2) go-message/mail 로 파싱 — MIME, 헤더, 멀티파트를 다뤄준다.
+	// 2) parse with go-message/mail — handles MIME, headers, multipart.
 	mr, err := mail.CreateReader(strings.NewReader(string(raw)))
 	if err != nil {
-		log.Printf("│  ⚠ 파싱 실패(그래도 raw는 받음): %v", err)
+		log.Printf("│  ⚠ parse failed (raw still received): %v", err)
 		dumpRaw(raw)
 		return nil
 	}
@@ -91,7 +94,7 @@ func (s *Session) Data(r io.Reader) error {
 		log.Printf("│  To:      %v", toList)
 	}
 
-	// 3) 각 파트(본문/첨부)를 순회
+	// 3) iterate the parts (body/attachments)
 	partN := 0
 	for {
 		p, err := mr.NextPart()
@@ -99,7 +102,7 @@ func (s *Session) Data(r io.Reader) error {
 			break
 		}
 		if err != nil {
-			log.Printf("│  ⚠ 파트 읽기 오류: %v", err)
+			log.Printf("│  ⚠ part read error: %v", err)
 			break
 		}
 		partN++
@@ -107,17 +110,17 @@ func (s *Session) Data(r io.Reader) error {
 		case *mail.InlineHeader:
 			ct, _, _ := hdr.ContentType()
 			body, _ := io.ReadAll(p.Body)
-			log.Printf("│  [파트 %d] 본문 (%s):", partN, ct)
+			log.Printf("│  [part %d] body (%s):", partN, ct)
 			for _, line := range strings.Split(strings.TrimRight(string(body), "\n"), "\n") {
 				log.Printf("│      %s", line)
 			}
 		case *mail.AttachmentHeader:
 			fn, _ := hdr.Filename()
-			log.Printf("│  [파트 %d] 첨부: %s", partN, fn)
+			log.Printf("│  [part %d] attachment: %s", partN, fn)
 		}
 	}
 
-	log.Printf("│  ✔ 처리 완료 (from=%s, to=%v)", s.from, s.to)
+	log.Printf("│  ✔ done (from=%s, to=%v)", s.from, s.to)
 	return nil
 }
 
@@ -128,7 +131,7 @@ func (s *Session) Reset() {
 }
 
 func (s *Session) Logout() error {
-	log.Printf("└─ 연결 종료")
+	log.Printf("└─ connection closed")
 	return nil
 }
 
@@ -142,16 +145,16 @@ func main() {
 	be := &Backend{}
 	s := smtp.NewServer(be)
 
-	s.Addr = ":2525" // 25는 권한 필요 → 스파이크는 2525
+	s.Addr = ":2525" // port 25 needs privileges → spike uses 2525
 	s.Domain = "localhost"
 	s.WriteTimeout = 10 * time.Second
 	s.ReadTimeout = 10 * time.Second
 	s.MaxMessageBytes = 10 * 1024 * 1024 // 10MB
 	s.MaxRecipients = 50
-	s.AllowInsecureAuth = true // 스파이크: TLS 없이 평문 허용
+	s.AllowInsecureAuth = true // spike: plaintext without TLS allowed
 
-	log.Println("🥛 mail 스파이크 SMTP 수신 서버 — localhost:2525")
-	log.Println("   테스트: swaks --to test@localhost --from me@example.com --server localhost:2525 --body \"hello shiro\"")
+	log.Println("🥛 mail spike SMTP receiving server — localhost:2525")
+	log.Println("   test: swaks --to test@localhost --from me@example.com --server localhost:2525 --body \"hello shiro\"")
 	if err := s.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}

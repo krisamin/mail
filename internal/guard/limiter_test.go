@@ -13,49 +13,49 @@ func TestLimiter(t *testing.T) {
 	l.BlockFor = time.Minute
 	l.timeNow = func() time.Time { return now }
 
-	// 임계치 전까지 허용
+	// allowed until the threshold
 	for i := 0; i < 2; i++ {
 		if !l.Allow("1.2.3.4") {
-			t.Fatalf("실패 %d회에 차단되면 안 됨", i)
+			t.Fatalf("must not block at %d failures", i)
 		}
 		l.Fail("1.2.3.4")
 	}
 	if !l.Allow("1.2.3.4") {
-		t.Fatal("임계치 전인데 차단됨")
+		t.Fatal("blocked before reaching the threshold")
 	}
 
-	// 3번째 실패 → 차단
+	// 3rd failure → block
 	l.Fail("1.2.3.4")
 	if l.Allow("1.2.3.4") {
-		t.Fatal("임계치 도달인데 허용됨")
+		t.Fatal("allowed despite hitting the threshold")
 	}
-	// 다른 IP는 무관
+	// other IPs unaffected
 	if !l.Allow("5.6.7.8") {
-		t.Fatal("다른 키가 차단됨")
+		t.Fatal("a different key got blocked")
 	}
-	t.Log("✔ 임계치 도달 시 차단 + 키 격리")
+	t.Log("✔ block on threshold + key isolation")
 
-	// 차단 시간 경과 → 해제
+	// block duration elapsed → unblocked
 	now = now.Add(2 * time.Minute)
 	if !l.Allow("1.2.3.4") {
-		t.Fatal("차단 만료됐는데 여전히 차단")
+		t.Fatal("still blocked after block expiry")
 	}
-	t.Log("✔ 차단 만료 후 해제")
+	t.Log("✔ unblocked after expiry")
 
-	// 성공 → 기록 삭제
+	// success → record cleared
 	l.Fail("1.2.3.4")
 	l.Success("1.2.3.4")
 	for i := 0; i < 2; i++ {
 		l.Fail("1.2.3.4")
 	}
 	if !l.Allow("1.2.3.4") {
-		t.Fatal("성공으로 리셋됐는데 이전 실패가 카운트됨")
+		t.Fatal("prior failures counted despite success reset")
 	}
-	t.Log("✔ 성공 시 실패 기록 리셋")
+	t.Log("✔ failure record reset on success")
 
-	// 빈 키는 항상 허용
+	// empty key is always allowed
 	if !l.Allow("") {
-		t.Fatal("빈 키 차단")
+		t.Fatal("empty key blocked")
 	}
 }
 
@@ -73,47 +73,47 @@ func TestLimiterExponentialBlock(t *testing.T) {
 		l.Fail("k")
 	}
 
-	// 1차 차단: 1분
+	// 1st block: 1 minute
 	trip()
 	if l.Allow("k") {
-		t.Fatal("1차 차단 안 됨")
+		t.Fatal("1st block did not engage")
 	}
-	now = now.Add(90 * time.Second) // 1분 차단 만료
+	now = now.Add(90 * time.Second) // 1-minute block expires
 	if !l.Allow("k") {
-		t.Fatal("1차 차단(1m)이 90초 후에도 유지됨")
+		t.Fatal("1st block (1m) still held after 90s")
 	}
 
-	// 2차 차단: 2분 — 90초 후에도 유지돼야 함
+	// 2nd block: 2 minutes — must still hold after 90s
 	trip()
 	now = now.Add(90 * time.Second)
 	if l.Allow("k") {
-		t.Fatal("2차 차단(2m)이 90초 만에 풀림 — 지수 증가 미동작")
+		t.Fatal("2nd block (2m) released after only 90s — exponential growth inactive")
 	}
-	now = now.Add(60 * time.Second) // 총 150초 > 2분
+	now = now.Add(60 * time.Second) // 150s total > 2 minutes
 	if !l.Allow("k") {
-		t.Fatal("2차 차단(2m) 만료됐는데 유지됨")
+		t.Fatal("2nd block (2m) held past expiry")
 	}
 
-	// 3차(4분=상한), 4차도 상한 유지
+	// 3rd block (4m = cap); later blocks stay at the cap
 	trip()
 	now = now.Add(3 * time.Minute)
 	if l.Allow("k") {
-		t.Fatal("3차 차단(4m 상한)이 3분 만에 풀림")
+		t.Fatal("3rd block (4m cap) released after only 3m")
 	}
 	now = now.Add(2 * time.Minute)
 	if !l.Allow("k") {
-		t.Fatal("3차 차단(상한 4m) 만료됐는데 유지됨")
+		t.Fatal("3rd block (4m cap) held past expiry")
 	}
-	t.Log("✔ 지수 차단 1m→2m→4m(상한)")
+	t.Log("✔ exponential blocks 1m→2m→4m (cap)")
 
-	// 성공하면 지수도 리셋
+	// success resets the exponent too
 	l.Success("k")
 	trip()
 	now = now.Add(90 * time.Second)
 	if !l.Allow("k") {
-		t.Fatal("성공 후 재차단인데 지수가 리셋 안 됨 (1m여야 함)")
+		t.Fatal("re-block after success kept the old exponent (should be 1m)")
 	}
-	t.Log("✔ 성공 시 지수 리셋")
+	t.Log("✔ exponent reset on success")
 }
 
 func TestKeyForIP(t *testing.T) {
@@ -130,9 +130,9 @@ func TestKeyForIP(t *testing.T) {
 			t.Fatalf("KeyForIP(%q) = %q, want %q", in, got, want)
 		}
 	}
-	// 같은 /64의 다른 두 주소는 같은 키
+	// two different addresses in the same /64 share a key
 	if KeyForIP("2001:db8:abcd:12::1") != KeyForIP("2001:db8:abcd:12:ffff::2") {
-		t.Fatal("같은 /64인데 키가 다름")
+		t.Fatal("same /64 produced different keys")
 	}
-	t.Log("✔ IPv6 /64 정규화")
+	t.Log("✔ IPv6 /64 normalization")
 }

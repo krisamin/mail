@@ -13,30 +13,30 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// RelayConfig는 SMTP relay(SES/Postmark/기타 submission 서버) 접속 정보.
-// DD-04: 직접 MX 발송 대신 relay 경유가 기본.
+// RelayConfig holds connection info for an SMTP relay (SES/Postmark/other
+// submission servers). DD-04: relay is the default instead of direct MX sending.
 type RelayConfig struct {
-	Addr     string // 예: email-smtp.ap-northeast-2.amazonaws.com:587
+	Addr     string // e.g. email-smtp.ap-northeast-2.amazonaws.com:587
 	Username string
 	Password string
-	// StartTLS가 true면 STARTTLS 후 AUTH (587 표준). false면 평문 (테스트용).
+	// StartTLS=true does STARTTLS then AUTH (587 standard). false is plaintext (for tests).
 	StartTLS bool
 }
 
-// RelaySender는 SMTP relay로 발송하는 Sender 구현.
+// RelaySender is a Sender implementation that sends via an SMTP relay.
 type RelaySender struct {
 	cfg RelayConfig
 }
 
-// NewRelaySender는 relay 발송기를 만든다.
+// NewRelaySender creates a relay sender.
 func NewRelaySender(cfg RelayConfig) *RelaySender {
 	return &RelaySender{cfg: cfg}
 }
 
 var _ Sender = (*RelaySender)(nil)
 
-// Send는 relay에 접속해 한 통을 발송한다.
-// 5xx 응답은 PermanentError로 감싸 재시도를 막는다.
+// Send connects to the relay and sends one message.
+// 5xx responses are wrapped in PermanentError to prevent retries.
 func (r *RelaySender) Send(ctx context.Context, from, rcpt string, raw []byte) error {
 	var c *gosmtp.Client
 	var err error
@@ -46,7 +46,7 @@ func (r *RelaySender) Send(ctx context.Context, from, rcpt string, raw []byte) e
 		c, err = gosmtp.Dial(r.cfg.Addr)
 	}
 	if err != nil {
-		return fmt.Errorf("relay 접속: %w", err) // 접속 실패 = 일시 오류
+		return fmt.Errorf("relay connect: %w", err) // connection failure = transient error
 	}
 	defer c.Close()
 
@@ -67,15 +67,15 @@ func (r *RelaySender) Send(ctx context.Context, from, rcpt string, raw []byte) e
 		return wrapSMTPErr(fmt.Errorf("DATA: %w", err), err)
 	}
 	if _, err := w.Write(raw); err != nil {
-		return fmt.Errorf("본문 전송: %w", err)
+		return fmt.Errorf("send body: %w", err)
 	}
 	if err := w.Close(); err != nil {
-		return wrapSMTPErr(fmt.Errorf("본문 완료: %w", err), err)
+		return wrapSMTPErr(fmt.Errorf("finish body: %w", err), err)
 	}
 	return c.Quit()
 }
 
-// wrapSMTPErr는 5xx SMTP 오류를 PermanentError로 승격한다.
+// wrapSMTPErr promotes 5xx SMTP errors to PermanentError.
 func wrapSMTPErr(wrapped, original error) error {
 	if smtpErr, ok := original.(*gosmtp.SMTPError); ok && smtpErr.Code >= 500 {
 		return &PermanentError{Err: wrapped}
@@ -92,23 +92,23 @@ func hostOf(addr string) string {
 	return addr
 }
 
-// ── DB 해석 Sender (0005) ───────────────────────────────────
+// ── DB-resolving Sender (0005) ───────────────────────────────────
 
-// ResolvingSender는 발송 시점에 발신 도메인의 relay를 DB에서 해석한다.
-// 도메인 지정 relay → default relay → 오류(재시도).
-// relay를 어드민에서 바꾸면 재기동 없이 다음 발송부터 반영된다.
+// ResolvingSender resolves the sender domain's relay from the DB at send
+// time. Domain-specific relay → default relay → error (retry).
+// Changing the relay in the admin takes effect on the next send without a restart.
 type ResolvingSender struct {
 	store store.Store
 }
 
-// NewResolvingSender는 DB 해석 발송기를 만든다.
+// NewResolvingSender creates a DB-resolving sender.
 func NewResolvingSender(st store.Store) *ResolvingSender {
 	return &ResolvingSender{store: st}
 }
 
 var _ Sender = (*ResolvingSender)(nil)
 
-// Send는 relay를 해석한 뒤 RelaySender로 위임한다.
+// Send resolves the relay and then delegates to RelaySender.
 func (r *ResolvingSender) Send(ctx context.Context, from, rcpt string, raw []byte) error {
 	senderDomain := ""
 	if i := strings.LastIndex(from, "@"); i >= 0 {
@@ -125,8 +125,8 @@ func (r *ResolvingSender) Send(ctx context.Context, from, rcpt string, raw []byt
 		return NewRelaySender(cfg).Send(ctx, from, rcpt, raw)
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		// relay가 없음 — 어드민이 곧 추가할 수 있으니 일시 오류로 재시도.
-		return fmt.Errorf("도메인 %q의 relay 미설정 (어드민에서 relay 추가 필요)", senderDomain)
+		// no relay — an admin may add one soon, so retry as a transient error.
+		return fmt.Errorf("no relay configured for domain %q (add a relay in the admin)", senderDomain)
 	}
-	return fmt.Errorf("relay 해석: %w", err)
+	return fmt.Errorf("relay resolve: %w", err)
 }

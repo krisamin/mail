@@ -9,7 +9,7 @@ import (
 	gosmtp "github.com/emersion/go-smtp"
 )
 
-// submission(제출) 테스트. dev Postgres 필요 (e2e_test.go의 setupServers 재사용).
+// Submission tests. Requires dev Postgres (reuses setupServers from e2e_test.go).
 
 func setupSubmission(t *testing.T) (*testEnv, string) {
 	t.Helper()
@@ -47,31 +47,31 @@ func dialSubmission(t *testing.T, addr string) *gosmtp.Client {
 	return c
 }
 
-// TestSubmissionRequiresAuth: AUTH 없이 MAIL FROM은 거절.
+// TestSubmissionRequiresAuth: MAIL FROM without AUTH is rejected.
 func TestSubmissionRequiresAuth(t *testing.T) {
 	_, subAddr := setupSubmission(t)
 	c := dialSubmission(t, subAddr)
 
 	err := c.Mail(testAddr, nil)
 	if err == nil {
-		t.Fatal("AUTH 없이 MAIL이 통과됨")
+		t.Fatal("MAIL passed without AUTH")
 	}
-	t.Logf("✔ 미인증 MAIL 거절: %v", err)
+	t.Logf("✔ unauthenticated MAIL rejected: %v", err)
 }
 
-// TestSubmissionAuthFailure: 틀린 앱 비밀번호는 535.
+// TestSubmissionAuthFailure: a wrong app password yields 535.
 func TestSubmissionAuthFailure(t *testing.T) {
 	_, subAddr := setupSubmission(t)
 	c := dialSubmission(t, subAddr)
 
 	err := c.Auth(sasl.NewPlainClient("", testAddr, "wrong-password"))
 	if err == nil {
-		t.Fatal("틀린 비번인데 AUTH 통과")
+		t.Fatal("AUTH passed with a wrong password")
 	}
-	t.Logf("✔ AUTH 실패: %v", err)
+	t.Logf("✔ AUTH failure: %v", err)
 }
 
-// TestSubmissionSenderSpoofing: 인증 계정과 다른 envelope from은 553.
+// TestSubmissionSenderSpoofing: an envelope from differing from the authenticated account yields 553.
 func TestSubmissionSenderSpoofing(t *testing.T) {
 	_, subAddr := setupSubmission(t)
 	c := dialSubmission(t, subAddr)
@@ -81,16 +81,16 @@ func TestSubmissionSenderSpoofing(t *testing.T) {
 	}
 	err := c.Mail("someone-else@krisam.in", nil)
 	if err == nil {
-		t.Fatal("발신자 위조가 통과됨")
+		t.Fatal("sender spoofing passed")
 	}
 	smtpErr, ok := err.(*gosmtp.SMTPError)
 	if !ok || smtpErr.Code != 553 {
-		t.Fatalf("553이어야: %v", err)
+		t.Fatalf("should be 553: %v", err)
 	}
-	t.Logf("✔ 발신자 위조 553 거절: %v", err)
+	t.Logf("✔ sender spoofing rejected with 553: %v", err)
 }
 
-// TestSubmissionExternalDomainRejected: 외부 도메인은 발송 큐 전까지 거절.
+// TestSubmissionExternalDomainRejected: external domains are rejected until the outbound queue exists.
 func TestSubmissionExternalDomainRejected(t *testing.T) {
 	_, subAddr := setupSubmission(t)
 	c := dialSubmission(t, subAddr)
@@ -103,12 +103,12 @@ func TestSubmissionExternalDomainRejected(t *testing.T) {
 	}
 	err := c.Rcpt("friend@gmail.com", nil)
 	if err == nil {
-		t.Fatal("외부 도메인이 수락됨 (발송 큐 없는데)")
+		t.Fatal("external domain accepted (without an outbound queue)")
 	}
-	t.Logf("✔ 외부 도메인 거절 (Phase 2-3 전): %v", err)
+	t.Logf("✔ external domain rejected (pre Phase 2-3): %v", err)
 }
 
-// TestSubmissionLocalDelivery: 인증 유저가 로컬 유저에게 제출 → IMAP으로 확인.
+// TestSubmissionLocalDelivery: authenticated user submits to a local user → verified via IMAP.
 func TestSubmissionLocalDelivery(t *testing.T) {
 	env, subAddr := setupSubmission(t)
 	c := dialSubmission(t, subAddr)
@@ -134,17 +134,17 @@ func TestSubmissionLocalDelivery(t *testing.T) {
 	}
 	_ = c.Quit()
 
-	// shiro의 INBOX에서 확인 (IMAP)
+	// check shiro's INBOX (IMAP)
 	messageList := readInbox(t, env.imapAddr, testAddr2, testPass)
 	if len(messageList) != 1 {
-		t.Fatalf("shiro INBOX에 1건 있어야: %d", len(messageList))
+		t.Fatalf("shiro INBOX should have 1 message: %d", len(messageList))
 	}
 	if messageList[0].Envelope.Subject != "submitted mail" {
-		t.Fatalf("subject 이상: %+v", messageList[0].Envelope)
+		t.Fatalf("unexpected subject: %+v", messageList[0].Envelope)
 	}
 	full := string(messageList[0].BodySection[0].Bytes)
 	if !strings.Contains(full, "for <"+testAddr2+">") {
-		t.Fatalf("Received 헤더 없음:\n%.200s", full)
+		t.Fatalf("missing Received header:\n%.200s", full)
 	}
-	t.Logf("✔ 인증 제출 → 로컬 배달 → IMAP 확인: %q", messageList[0].Envelope.Subject)
+	t.Logf("✔ authenticated submission → local delivery → IMAP verified: %q", messageList[0].Envelope.Subject)
 }

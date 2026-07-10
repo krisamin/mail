@@ -19,18 +19,18 @@ import (
 	"github.com/krisamin/mail/internal/store/postgres"
 )
 
-// 발송 큐 테스트. dev Postgres 필요:
+// Outbound queue tests. Requires dev Postgres:
 //   MAIL_TEST_DSN=postgres://mail:maildev@localhost:55432/mail go test ./internal/queue/ -v
 
 func testStore(t *testing.T) *postgres.Store {
 	t.Helper()
 	dsn := os.Getenv("MAIL_TEST_DSN")
 	if dsn == "" {
-		t.Skip("MAIL_TEST_DSN 미설정 — 통합 테스트 skip")
+		t.Skip("MAIL_TEST_DSN not set — skipping integration tests")
 	}
 	st, err := postgres.New(context.Background(), dsn)
 	if err != nil {
-		t.Fatalf("store 연결: %v", err)
+		t.Fatalf("store connect: %v", err)
 	}
 	t.Cleanup(st.Close)
 	_, _ = st.Pool().Exec(context.Background(),
@@ -38,11 +38,11 @@ func testStore(t *testing.T) *postgres.Store {
 	return st
 }
 
-// mockSender는 호출 기록 + 지정된 에러를 돌려주는 Sender.
+// mockSender is a Sender that records calls + returns the specified errors.
 type mockSender struct {
 	mu    sync.Mutex
 	calls []string // "from→rcpt"
-	errs  []error  // 호출 순서대로 소비. 소진되면 nil(성공)
+	errs  []error  // consumed in call order. nil (success) once exhausted
 }
 
 func (m *mockSender) Send(_ context.Context, from, rcpt string, _ []byte) error {
@@ -69,7 +69,7 @@ func queueStatus(t *testing.T, st *postgres.Store, id int64) (status string, att
 		`SELECT status, attempt_count, COALESCE(last_error, '') FROM outbound_queue WHERE id = $1`, id).
 		Scan(&status, &attemptCount, &lastError)
 	if err != nil {
-		t.Fatalf("큐 상태 조회: %v", err)
+		t.Fatalf("queue status lookup: %v", err)
 	}
 	return
 }
@@ -90,26 +90,26 @@ func TestQueueSuccess(t *testing.T) {
 	w := NewWorker(st, sender, Config{})
 	n, err := w.ProcessOnce(ctx)
 	if err != nil || n != 2 {
-		t.Fatalf("2건 처리해야: %v n=%d", err, n)
+		t.Fatalf("should process 2 entries: %v n=%d", err, n)
 	}
 	if sender.callCount() != 2 {
-		t.Fatalf("sender 2회 호출돼야: %d", sender.callCount())
+		t.Fatalf("sender should be called twice: %d", sender.callCount())
 	}
 	for _, id := range []int64{1, 2} {
 		status, attemptCount, _ := queueStatus(t, st, id)
 		if status != store.OutboundSent || attemptCount != 0 {
-			t.Fatalf("id=%d sent여야: %s attemptCount=%d", id, status, attemptCount)
+			t.Fatalf("id=%d should be sent: %s attemptCount=%d", id, status, attemptCount)
 		}
 	}
-	// 재실행 시 due 없음
+	// no due entries on rerun
 	n, _ = w.ProcessOnce(ctx)
 	if n != 0 {
-		t.Fatalf("sent 후 due가 남으면 안 됨: %d", n)
+		t.Fatalf("no due entries should remain after sent: %d", n)
 	}
-	t.Log("✔ 성공 발송: 2건 sent, 재소비 없음")
+	t.Log("✔ successful send: 2 entries sent, no re-consumption")
 }
 
-// TestQueueRetryBackoff: 일시 오류 → 재시도 예약(백오프) → 성공.
+// TestQueueRetryBackoff: transient error → retry scheduled (backoff) → success.
 func TestQueueRetryBackoff(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
@@ -123,34 +123,34 @@ func TestQueueRetryBackoff(t *testing.T) {
 	w := NewWorker(st, sender, Config{BaseBackoff: time.Minute})
 
 	if n, _ := w.ProcessOnce(ctx); n != 1 {
-		t.Fatal("1건 처리해야")
+		t.Fatal("should process 1 entry")
 	}
 	status, attemptCount, lastErr := queueStatus(t, st, 1)
 	if status != store.OutboundPending || attemptCount != 1 || !strings.Contains(lastErr, "connection refused") {
-		t.Fatalf("재시도 대기여야: %s attemptCount=%d err=%q", status, attemptCount, lastErr)
+		t.Fatalf("should be awaiting retry: %s attemptCount=%d err=%q", status, attemptCount, lastErr)
 	}
 
-	// next_attempt_at이 미래 → 당장은 due 아님
+	// next_attempt_at is in the future → not due right now
 	if n, _ := w.ProcessOnce(ctx); n != 0 {
-		t.Fatal("백오프 중인데 due로 잡힘")
+		t.Fatal("picked up as due while in backoff")
 	}
 
-	// 시각을 과거로 돌려 due로 만들고 재처리 → 성공
+	// rewind the time to the past to make it due, reprocess → success
 	if _, err := st.Pool().Exec(ctx,
 		`UPDATE outbound_queue SET next_attempt_at = now() - interval '1 second' WHERE id = 1`); err != nil {
-		t.Fatalf("시각 조작: %v", err)
+		t.Fatalf("time manipulation: %v", err)
 	}
 	if n, _ := w.ProcessOnce(ctx); n != 1 {
-		t.Fatal("due 복귀 후 1건 처리해야")
+		t.Fatal("should process 1 entry after becoming due again")
 	}
 	status, _, _ = queueStatus(t, st, 1)
 	if status != store.OutboundSent {
-		t.Fatalf("재시도 후 sent여야: %s", status)
+		t.Fatalf("should be sent after retry: %s", status)
 	}
-	t.Log("✔ 일시 오류 → 백오프 재시도 → 성공")
+	t.Log("✔ transient error → backoff retry → success")
 }
 
-// TestQueuePermanentError: 5xx급 영구 오류는 즉시 failed.
+// TestQueuePermanentError: a 5xx-class permanent error is failed immediately.
 func TestQueuePermanentError(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
@@ -163,16 +163,16 @@ func TestQueuePermanentError(t *testing.T) {
 	sender := &mockSender{errs: []error{&PermanentError{Err: errors.New("550 user unknown")}}}
 	w := NewWorker(st, sender, Config{})
 	if n, _ := w.ProcessOnce(ctx); n != 1 {
-		t.Fatal("1건 처리해야")
+		t.Fatal("should process 1 entry")
 	}
 	status, _, lastErr := queueStatus(t, st, 1)
 	if status != store.OutboundFailed || !strings.Contains(lastErr, "550") {
-		t.Fatalf("즉시 failed여야: %s err=%q", status, lastErr)
+		t.Fatalf("should be failed immediately: %s err=%q", status, lastErr)
 	}
-	t.Log("✔ 영구 오류 즉시 failed (재시도 없음)")
+	t.Log("✔ permanent error failed immediately (no retry)")
 }
 
-// TestQueueMaxAttempts: 재시도 소진 시 failed.
+// TestQueueMaxAttempts: failed once retries are exhausted.
 func TestQueueMaxAttempts(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
@@ -187,38 +187,40 @@ func TestQueueMaxAttempts(t *testing.T) {
 	}}
 	w := NewWorker(st, sender, Config{MaxAttemptCount: 2, BaseBackoff: time.Minute})
 
-	// 1차: 일시 오류 → 재시도 대기
+	// 1st: transient error → awaiting retry
 	_, _ = w.ProcessOnce(ctx)
-	// due로 되돌리고 2차: MaxAttemptCount 도달 → failed
+	// make it due again, 2nd: MaxAttemptCount reached → failed
 	_, _ = st.Pool().Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = 1`)
 	_, _ = w.ProcessOnce(ctx)
 
 	status, attemptCount, _ := queueStatus(t, st, 1)
 	if status != store.OutboundFailed || attemptCount != 2 {
-		t.Fatalf("소진 후 failed여야: %s attemptCount=%d", status, attemptCount)
+		t.Fatalf("should be failed after exhaustion: %s attemptCount=%d", status, attemptCount)
 	}
-	t.Log("✔ MaxAttemptCount 소진 → failed")
+	t.Log("✔ MaxAttemptCount exhausted → failed")
 }
 
-// TestSubmissionToQueueToRelay: 진짜 end-to-end —
-// 인증 유저가 외부 도메인으로 제출 → 큐 적재 → 워커가 RelaySender로 발송.
-// relay는 "다른 메일 서버" 역할의 로컬 MX 서버 (external.test 도메인을 로컬로 시드).
+// TestSubmissionToQueueToRelay: real end-to-end —
+// an authenticated user submits to an external domain → enqueued → the worker
+// sends via RelaySender. The relay is a local MX server playing the "other
+// mail server" role (external.test domain seeded locally).
 func TestSubmissionToQueueToRelay(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 
-	// 시드: 우리 도메인 krisam.in의 maro + relay 쪽 도메인 external.test의 friend
+	// seed: maro on our domain krisam.in + friend on the relay-side domain external.test
 	seedAccount(t, st, "maro@krisam.in", "queue-test-pw")
 	seedAccount(t, st, "friend@external.test", "friend-pw")
-	// external.test를 다시 비활성화해 "외부 도메인"으로 만든다... 대신
-	// 더 단순하게: relay 서버는 별도 store 없이 같은 store의 MX 백엔드를 쓰되,
-	// submission 쪽에서 krisam.in만 로컬로 인식하도록 external.test를 비활성 처리.
+	// deactivate external.test again to make it an "external domain"... or
+	// rather, more simply: the relay server uses the same store's MX backend
+	// without a separate store, while external.test is deactivated so the
+	// submission side recognizes only krisam.in as local.
 	if _, err := st.Pool().Exec(ctx,
 		`UPDATE domain SET active = false WHERE name = 'external.test'`); err != nil {
-		t.Fatalf("도메인 비활성: %v", err)
+		t.Fatalf("domain deactivate: %v", err)
 	}
 
-	// relay 역할: external.test 메일을 받는 MX 서버 (검증은 우회하고 수신만 기록)
+	// relay role: an MX server receiving external.test mail (bypasses validation, only records reception)
 	received := make(chan string, 1)
 	relayBackend := &recordingBackend{received: received}
 	relaySrv := gosmtp.NewServer(relayBackend)
@@ -230,7 +232,7 @@ func TestSubmissionToQueueToRelay(t *testing.T) {
 	go func() { _ = relaySrv.Serve(relayLn) }()
 	t.Cleanup(func() { _ = relaySrv.Close() })
 
-	// submission 서버 (외부 도메인 큐 적재 활성)
+	// submission server (external-domain enqueueing enabled)
 	subSrv := gosmtp.NewServer(mailsmtp.NewSubmissionBackend(st, "submit.krisam.in", true))
 	subSrv.Domain = "submit.krisam.in"
 	subSrv.AllowInsecureAuth = true
@@ -241,7 +243,7 @@ func TestSubmissionToQueueToRelay(t *testing.T) {
 	go func() { _ = subSrv.Serve(subLn) }()
 	t.Cleanup(func() { _ = subSrv.Close() })
 
-	// 1) 인증 제출: maro → friend@external.test
+	// 1) authenticated submission: maro → friend@external.test
 	c, err := gosmtp.Dial(subLn.Addr().String())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -257,7 +259,7 @@ func TestSubmissionToQueueToRelay(t *testing.T) {
 		t.Fatalf("MAIL: %v", err)
 	}
 	if err := c.Rcpt("friend@external.test", nil); err != nil {
-		t.Fatalf("RCPT(외부): %v", err)
+		t.Fatalf("RCPT (external): %v", err)
 	}
 	wtr, err := c.Data()
 	if err != nil {
@@ -271,39 +273,39 @@ func TestSubmissionToQueueToRelay(t *testing.T) {
 	}
 	_ = c.Quit()
 
-	// 2) 큐에 적재됐는지
+	// 2) verify it was enqueued
 	var count int
 	_ = st.Pool().QueryRow(ctx, `SELECT count(*) FROM outbound_queue WHERE status = 'pending'`).Scan(&count)
 	if count != 1 {
-		t.Fatalf("큐에 1건 있어야: %d", count)
+		t.Fatalf("queue should have 1 entry: %d", count)
 	}
-	t.Log("✔ 외부 도메인 제출 → 큐 적재")
+	t.Log("✔ external domain submission → enqueued")
 
-	// 3) 워커가 RelaySender(진짜 SMTP 클라이언트)로 relay에 발송
+	// 3) the worker sends to the relay via RelaySender (a real SMTP client)
 	sender := NewRelaySender(RelayConfig{Addr: relayLn.Addr().String(), StartTLS: false})
 	w := NewWorker(st, sender, Config{})
 	if n, err := w.ProcessOnce(ctx); err != nil || n != 1 {
-		t.Fatalf("워커 1건 처리해야: %v n=%d", err, n)
+		t.Fatalf("worker should process 1 entry: %v n=%d", err, n)
 	}
 
 	select {
 	case got := <-received:
 		if !strings.Contains(got, "Subject: queued") {
-			t.Fatalf("relay가 받은 본문 이상:\n%.200s", got)
+			t.Fatalf("relay received unexpected body:\n%.200s", got)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("relay가 메일을 못 받음")
+		t.Fatal("relay did not receive the mail")
 	}
 	status, _, _ := queueStatus(t, st, 1)
 	if status != store.OutboundSent {
-		t.Fatalf("sent여야: %s", status)
+		t.Fatalf("should be sent: %s", status)
 	}
-	t.Log("✔ 워커 → relay 실 SMTP 발송 → sent (제출→큐→발송 전체 왕복)")
+	t.Log("✔ worker → real SMTP send to relay → sent (full submission→queue→send round trip)")
 }
 
-// ── 테스트 헬퍼 ─────────────────────────────────────────────
+// ── test helpers ─────────────────────────────────────────────
 
-// recordingBackend는 받은 DATA를 기록만 하는 SMTP 백엔드 (relay 역할).
+// recordingBackend is an SMTP backend that only records received DATA (relay role).
 type recordingBackend struct {
 	received chan string
 }
@@ -340,27 +342,27 @@ func seedAccount(t *testing.T, st *postgres.Store, address, password string) {
 		`INSERT INTO domain (name) VALUES ($1)
 		 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
 		domain).Scan(&domainID); err != nil {
-		t.Fatalf("도메인 시드: %v", err)
+		t.Fatalf("domain seed: %v", err)
 	}
 	var accountID int64
 	if err := st.Pool().QueryRow(ctx,
 		`INSERT INTO account (oidc_subject, oidc_email) VALUES ('test:' || $1::text, $1)
 		 ON CONFLICT (oidc_subject) DO UPDATE SET oidc_email = EXCLUDED.oidc_email
 		 RETURNING id`, address).Scan(&accountID); err != nil {
-		t.Fatalf("계정 시드: %v", err)
+		t.Fatalf("account seed: %v", err)
 	}
 	if _, err := st.Pool().Exec(ctx,
 		`INSERT INTO address (domain_id, local_part, account_id) VALUES ($1, $2, $3)
 		 ON CONFLICT (domain_id, local_part) DO NOTHING`, domainID, local, accountID); err != nil {
-		t.Fatalf("주소 시드: %v", err)
+		t.Fatalf("address seed: %v", err)
 	}
 	hash, err := postgres.HashPassword(password)
 	if err != nil {
-		t.Fatalf("해시: %v", err)
+		t.Fatalf("hash: %v", err)
 	}
 	if _, err := st.Pool().Exec(ctx,
 		`INSERT INTO app_password (account_id, label, hash) VALUES ($1, 'queue-test', $2)`,
 		accountID, hash); err != nil {
-		t.Fatalf("앱비번 시드: %v", err)
+		t.Fatalf("app password seed: %v", err)
 	}
 }

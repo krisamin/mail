@@ -12,17 +12,18 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// ErrNotFound는 조회 대상이 없을 때 (store.ErrNotFound 별칭 — 하위호환).
+// ErrNotFound is returned when the lookup target does not exist (alias of store.ErrNotFound — backward compat).
 var ErrNotFound = store.ErrNotFound
 
-// ErrAuthFailed는 인증 실패 (store.ErrAuthFailed 별칭 — 하위호환).
+// ErrAuthFailed is an authentication failure (alias of store.ErrAuthFailed — backward compat).
 var ErrAuthFailed = store.ErrAuthFailed
 
-// validLocalPart는 이메일 local part 화이트리스트 검증 (RFC 5321 dot-atom
-// 부분집합). 제어문자(\r\n — SMTP/헤더 인젝션 소지)와 '@', 공백, '<', '>'류를
-// 원천 차단한다. '*'는 atext에 있지만 이 시스템에선 catch-all 마커라 제외
-// (catch-all은 호출부에서 localPart == "*" 단독으로만 허용). 소문자 정규화
-// 이후 호출 전제.
+// validLocalPart is a whitelist validation of the email local part (a subset of
+// RFC 5321 dot-atom). It blocks control characters (\r\n — potential SMTP/header
+// injection) and '@', spaces, '<', '>' and the like at the source. '*' is in
+// atext but excluded here because it is the catch-all marker in this system
+// (catch-all is only allowed as a standalone localPart == "*" at the call site).
+// Assumes the input has already been lowercased.
 func validLocalPart(s string) bool {
 	if s == "" || len(s) > 64 {
 		return false
@@ -39,16 +40,16 @@ func validLocalPart(s string) bool {
 	return true
 }
 
-// splitAddress는 'maro@krisam.in' → ('maro', 'krisam.in').
+// splitAddress turns 'maro@krisam.in' → ('maro', 'krisam.in').
 func splitAddress(address string) (local, domain string, err error) {
 	at := strings.LastIndex(address, "@")
 	if at < 0 {
-		return "", "", fmt.Errorf("잘못된 주소: %q", address)
+		return "", "", fmt.Errorf("invalid address: %q", address)
 	}
 	return address[:at], address[at+1:], nil
 }
 
-// accountSelect는 account 조회 공통 SELECT (0006 — 신원 모델).
+// accountSelect is the shared SELECT for account lookups (0006 — identity model).
 const accountSelect = `
 	SELECT a.id, a.oidc_subject, COALESCE(a.oidc_email, ''), a.kind,
 	       a.quota_bytes, a.active, a.created_at
@@ -61,12 +62,12 @@ func scanAccount(row pgx.Row) (*store.Account, error) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("계정 조회: %w", err)
+		return nil, fmt.Errorf("account lookup: %w", err)
 	}
 	return &u, nil
 }
 
-// FindDomain은 활성 도메인을 이름으로 찾는다.
+// FindDomain finds an active domain by name.
 func (s *Store) FindDomain(ctx context.Context, name string) (*store.Domain, error) {
 	const q = `
 		SELECT id, name, active, created_at,
@@ -79,13 +80,13 @@ func (s *Store) FindDomain(ctx context.Context, name string) (*store.Domain, err
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("도메인 조회: %w", err)
+		return nil, fmt.Errorf("domain lookup: %w", err)
 	}
 	return &d, nil
 }
 
-// FindAccountByAddress는 주소(정확 매칭 — 와일드카드 제외)를 소유한
-// 활성 계정을 찾는다. IMAP/SMTP 로그인, 셀프서비스 매핑용.
+// FindAccountByAddress finds the active account that owns the address (exact
+// match only — no wildcards). Used for IMAP/SMTP login and self-service mapping.
 func (s *Store) FindAccountByAddress(ctx context.Context, address string) (*store.Account, error) {
 	local, domain, err := splitAddress(strings.ToLower(address))
 	if err != nil {
@@ -98,14 +99,14 @@ func (s *Store) FindAccountByAddress(ctx context.Context, address string) (*stor
 	return scanAccount(s.pool.QueryRow(ctx, q, local, domain))
 }
 
-// FindAccountBySubject는 OIDC sub로 활성 계정을 찾는다 (웹 로그인 신원).
+// FindAccountBySubject finds an active account by OIDC sub (web login identity).
 func (s *Store) FindAccountBySubject(ctx context.Context, subject string) (*store.Account, error) {
 	const q = accountSelect + ` WHERE a.oidc_subject = $1 AND a.active`
 	return scanAccount(s.pool.QueryRow(ctx, q, subject))
 }
 
-// AuthenticateAppPassword는 주소+앱비밀번호로 인증한다.
-// 해당 계정의 revoke 안 된 앱 비밀번호들과 argon2id 비교.
+// AuthenticateAppPassword authenticates with an address + app password.
+// Compares against the account's non-revoked app passwords using argon2id.
 func (s *Store) AuthenticateAppPassword(ctx context.Context, address, password string) (*store.Account, error) {
 	u, err := s.FindAccountByAddress(ctx, address)
 	if err != nil {
@@ -116,7 +117,7 @@ func (s *Store) AuthenticateAppPassword(ctx context.Context, address, password s
 		WHERE account_id = $1 AND revoked_at IS NULL`
 	rows, err := s.pool.Query(ctx, q, u.ID)
 	if err != nil {
-		return nil, fmt.Errorf("앱 비밀번호 조회: %w", err)
+		return nil, fmt.Errorf("app password lookup: %w", err)
 	}
 	defer rows.Close()
 
@@ -127,7 +128,7 @@ func (s *Store) AuthenticateAppPassword(ctx context.Context, address, password s
 			return nil, err
 		}
 		if verifyPassword(password, hash) {
-			// last_used 갱신 (best-effort)
+			// refresh last_used (best-effort)
 			_, _ = s.pool.Exec(ctx, `UPDATE app_password SET last_used = now() WHERE id = $1`, id)
 			return u, nil
 		}
@@ -135,9 +136,9 @@ func (s *Store) AuthenticateAppPassword(ctx context.Context, address, password s
 	return nil, ErrAuthFailed
 }
 
-// ── argon2id 헬퍼 ───────────────────────────────────────────
-// 포맷: argon2id$<time>$<memoryKiB>$<threads>$<saltB64>$<hashB64>
-// (스파이크용 최소 구현. Phase 2에서 파라미터/포맷 재검토)
+// ── argon2id helpers ────────────────────────────────────────
+// Format: argon2id$<time>$<memoryKiB>$<threads>$<saltB64>$<hashB64>
+// (minimal implementation for the spike. Parameters/format revisited in Phase 2)
 
 const (
 	argonTime    = 1

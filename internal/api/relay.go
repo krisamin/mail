@@ -6,8 +6,8 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// relay 관리 (0005) — 발송 relay CRUD + 도메인별 지정.
-// ★password는 쓰기 전용: 응답에 절대 포함하지 않는다 (hasPassword로만 노출).
+// Relay management (0005) — outbound relay CRUD + per-domain assignment.
+// ★password is write-only: never included in responses (exposed via hasPassword only).
 
 type relayDTO struct {
 	ID        int64  `json:"id"`
@@ -19,7 +19,7 @@ type relayDTO struct {
 	IsDefault bool   `json:"isDefault"`
 	Active    bool   `json:"active"`
 	CreatedAt string `json:"createdAt"`
-	// HasPassword는 password 설정 여부만 알려준다 (값은 절대 안 내려줌).
+	// HasPassword only says whether a password is set (the value never leaves).
 	HasPassword bool `json:"hasPassword"`
 }
 
@@ -38,7 +38,7 @@ type relayReq struct {
 	Host      string `json:"host"`
 	Port      int    `json:"port"`
 	Username  string `json:"username"`
-	Password  string `json:"password"` // 빈 문자열 = (수정 시) 기존 유지
+	Password  string `json:"password"` // empty string = keep existing (on update)
 	StartTLS  *bool  `json:"starttls"`
 	IsDefault bool   `json:"isDefault"`
 	Active    *bool  `json:"active"`
@@ -124,7 +124,7 @@ func (s *Server) handleDeleteRelay(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleSetDomainRelay는 도메인 발신 relay 지정. relayId null = default 사용.
+// handleSetDomainRelay assigns a domain's outbound relay. relayId null = use default.
 func (s *Server) handleSetDomainRelay(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {

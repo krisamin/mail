@@ -7,17 +7,17 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// 전역 설정 API — 첫 항목은 웹 UI 표시 언어.
+// Global settings API — the first entry is the web UI display locale.
 //
-// locale 값: "auto"(브라우저 언어 감지) | "ko" | "en" | "ja".
-// 읽기는 인증 불필요 — 로그인 전 화면(홈/에러)도 언어가 필요하고,
-// 값 자체가 민감하지 않다. 쓰기는 admin 전용.
+// locale values: "auto" (browser language detection) | "ko" | "en" | "ja".
+// Reads need no auth — pre-login screens (home/error) need the locale too,
+// and the value itself isn't sensitive. Writes are admin-only.
 
 const settingLocaleKey = "locale"
 
 var validLocaleMap = map[string]bool{"auto": true, "ko": true, "en": true, "ja": true}
 
-// handleGetLocale은 전역 표시 언어를 돌려준다 (미설정 = "auto").
+// handleGetLocale returns the global display locale (unset = "auto").
 func (s *Server) handleGetLocale(w http.ResponseWriter, r *http.Request) {
 	value, err := s.store.GetSetting(r.Context(), settingLocaleKey)
 	if errors.Is(err, store.ErrNotFound) {
@@ -27,12 +27,12 @@ func (s *Server) handleGetLocale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validLocaleMap[value] {
-		value = "auto" // DB에 이상 값이 들어가도 안전하게
+		value = "auto" // stay safe even if a bad value lands in the DB
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"locale": value})
 }
 
-// handleSetLocale은 전역 표시 언어를 저장한다 (admin 전용).
+// handleSetLocale stores the global display locale (admin only).
 func (s *Server) handleSetLocale(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Locale string `json:"locale"`

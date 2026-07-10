@@ -28,14 +28,14 @@ func TestBuildDSN(t *testing.T) {
 		"Action: failed",
 		"Diagnostic-Code: smtp; 550 5.1.1 user unknown",
 		"Content-Type: message/rfc822-headers",
-		"Subject: hello", // 원문 헤더 발췌
+		"Subject: hello", // original header excerpt
 	} {
 		if !strings.Contains(dsn, want) {
-			t.Errorf("DSN에 %q 없음\n%s", want, dsn)
+			t.Errorf("DSN missing %q\n%s", want, dsn)
 		}
 	}
-	// 원문 본문은 포함하지 않는다 (헤더만)
+	// the original body is not included (headers only)
 	if strings.Contains(dsn, "body body body") {
-		t.Error("DSN이 원문 본문을 포함하면 안 됨 (rfc822-headers만)")
+		t.Error("DSN must not include the original body (rfc822-headers only)")
 	}
 }

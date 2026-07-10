@@ -8,99 +8,99 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// TestRelay는 relay CRUD + ResolveRelay 우선순위를 검증한다.
-// 필요 환경: MAIL_TEST_DSN (store_test.go와 동일)
+// TestRelay verifies relay CRUD + ResolveRelay priority.
+// Required environment: MAIL_TEST_DSN (same as store_test.go)
 func TestRelay(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
 	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
-	// 시드: 도메인 2개
+	// seed: two domains
 	var krisamID, kirbyID int64
 	if err := s.pool.QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('krisam.in') RETURNING id`).Scan(&krisamID); err != nil {
-		t.Fatalf("도메인 시드: %v", err)
+		t.Fatalf("domain seed: %v", err)
 	}
 	if err := s.pool.QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
-		t.Fatalf("도메인 시드: %v", err)
+		t.Fatalf("domain seed: %v", err)
 	}
 
-	// 1) relay 없음 → ErrNotFound
+	// 1) no relay → ErrNotFound
 	if _, err := s.ResolveRelay(ctx, "krisam.in"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("relay 없을 때 ErrNotFound 기대, got %v", err)
+		t.Fatalf("expected ErrNotFound when no relay exists, got %v", err)
 	}
-	t.Log("✔ relay 없음 → ErrNotFound")
+	t.Log("✔ no relay → ErrNotFound")
 
-	// 2) default relay 생성 → 아무 도메인이나 default로 해석
+	// 2) create default relay → any domain resolves to default
 	resend, err := s.CreateRelay(ctx, &store.Relay{
 		Name: "resend", Host: "smtp.resend.com", Port: 587,
 		Username: "resend", Password: "re_secret", StartTLS: true,
 		IsDefault: true, Active: true,
 	})
 	if err != nil {
-		t.Fatalf("relay 생성: %v", err)
+		t.Fatalf("relay creation: %v", err)
 	}
 	got, err := s.ResolveRelay(ctx, "krisam.in")
 	if err != nil || got.ID != resend.ID {
-		t.Fatalf("default 해석 실패: %v %+v", err, got)
+		t.Fatalf("default resolution failed: %v %+v", err, got)
 	}
-	t.Log("✔ default relay 해석")
+	t.Log("✔ default relay resolution")
 
-	// 3) 도메인 지정 relay가 default보다 우선
+	// 3) domain-specific relay takes priority over default
 	ses, err := s.CreateRelay(ctx, &store.Relay{
 		Name: "ses", Host: "email-smtp.ap-northeast-2.amazonaws.com", Port: 587,
 		Username: "AKIA...", Password: "sespw", StartTLS: true, Active: true,
 	})
 	if err != nil {
-		t.Fatalf("relay 생성: %v", err)
+		t.Fatalf("relay creation: %v", err)
 	}
 	if err := s.SetDomainRelay(ctx, kirbyID, &ses.ID); err != nil {
-		t.Fatalf("도메인 relay 지정: %v", err)
+		t.Fatalf("domain relay assignment: %v", err)
 	}
 	got, err = s.ResolveRelay(ctx, "kirby.so")
 	if err != nil || got.ID != ses.ID {
-		t.Fatalf("도메인 지정 해석 실패: %v %+v", err, got)
+		t.Fatalf("domain-specific resolution failed: %v %+v", err, got)
 	}
-	got, err = s.ResolveRelay(ctx, "krisam.in") // 미지정 도메인은 여전히 default
+	got, err = s.ResolveRelay(ctx, "krisam.in") // unassigned domain still resolves to default
 	if err != nil || got.ID != resend.ID {
-		t.Fatalf("미지정 도메인 default 해석 실패: %v %+v", err, got)
+		t.Fatalf("unassigned domain default resolution failed: %v %+v", err, got)
 	}
-	t.Log("✔ 도메인 지정 > default 우선순위")
+	t.Log("✔ domain-specific > default priority")
 
-	// 4) 비활성 relay는 무시
+	// 4) inactive relay is ignored
 	ses.Active = false
 	if _, err := s.UpdateRelay(ctx, ses); err != nil {
-		t.Fatalf("relay 수정: %v", err)
+		t.Fatalf("relay update: %v", err)
 	}
 	got, err = s.ResolveRelay(ctx, "kirby.so")
 	if err != nil || got.ID != resend.ID {
-		t.Fatalf("비활성 무시 실패 (default로 내려와야 함): %v %+v", err, got)
+		t.Fatalf("inactive ignore failed (should fall back to default): %v %+v", err, got)
 	}
-	t.Log("✔ 비활성 relay 무시 → default")
+	t.Log("✔ inactive relay ignored → default")
 
-	// 5) UpdateRelay password 빈 문자열 = 기존 값 유지
+	// 5) UpdateRelay empty password string = keep existing value
 	resend.Password = ""
 	resend.Host = "smtp2.resend.com"
 	updated, err := s.UpdateRelay(ctx, resend)
 	if err != nil {
-		t.Fatalf("relay 수정: %v", err)
+		t.Fatalf("relay update: %v", err)
 	}
 	if updated.Password != "re_secret" || updated.Host != "smtp2.resend.com" {
-		t.Fatalf("password 유지 실패: %+v", updated)
+		t.Fatalf("password retention failed: %+v", updated)
 	}
-	t.Log("✔ password 빈 문자열 = 기존 값 유지")
+	t.Log("✔ empty password string = existing value kept")
 
-	// 6) default 이관: ses를 default로 → resend는 default 해제
+	// 6) default handover: make ses default → resend loses default
 	ses.Active = true
 	ses.IsDefault = true
 	if _, err := s.UpdateRelay(ctx, ses); err != nil {
-		t.Fatalf("default 이관: %v", err)
+		t.Fatalf("default handover: %v", err)
 	}
 	relayList, err := s.ListRelay(ctx)
 	if err != nil {
-		t.Fatalf("relay 목록: %v", err)
+		t.Fatalf("relay list: %v", err)
 	}
 	defaultCount := 0
 	for _, r := range relayList {
@@ -109,21 +109,21 @@ func TestRelay(t *testing.T) {
 		}
 	}
 	if defaultCount != 1 {
-		t.Fatalf("default는 하나여야 함, got %d", defaultCount)
+		t.Fatalf("there must be exactly one default, got %d", defaultCount)
 	}
-	t.Log("✔ default 단일성 (이관 시 기존 해제)")
+	t.Log("✔ default uniqueness (previous cleared on handover)")
 
-	// 7) 삭제 → 도메인 relay_id는 SET NULL
+	// 7) delete → domain relay_id is SET NULL
 	if err := s.DeleteRelay(ctx, ses.ID); err != nil {
-		t.Fatalf("relay 삭제: %v", err)
+		t.Fatalf("relay delete: %v", err)
 	}
 	var relayID *int64
 	if err := s.pool.QueryRow(ctx,
 		`SELECT relay_id FROM domain WHERE id = $1`, kirbyID).Scan(&relayID); err != nil {
-		t.Fatalf("도메인 조회: %v", err)
+		t.Fatalf("domain lookup: %v", err)
 	}
 	if relayID != nil {
-		t.Fatalf("삭제 후 relay_id NULL이어야 함, got %v", *relayID)
+		t.Fatalf("relay_id must be NULL after delete, got %v", *relayID)
 	}
-	t.Log("✔ relay 삭제 → domain.relay_id SET NULL")
+	t.Log("✔ relay delete → domain.relay_id SET NULL")
 }

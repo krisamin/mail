@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-// 셀프서비스(/api/me/*) 통합 테스트.
-// InsecureSkipVerify 모드에서 X-Test-Email/X-Test-Groups 헤더로
-// "누가 로그인했는가"를 흉내낸다 (auth.go authenticate 참고).
+// Self-service (/api/me/*) integration tests.
+// In InsecureSkipVerify mode, the X-Test-Email/X-Test-Groups headers
+// simulate "who is logged in" (see auth.go authenticate).
 
-// callAs는 지정한 신원으로 JSON 요청을 보낸다.
+// callAs sends a JSON request as the given identity.
 func callAs(t *testing.T, srv *httptest.Server, email, groups, method, path string, body any) (int, map[string]any, []map[string]any) {
 	t.Helper()
 	var reqBody *bytes.Reader
@@ -29,7 +29,7 @@ func callAs(t *testing.T, srv *httptest.Server, email, groups, method, path stri
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Test-Email", email)
-	// 빈 문자열이라도 명시하면 그룹 override (기본 admin 방지)
+	// even an empty string, when explicit, overrides groups (prevents default admin)
 	req.Header["X-Test-Groups"] = []string{groups}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -52,80 +52,80 @@ func callAs(t *testing.T, srv *httptest.Server, email, groups, method, path stri
 	return resp.StatusCode, obj, arr
 }
 
-// TestSelfService: 일반 유저(그룹 없음)의 본인 앱비번 라이프사이클 + 경계.
+// TestSelfService: own app password lifecycle + boundaries for a regular user (no groups).
 func TestSelfService(t *testing.T) {
 	srv := testServer(t)
 
-	// 시드: admin 권한으로 도메인 + JIT 프로비저닝으로 유저 2명 (maro, guest)
+	// seed: domain as admin + two users via JIT provisioning (maro, guest)
 	code, dom, _ := call(t, srv, "POST", "/api/admin/domain", map[string]string{"name": "krisam.in"})
 	if code != 201 {
-		t.Fatalf("도메인: %d %v", code, dom)
+		t.Fatalf("domain: %d %v", code, dom)
 	}
 	for _, name := range []string{"maro", "guest"} {
 		if code, u, _ := callAs(t, srv, name+"@krisam.in", "", "POST", "/api/me/provision", nil); code != 200 {
-			t.Fatalf("유저 %s: %d %v", name, code, u)
+			t.Fatalf("user %s: %d %v", name, code, u)
 		}
 	}
 
-	// 1) 일반 유저는 admin API 접근 불가 (403)
+	// 1) Regular users cannot access the admin API (403)
 	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "GET", "/api/admin/domain", nil)
 	if code != 403 {
-		t.Fatalf("일반 유저의 admin 접근은 403이어야: %d", code)
+		t.Fatalf("admin access by regular user should be 403: %d", code)
 	}
-	t.Log("✔ 일반 유저 admin API 403")
+	t.Log("✔ regular user admin API 403")
 
-	// 2) 본인 계정 조회
+	// 2) Fetch own account
 	code, acc, _ := callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/account", nil)
 	if code != 200 || acc["email"] != "guest@krisam.in" {
-		t.Fatalf("본인 계정: %d %v", code, acc)
+		t.Fatalf("own account: %d %v", code, acc)
 	}
-	t.Log("✔ /api/me/account — sub 클레임 → 계정 매핑")
+	t.Log("✔ /api/me/account — sub claim → account mapping")
 
-	// 프로비저닝 안 된 유저 → 404
+	// unprovisioned user → 404
 	code, _, _ = callAs(t, srv, "nobody@krisam.in", "", "GET", "/api/me/account", nil)
 	if code != 404 {
-		t.Fatalf("미프로비저닝 유저는 404여야: %d", code)
+		t.Fatalf("unprovisioned user should be 404: %d", code)
 	}
-	t.Log("✔ 미프로비저닝 계정 404")
+	t.Log("✔ unprovisioned account 404")
 
-	// 3) 본인 앱비번 발급 → 목록 → revoke
+	// 3) Issue own app password → list → revoke
 	code, pw, _ := callAs(t, srv, "guest@krisam.in", "", "POST", "/api/me/app-password",
-		map[string]string{"label": "내 폰"})
+		map[string]string{"label": "my phone"})
 	if code != 201 || pw["plaintext"] == nil {
-		t.Fatalf("발급: %d %v", code, pw)
+		t.Fatalf("issue: %d %v", code, pw)
 	}
 	guestPwID := int64(pw["appPassword"].(map[string]any)["id"].(float64))
-	t.Logf("✔ 본인 앱비번 발급: %v", pw["plaintext"])
+	t.Logf("✔ own app password issued: %v", pw["plaintext"])
 
 	code, _, passwordList := callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/app-password", nil)
 	if code != 200 || len(passwordList) != 1 {
-		t.Fatalf("목록: %d %v", code, passwordList)
+		t.Fatalf("list: %d %v", code, passwordList)
 	}
 
-	// 4) IDOR 방지 — maro가 guest의 비번을 revoke 시도 → 404
+	// 4) IDOR prevention — maro tries to revoke guest's password → 404
 	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "DELETE",
 		fmt.Sprintf("/api/me/app-password/%d", guestPwID), nil)
 	if code != 404 {
-		t.Fatalf("타인 비번 revoke는 404여야 (IDOR): %d", code)
+		t.Fatalf("revoking someone else's password should be 404 (IDOR): %d", code)
 	}
-	t.Log("✔ IDOR 방지 — 타인 앱비번 revoke 404")
+	t.Log("✔ IDOR prevention — revoking someone else's app password 404")
 
-	// 본인 revoke는 성공
+	// own revoke succeeds
 	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "DELETE",
 		fmt.Sprintf("/api/me/app-password/%d", guestPwID), nil)
 	if code != 204 {
-		t.Fatalf("본인 revoke: %d", code)
+		t.Fatalf("own revoke: %d", code)
 	}
 	code, _, passwordList = callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/app-password", nil)
 	if code != 200 || len(passwordList) != 1 || passwordList[0]["revoked"] != true {
-		t.Fatalf("revoke 반영: %d %v", code, passwordList)
+		t.Fatalf("revoke applied: %d %v", code, passwordList)
 	}
-	t.Log("✔ 본인 revoke 204 + 반영")
+	t.Log("✔ own revoke 204 + applied")
 
-	// 5) 대소문자 이메일 정규화 (Guest@Krisam.IN → guest 계정)
+	// 5) Email case normalization (Guest@Krisam.IN → guest account)
 	code, acc, _ = callAs(t, srv, "Guest@Krisam.IN", "", "GET", "/api/me/account", nil)
 	if code != 200 || acc["email"] != "guest@krisam.in" {
-		t.Fatalf("대소문자 정규화: %d %v", code, acc)
+		t.Fatalf("case normalization: %d %v", code, acc)
 	}
-	t.Log("✔ email 대소문자 정규화")
+	t.Log("✔ email case normalization")
 }

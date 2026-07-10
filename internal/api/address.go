@@ -6,9 +6,10 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// 주소 관리 API — 계정 소유 메일 주소 (admin 전용).
-// 유저(계정)는 JIT 프로비저닝으로만 생기고, 주소 추가/삭제는 admin이 한다.
-// localPart '*'는 catch-all (그 도메인의 모든 미지정 주소가 대상 계정에 배달).
+// Address management API — account-owned mail addresses (admin only).
+// Users (accounts) appear only via JIT provisioning; address add/delete is
+// done by an admin. localPart '*' is the catch-all (every unassigned address
+// on that domain delivers to the target account).
 
 type addressDTO struct {
 	ID           int64  `json:"id"`
@@ -29,7 +30,7 @@ func toAddressDTO(a *store.Address) addressDTO {
 	}
 }
 
-// handleListDomainAddress는 도메인의 주소 목록.
+// handleListDomainAddress lists a domain's addresses.
 func (s *Server) handleListDomainAddress(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -48,7 +49,7 @@ func (s *Server) handleListDomainAddress(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleListAccountAddress는 계정의 주소 목록.
+// handleListAccountAddress lists an account's addresses.
 func (s *Server) handleListAccountAddress(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -67,7 +68,7 @@ func (s *Server) handleListAccountAddress(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleCreateAddress는 주소를 계정에 붙인다 (도메인 경로 기준).
+// handleCreateAddress attaches an address to an account (domain-path form).
 // body: {localPart, accountId}.
 func (s *Server) handleCreateAddress(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
@@ -86,8 +87,8 @@ func (s *Server) handleCreateAddress(w http.ResponseWriter, r *http.Request) {
 	s.createAddress(w, r, id, req.LocalPart, req.AccountID)
 }
 
-// handleCreateAccountAddress는 주소를 계정에 붙인다 (계정 경로 기준 —
-// 계정 페이지의 [local]@[도메인 선택] UX용). body: {localPart, domainId}.
+// handleCreateAccountAddress attaches an address to an account (account-path
+// form — for the account page's [local]@[domain select] UX). body: {localPart, domainId}.
 func (s *Server) handleCreateAccountAddress(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -105,7 +106,7 @@ func (s *Server) handleCreateAccountAddress(w http.ResponseWriter, r *http.Reque
 	s.createAddress(w, r, req.DomainID, req.LocalPart, id)
 }
 
-// createAddress는 두 핸들러의 공통 본체 — 계정 존재 확인 후 생성.
+// createAddress is the shared body of both handlers — verifies the account exists, then creates.
 func (s *Server) createAddress(w http.ResponseWriter, r *http.Request, domainID int64, localPart string, accountID int64) {
 	if _, err := s.store.FindAccountByID(r.Context(), accountID); err != nil {
 		mapStoreErr(w, err)
@@ -119,7 +120,7 @@ func (s *Server) createAddress(w http.ResponseWriter, r *http.Request, domainID 
 	writeJSON(w, http.StatusCreated, toAddressDTO(a))
 }
 
-// handleDeleteAddress는 주소를 지운다 (마지막 일반 주소는 400).
+// handleDeleteAddress deletes an address (the last regular address is a 400).
 func (s *Server) handleDeleteAddress(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {

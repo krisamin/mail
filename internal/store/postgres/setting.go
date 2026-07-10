@@ -10,9 +10,9 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// 전역 설정 key-value (마이그레이션 0008).
+// Global settings key-value (migration 0008).
 
-// GetSetting은 설정 값을 돌려준다. 없으면 store.ErrNotFound.
+// GetSetting returns a setting value. store.ErrNotFound when missing.
 func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
 	var value string
 	err := s.pool.QueryRow(ctx,
@@ -21,18 +21,18 @@ func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
 		return "", store.ErrNotFound
 	}
 	if err != nil {
-		return "", fmt.Errorf("설정 조회(%s): %w", key, err)
+		return "", fmt.Errorf("setting lookup(%s): %w", key, err)
 	}
 	return value, nil
 }
 
-// SetSetting은 설정 값을 저장한다 (upsert).
+// SetSetting stores a setting value (upsert).
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO setting (key, value) VALUES ($1, $2)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
 		key, value); err != nil {
-		return fmt.Errorf("설정 저장(%s): %w", key, err)
+		return fmt.Errorf("setting store(%s): %w", key, err)
 	}
 	return nil
 }

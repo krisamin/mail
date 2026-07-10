@@ -1,13 +1,15 @@
-// Package imap은 store.Store 위에서 go-imap v2 imapserver.Session을 구현한다.
+// Package imap implements go-imap v2 imapserver.Session on top of store.Store.
 //
-// 프로토콜 상태머신(명령 파싱, 리터럴, 응답 인코딩)은 go-imap이 담당하고,
-// 여기서는 "어떤 데이터를 돌려줄 것인가"만 채운다 (DD-01 2계층 아키텍처).
+// The protocol state machine (command parsing, literals, response encoding)
+// is handled by go-imap; here we only fill in "what data to return"
+// (DD-01 two-layer architecture).
 //
-// ★Phase 1 동시성 모델 — 세션 스냅샷:
-// SELECT 시점에 메일박스의 UID 목록을 세션 메모리에 스냅샷으로 뜬다.
-// 시퀀스 번호 = 스냅샷 인덱스+1. 다른 세션이 만든 변경(신규 메일, expunge)은
-// Poll/Idle에서 스냅샷과 DB를 비교해 반영한다. 세션 간 실시간 push는
-// Phase 2+에서 Postgres LISTEN/NOTIFY로 붙일 예정.
+// ★Phase 1 concurrency model — session snapshot:
+// At SELECT time we snapshot the mailbox's UID list into session memory.
+// Sequence number = snapshot index + 1. Changes made by other sessions
+// (new mail, expunge) are reflected by comparing the snapshot against the DB
+// in Poll/Idle. Real-time push between sessions is delivered via Postgres
+// LISTEN/NOTIFY (see MailboxNotifier).
 package imap
 
 import (
@@ -21,34 +23,34 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// opTimeout은 IMAP 명령 하나가 store에 접근할 때의 상한.
+// opTimeout caps a single IMAP command's store access.
 const opTimeout = 30 * time.Second
 
-// Backend는 store를 감싸는 IMAP 세션 팩토리.
+// Backend is the IMAP session factory wrapping the store.
 type Backend struct {
 	store   store.Store
-	limiter *guard.Limiter // 인증 브루트포스 방어 (IP 단위)
-	// notifier는 메일박스 변경 push 허브 (nil이면 IDLE이 폴링만 사용).
+	limiter *guard.Limiter // auth brute-force protection (per IP)
+	// notifier is the mailbox-change push hub (nil = IDLE falls back to polling only).
 	notifier MailboxNotifier
 }
 
-// MailboxNotifier는 메일박스 변경 구독 인터페이스 (postgres.Notifier가 구현).
+// MailboxNotifier is the mailbox-change subscription interface (implemented by postgres.Notifier).
 type MailboxNotifier interface {
 	Subscribe(mailboxID int64) (<-chan struct{}, func())
 }
 
-// NewBackend는 store 위에 IMAP 백엔드를 만든다.
+// NewBackend creates an IMAP backend on top of the store.
 func NewBackend(st store.Store) *Backend {
 	return &Backend{store: st, limiter: guard.NewLimiter()}
 }
 
-// WithNotifier는 LISTEN/NOTIFY 허브를 단다 — IDLE이 폴링 대신 push로 깨어난다.
+// WithNotifier attaches the LISTEN/NOTIFY hub — IDLE wakes on push instead of polling.
 func (b *Backend) WithNotifier(n MailboxNotifier) *Backend {
 	b.notifier = n
 	return b
 }
 
-// NewSession은 imapserver.Options.NewSession에 꽂는 콜백.
+// NewSession is the callback plugged into imapserver.Options.NewSession.
 func (b *Backend) NewSession(c *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
 	remoteIP := ""
 	if c != nil && c.NetConn() != nil {
@@ -59,7 +61,7 @@ func (b *Backend) NewSession(c *imapserver.Conn) (imapserver.Session, *imapserve
 	return &Session{backend: b, remoteIP: remoteIP}, nil, nil
 }
 
-// opCtx는 명령 단위 컨텍스트를 만든다.
+// opCtx creates a per-command context.
 func opCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), opTimeout)
 }

@@ -8,35 +8,37 @@ import (
 	"time"
 )
 
-// Notifier — Postgres LISTEN/NOTIFY 기반 메일박스 변경 알림 허브.
+// Notifier — mailbox change notification hub based on Postgres LISTEN/NOTIFY.
 //
-// AppendMessage/ExpungeDeleted가 커밋 시 pg_notify('mailbox_change', <id>)를
-// 쏘고, Notifier가 전용 커넥션으로 LISTEN해서 메일박스별 구독자(IMAP IDLE
-// 세션)에게 브로드캐스트한다. 15초 폴링 대신 즉시 push — 폴링은 구독이
-// 없거나 알림이 유실된 경우의 폴백으로만 남는다.
+// AppendMessage/ExpungeDeleted fire pg_notify('mailbox_change', <id>) at commit,
+// and the Notifier LISTENs on a dedicated connection and broadcasts to
+// per-mailbox subscribers (IMAP IDLE sessions). Immediate push instead of
+// 15-second polling — polling remains only as the fallback when there is no
+// subscription or a notification was lost.
 //
-// 단일 레플리카 전제(현 배포 구조)라 프로세스 내 허브로 충분하지만,
-// LISTEN/NOTIFY는 DB를 경유하므로 멀티 레플리카가 돼도 그대로 동작한다.
+// Under the single-replica assumption (current deployment) an in-process hub
+// is sufficient, but since LISTEN/NOTIFY goes through the DB it keeps working
+// with multiple replicas too.
 
 const notifyChannel = "mailbox_change"
 
-// Notifier는 메일박스 변경 구독 허브.
+// Notifier is the mailbox change subscription hub.
 type Notifier struct {
 	store *Store
 
 	mu     sync.Mutex
-	subMap map[int64]map[chan struct{}]bool // mailboxID → 구독자 집합
+	subMap map[int64]map[chan struct{}]bool // mailboxID → subscriber set
 }
 
-// NewNotifier는 허브를 만든다. Run을 별도 고루틴으로 돌려야 동작한다.
+// NewNotifier creates the hub. Run must be started in a separate goroutine for it to work.
 func NewNotifier(st *Store) *Notifier {
 	return &Notifier{store: st, subMap: map[int64]map[chan struct{}]bool{}}
 }
 
-// Subscribe는 메일박스 변경 채널을 돌려준다. 두 번째 반환값은 해지 함수 —
-// IDLE 종료 시 반드시 호출할 것 (누수 방지).
+// Subscribe returns a mailbox change channel. The second return value is the
+// cancel function — must be called when IDLE ends (prevents leaks).
 func (n *Notifier) Subscribe(mailboxID int64) (<-chan struct{}, func()) {
-	// 버퍼 1 — 알림 폭주 시 coalesce (IDLE은 "변했다" 신호만 필요)
+	// buffer 1 — coalesce on notification bursts (IDLE only needs a "changed" signal)
 	ch := make(chan struct{}, 1)
 	n.mu.Lock()
 	if n.subMap[mailboxID] == nil {
@@ -56,25 +58,26 @@ func (n *Notifier) Subscribe(mailboxID int64) (<-chan struct{}, func()) {
 	return ch, cancel
 }
 
-// dispatch는 해당 메일박스 구독자 전원에게 non-blocking 신호를 보낸다.
+// dispatch sends a non-blocking signal to all subscribers of the mailbox.
 func (n *Notifier) dispatch(mailboxID int64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for ch := range n.subMap[mailboxID] {
 		select {
 		case ch <- struct{}{}:
-		default: // 이미 신호 대기 중 — coalesce
+		default: // a signal is already pending — coalesce
 		}
 	}
 }
 
-// Run은 ctx가 취소될 때까지 LISTEN 루프를 돈다. 커넥션이 끊기면
-// 백오프 후 재연결한다 (그 사이 알림 유실은 IDLE 폴백 폴링이 흡수).
+// Run runs the LISTEN loop until ctx is cancelled. If the connection drops it
+// reconnects after a backoff (notifications lost meanwhile are absorbed by the
+// IDLE fallback polling).
 func (n *Notifier) Run(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		if err := n.listenOnce(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("notify: LISTEN 끊김 (재연결 %s 후): %v", backoff, err)
+			log.Printf("notify: LISTEN dropped (reconnect in %s): %v", backoff, err)
 			select {
 			case <-ctx.Done():
 				return
@@ -90,7 +93,7 @@ func (n *Notifier) Run(ctx context.Context) {
 }
 
 func (n *Notifier) listenOnce(ctx context.Context) error {
-	// LISTEN은 커넥션 단위 — 풀에서 한 개를 점유 유지한다.
+	// LISTEN is per-connection — keep one from the pool held.
 	conn, err := n.store.pool.Acquire(ctx)
 	if err != nil {
 		return err
@@ -100,7 +103,7 @@ func (n *Notifier) listenOnce(ctx context.Context) error {
 	if _, err := conn.Exec(ctx, "LISTEN "+notifyChannel); err != nil {
 		return err
 	}
-	log.Printf("notify: LISTEN %s 시작", notifyChannel)
+	log.Printf("notify: LISTEN %s started", notifyChannel)
 
 	for {
 		notification, err := conn.Conn().WaitForNotification(ctx)

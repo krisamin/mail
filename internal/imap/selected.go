@@ -19,8 +19,8 @@ import (
 
 // ── Selected state ──────────────────────────────────────────
 
-// Expunge는 \Deleted 메시지를 삭제하고 EXPUNGE 응답을 쓴다.
-// uids가 nil이면 전체(CLOSE/EXPUNGE), 아니면 UID EXPUNGE.
+// Expunge deletes \Deleted messages and writes EXPUNGE responses.
+// nil uidSet means all (CLOSE/EXPUNGE), otherwise UID EXPUNGE.
 func (s *Session) Expunge(w *imapserver.ExpungeWriter, uidSet *goimap.UIDSet) error {
 	if err := s.requireWritable(); err != nil {
 		return err
@@ -37,7 +37,7 @@ func (s *Session) Expunge(w *imapserver.ExpungeWriter, uidSet *goimap.UIDSet) er
 			}
 		}
 		if uidFilter == nil {
-			return nil // 매칭 없음
+			return nil // no match
 		}
 	}
 
@@ -51,7 +51,7 @@ func (s *Session) Expunge(w *imapserver.ExpungeWriter, uidSet *goimap.UIDSet) er
 		gone[goimap.UID(u)] = true
 	}
 
-	// 높은 seqnum부터 EXPUNGE 응답 + 스냅샷 제거 (RFC 3501 §7.4.1)
+	// EXPUNGE responses + snapshot removal from the highest seqnum down (RFC 3501 §7.4.1)
 	for i := len(s.snap) - 1; i >= 0; i-- {
 		if !gone[s.snap[i].uid] {
 			continue
@@ -66,14 +66,14 @@ func (s *Session) Expunge(w *imapserver.ExpungeWriter, uidSet *goimap.UIDSet) er
 	return nil
 }
 
-// Fetch는 매칭 메시지의 요청 항목을 응답으로 쓴다.
+// Fetch writes the requested items of matching messages as responses.
 func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options *goimap.FetchOptions) error {
 	if err := s.requireSelected(); err != nil {
 		return err
 	}
 
-	// 본문 섹션 요청 중 Peek 아닌 게 있으면 \Seen 부여 (RFC 3501 §6.4.5)
-	// — 단 EXAMINE(read-only) 선택에선 영구 상태를 바꾸지 않는다.
+	// Any non-Peek body-section request sets \Seen (RFC 3501 §6.4.5)
+	// — except under EXAMINE (read-only), which must not change permanent state.
 	markSeen := false
 	if !s.readOnly {
 		for _, section := range options.BodySection {
@@ -84,7 +84,7 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 		}
 	}
 
-	// 매칭 항목 수집
+	// collect matching entries
 	type hit struct {
 		seqNum uint32
 		entry  snapEntry
@@ -112,7 +112,7 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 	for _, h := range hits {
 		m := metaMap[h.entry.msgID]
 		if m == nil {
-			continue // 다른 세션이 지움 — 다음 Poll에서 EXPUNGE로 반영
+			continue // deleted by another session — surfaces as EXPUNGE on the next Poll
 		}
 
 		flagList := m.Flags
@@ -190,7 +190,7 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 	return nil
 }
 
-// Store는 플래그를 변경하고 (Silent 아니면) FETCH 응답으로 결과를 쓴다.
+// Store mutates flags and (unless Silent) writes the result as FETCH responses.
 func (s *Session) Store(w *imapserver.FetchWriter, numSet goimap.NumSet, op *goimap.StoreFlags, options *goimap.StoreOptions) error {
 	if err := s.requireWritable(); err != nil {
 		return err
@@ -225,7 +225,7 @@ func (s *Session) Store(w *imapserver.FetchWriter, numSet goimap.NumSet, op *goi
 	return nil
 }
 
-// Copy는 매칭 메시지를 대상 메일박스로 복사한다.
+// Copy copies matching messages to the destination mailbox.
 func (s *Session) Copy(numSet goimap.NumSet, destName string) (*goimap.CopyData, error) {
 	if err := s.requireSelected(); err != nil {
 		return nil, err
@@ -259,7 +259,7 @@ func (s *Session) Copy(numSet goimap.NumSet, destName string) (*goimap.CopyData,
 		ccancel()
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
-				return true // 다른 세션이 지운 메시지 — skip
+				return true // message deleted by another session — skip
 			}
 			copyErr = err
 			return false
@@ -279,7 +279,7 @@ func (s *Session) Copy(numSet goimap.NumSet, destName string) (*goimap.CopyData,
 	}, nil
 }
 
-// Search는 조건에 맞는 메시지를 찾는다.
+// Search finds messages matching the criteria.
 func (s *Session) Search(kind imapserver.NumKind, criteria *goimap.SearchCriteria, options *goimap.SearchOptions) (*goimap.SearchData, error) {
 	if err := s.requireSelected(); err != nil {
 		return nil, err
@@ -336,8 +336,8 @@ func (s *Session) Search(kind imapserver.NumKind, criteria *goimap.SearchCriteri
 	return &data, nil
 }
 
-// matchCriteria는 메시지가 SEARCH 조건에 맞는지 검사한다.
-// 본문 접근이 필요한 조건(Header/Body/Text/Sent*)에서만 blob을 로드한다.
+// matchCriteria checks whether a message matches the SEARCH criteria.
+// The blob is loaded only for criteria that need body access (Header/Body/Text/Sent*).
 func (s *Session) matchCriteria(m *store.Message, seqNum uint32, c *goimap.SearchCriteria) bool {
 	for _, set := range c.SeqNum {
 		static := s.staticSeqSet(set)
@@ -397,7 +397,7 @@ func (s *Session) matchCriteria(m *store.Message, seqNum uint32, c *goimap.Searc
 	return true
 }
 
-// ── 본문 매칭 헬퍼 (imapmemserver 참고) ─────────────────────
+// ── Body matching helpers (modeled on imapmemserver) ───────
 
 func extractEnvelope(raw []byte) *goimap.Envelope {
 	br := bufio.NewReader(bytes.NewReader(raw))
@@ -444,7 +444,7 @@ func matchRawMessage(raw []byte, c *goimap.SearchCriteria) bool {
 }
 
 func matchDate(t, since, before time.Time) bool {
-	// RFC 3501: 날짜 비교는 타임존 무시
+	// RFC 3501: date comparison ignores timezones
 	t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 	if !since.IsZero() {
 		sinceDay := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, time.UTC)

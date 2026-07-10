@@ -8,15 +8,15 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// 주소 시스템 통합 테스트 (마이그레이션 0006 — account=신원, address=주소).
-// 시나리오: krisam.in + kirby.so 두 도메인, maro/guest 계정에
-// 주소 여러 개 + catch-all(*@kirby.so)을 걸고 해석 검증.
+// Address system integration test (migration 0006 — account=identity, address=address).
+// Scenario: two domains krisam.in + kirby.so; attach multiple addresses
+// + catch-all(*@kirby.so) to maro/guest accounts and verify resolution.
 
 func addressTestStore(t *testing.T) *Store {
 	t.Helper()
 	dsn := os.Getenv("MAIL_TEST_DSN")
 	if dsn == "" {
-		t.Skip("MAIL_TEST_DSN 미설정 — 통합 테스트 skip")
+		t.Skip("MAIL_TEST_DSN not set — skipping integration test")
 	}
 	st, err := New(context.Background(), dsn)
 	if err != nil {
@@ -42,66 +42,66 @@ func TestAddressModel(t *testing.T) {
 		t.Fatalf("kirby.so: %v", err)
 	}
 
-	// 1) JIT 프로비저닝 — 계정 생성 + primary 주소 + INBOX
+	// 1) JIT provisioning — account creation + primary address + INBOX
 	maro, err := st.ProvisionAccount(ctx, "sub-maro", "maro@krisam.in")
 	if err != nil {
-		t.Fatalf("maro 프로비저닝: %v", err)
+		t.Fatalf("maro provisioning: %v", err)
 	}
 	guest, err := st.ProvisionAccount(ctx, "sub-guest", "guest@krisam.in")
 	if err != nil {
-		t.Fatalf("guest 프로비저닝: %v", err)
+		t.Fatalf("guest provisioning: %v", err)
 	}
 	boxList, err := st.ListMailbox(ctx, maro.ID)
 	if err != nil || len(boxList) != 1 || boxList[0].Name != "INBOX" {
-		t.Fatalf("프로비저닝 INBOX: %v %+v", err, boxList)
+		t.Fatalf("provisioned INBOX: %v %+v", err, boxList)
 	}
-	t.Log("✔ JIT 프로비저닝 (계정+주소+INBOX)")
+	t.Log("✔ JIT provisioning (account+address+INBOX)")
 
-	// 멱등성: 같은 sub 재호출 → 같은 계정, email 갱신
+	// Idempotency: re-calling with the same sub → same account, email refreshed
 	again, err := st.ProvisionAccount(ctx, "sub-maro", "maro@krisam.in")
 	if err != nil || again.ID != maro.ID {
-		t.Fatalf("멱등 프로비저닝: %v %+v", err, again)
+		t.Fatalf("idempotent provisioning: %v %+v", err, again)
 	}
-	// 미등록 도메인 → bare 계정 (주소/INBOX 없음, 로그인은 허용)
+	// Unregistered domain → bare account (no address/INBOX, login still allowed)
 	bare, err := st.ProvisionAccount(ctx, "sub-x", "x@example.com")
 	if err != nil {
-		t.Fatalf("미등록 도메인도 계정은 생겨야: %v", err)
+		t.Fatalf("unregistered domain should still create an account: %v", err)
 	}
 	if addressList, err := st.ListAccountAddress(ctx, bare.ID); err != nil || len(addressList) != 0 {
-		t.Fatalf("bare 계정은 주소가 없어야: %v %+v", err, addressList)
+		t.Fatalf("bare account must have no addresses: %v %+v", err, addressList)
 	}
 	if boxList, err := st.ListMailbox(ctx, bare.ID); err != nil || len(boxList) != 0 {
-		t.Fatalf("bare 계정은 메일함이 없어야: %v %+v", err, boxList)
+		t.Fatalf("bare account must have no mailboxes: %v %+v", err, boxList)
 	}
-	// 입양: 같은 email의 새 sub (IdP 유저 재생성) → 기존 계정 이어받기
+	// Adoption: new sub with the same email (IdP user recreated) → takes over existing account
 	adopted, err := st.ProvisionAccount(ctx, "sub-maro-v2", "maro@krisam.in")
 	if err != nil || adopted.ID != maro.ID || adopted.OIDCSubject != "sub-maro-v2" {
-		t.Fatalf("입양 프로비저닝: %v %+v", err, adopted)
+		t.Fatalf("adoption provisioning: %v %+v", err, adopted)
 	}
-	// 원복 (이후 케이스는 sub-maro 기준)
+	// Revert (subsequent cases assume sub-maro)
 	if _, err := st.ProvisionAccount(ctx, "sub-maro", "maro@krisam.in"); err != nil {
-		t.Fatalf("입양 원복: %v", err)
+		t.Fatalf("adoption revert: %v", err)
 	}
-	t.Log("✔ 멱등 + 미등록 도메인 거부 + 같은 email 입양")
+	t.Log("✔ idempotency + unregistered domain rejection + same-email adoption")
 
-	// 2) sub/주소 조회
+	// 2) sub/address lookup
 	if u, err := st.FindAccountBySubject(ctx, "sub-maro"); err != nil || u.ID != maro.ID {
 		t.Fatalf("FindAccountBySubject: %v", err)
 	}
 	if u, err := st.FindAccountByAddress(ctx, "maro@krisam.in"); err != nil || u.ID != maro.ID {
 		t.Fatalf("FindAccountByAddress: %v", err)
 	}
-	t.Log("✔ sub/주소 조회")
+	t.Log("✔ sub/address lookup")
 
-	// 3) admin이 주소 추가: test@kirby.so → maro (크로스 도메인)
+	// 3) admin adds an address: test@kirby.so → maro (cross-domain)
 	if _, err := st.CreateAddress(ctx, kirby.ID, "test", maro.ID); err != nil {
-		t.Fatalf("주소 추가: %v", err)
+		t.Fatalf("address add: %v", err)
 	}
 	u, err := st.ResolveAddress(ctx, "test@kirby.so")
 	if err != nil || u.ID != maro.ID {
-		t.Fatalf("test@kirby.so → maro여야: %v", err)
+		t.Fatalf("test@kirby.so should resolve to maro: %v", err)
 	}
-	t.Log("✔ admin 주소 추가 + 크로스 도메인 해석")
+	t.Log("✔ admin address add + cross-domain resolution")
 
 	// 4) catch-all: *@kirby.so → maro
 	if _, err := st.CreateAddress(ctx, kirby.ID, "*", maro.ID); err != nil {
@@ -109,29 +109,29 @@ func TestAddressModel(t *testing.T) {
 	}
 	u, err = st.ResolveAddress(ctx, "anything@kirby.so")
 	if err != nil || u.ID != maro.ID {
-		t.Fatalf("anything@kirby.so → maro여야: %v", err)
+		t.Fatalf("anything@kirby.so should resolve to maro: %v", err)
 	}
-	t.Log("✔ 와일드카드 catch-all 해석")
+	t.Log("✔ wildcard catch-all resolution")
 
-	// 5) 우선순위: 정확 주소 > 와일드카드
+	// 5) priority: exact address > wildcard
 	if _, err := st.CreateAddress(ctx, kirby.ID, "gyestt", guest.ID); err != nil {
-		t.Fatalf("kirby 정확 주소: %v", err)
+		t.Fatalf("kirby exact address: %v", err)
 	}
 	u, err = st.ResolveAddress(ctx, "gyestt@kirby.so")
 	if err != nil || u.ID != guest.ID {
-		t.Fatalf("정확 주소가 catch-all보다 우선이어야: %v", err)
+		t.Fatalf("exact address must take priority over catch-all: %v", err)
 	}
-	// 점유된 주소 재생성 → duplicate
+	// Recreating an occupied address → duplicate
 	if _, err := st.CreateAddress(ctx, kirby.ID, "gyestt", maro.ID); err == nil {
-		t.Fatal("점유된 주소를 다시 만들 수 있으면 안 됨")
+		t.Fatal("recreating an occupied address must not succeed")
 	}
-	t.Log("✔ 정확 > 와일드카드 우선순위 + 중복 거부")
+	t.Log("✔ exact > wildcard priority + duplicate rejection")
 
-	// 6) 주소 없는 local → ErrNotFound (krisam.in엔 catch-all 없음)
+	// 6) local with no address → ErrNotFound (krisam.in has no catch-all)
 	if _, err := st.ResolveAddress(ctx, "nobody@krisam.in"); err != store.ErrNotFound {
-		t.Fatalf("nobody@krisam.in은 NotFound여야: %v", err)
+		t.Fatalf("nobody@krisam.in should be NotFound: %v", err)
 	}
-	t.Log("✔ 미등록 주소 NotFound (catch-all 없는 도메인)")
+	t.Log("✔ unregistered address NotFound (domain without catch-all)")
 
 	// 7) CanSendAs
 	for _, tc := range []struct {
@@ -140,36 +140,36 @@ func TestAddressModel(t *testing.T) {
 		want      bool
 	}{
 		{maro.ID, "maro@krisam.in", true},   // primary
-		{maro.ID, "test@kirby.so", true},    // 추가 주소
-		{maro.ID, "random@kirby.so", true},  // 본인 catch-all
-		{guest.ID, "test@kirby.so", false},  // 남의 주소
-		{guest.ID, "gyestt@kirby.so", true}, // 본인 주소 (kirby)
-		{maro.ID, "gyestt@kirby.so", false}, // guest의 정확 주소 — catch-all 있어도 정확이 우선
-		{maro.ID, "x@nowhere.com", false},   // 외부
+		{maro.ID, "test@kirby.so", true},    // additional address
+		{maro.ID, "random@kirby.so", true},  // own catch-all
+		{guest.ID, "test@kirby.so", false},  // someone else's address
+		{guest.ID, "gyestt@kirby.so", true}, // own address (kirby)
+		{maro.ID, "gyestt@kirby.so", false}, // guest's exact address — exact wins even with catch-all
+		{maro.ID, "x@nowhere.com", false},   // external
 	} {
 		got, err := st.CanSendAs(ctx, tc.accountID, tc.addr)
 		if err != nil || got != tc.want {
 			t.Fatalf("CanSendAs(%d, %s) = %v (want %v): %v", tc.accountID, tc.addr, got, tc.want, err)
 		}
 	}
-	t.Log("✔ CanSendAs 7케이스")
+	t.Log("✔ CanSendAs 7 cases")
 
-	// 8) 목록/삭제 (maro: primary + test@kirby.so + catch-all = 3개)
+	// 8) list/delete (maro: primary + test@kirby.so + catch-all = 3)
 	addressList, err := st.ListAccountAddress(ctx, maro.ID)
 	if err != nil || len(addressList) != 3 {
-		t.Fatalf("maro 주소 3개여야: %v %d", err, len(addressList))
+		t.Fatalf("maro should have 3 addresses: %v %d", err, len(addressList))
 	}
 	if addressList[0].DomainName == "" || addressList[0].AccountEmail == "" {
-		t.Fatal("JOIN 편의 필드가 비어있음")
+		t.Fatal("JOIN convenience fields are empty")
 	}
 	domainAddressList, err := st.ListAddress(ctx, kirby.ID)
 	if err != nil || len(domainAddressList) != 3 {
-		t.Fatalf("kirby.so 주소 3개여야: %v %d", err, len(domainAddressList))
+		t.Fatalf("kirby.so should have 3 addresses: %v %d", err, len(domainAddressList))
 	}
 
-	// 마지막 일반 주소 삭제는 거부 — guest는 gyestt 지우면 primary만 남음.
-	// guest의 primary(guest@krisam.in)를 지우려면 gyestt가 있어 OK,
-	// 그 다음 gyestt(마지막)는 거부돼야 한다.
+	// Deleting the last regular address is refused — if guest deletes gyestt only primary remains.
+	// Deleting guest's primary (guest@krisam.in) is OK because gyestt exists,
+	// then deleting gyestt (the last one) must be refused.
 	var guestPrimaryID int64
 	guestAddressList, _ := st.ListAccountAddress(ctx, guest.ID)
 	for _, a := range guestAddressList {
@@ -178,18 +178,18 @@ func TestAddressModel(t *testing.T) {
 		}
 	}
 	if err := st.DeleteAddress(ctx, guestPrimaryID); err != nil {
-		t.Fatalf("guest primary 삭제 (다른 주소 있어 허용): %v", err)
+		t.Fatalf("guest primary delete (allowed, another address exists): %v", err)
 	}
 	guestAddressList, _ = st.ListAccountAddress(ctx, guest.ID)
 	if len(guestAddressList) != 1 {
-		t.Fatalf("guest 주소 1개 남아야: %d", len(guestAddressList))
+		t.Fatalf("guest should have 1 address left: %d", len(guestAddressList))
 	}
 	if err := st.DeleteAddress(ctx, guestAddressList[0].ID); err == nil {
-		t.Fatal("마지막 일반 주소 삭제가 성공하면 안 됨")
+		t.Fatal("deleting the last regular address must not succeed")
 	}
-	t.Log("✔ 목록(JOIN 필드) + 마지막 주소 삭제 방어")
+	t.Log("✔ listing (JOIN fields) + last-address deletion guard")
 
-	// catch-all은 마지막이어도 삭제 가능 (일반 주소 아님)
+	// catch-all can be deleted even if it's the last one (not a regular address)
 	var catchAllID int64
 	maroAddressList, _ := st.ListAccountAddress(ctx, maro.ID)
 	for _, a := range maroAddressList {
@@ -198,10 +198,10 @@ func TestAddressModel(t *testing.T) {
 		}
 	}
 	if err := st.DeleteAddress(ctx, catchAllID); err != nil {
-		t.Fatalf("catch-all 삭제: %v", err)
+		t.Fatalf("catch-all delete: %v", err)
 	}
 	if err := st.DeleteAddress(ctx, catchAllID); err != store.ErrNotFound {
-		t.Fatalf("이중 삭제는 NotFound여야: %v", err)
+		t.Fatalf("double delete should be NotFound: %v", err)
 	}
-	t.Log("✔ catch-all 삭제 + 이중삭제 NotFound")
+	t.Log("✔ catch-all delete + double-delete NotFound")
 }

@@ -9,12 +9,12 @@ import (
 	"github.com/krisamin/mail/internal/store/postgres"
 )
 
-// TestSystemCheck: /api/admin/system — DB/큐/포트 점검 응답 형태.
-// 포트는 테스트에서 실제 리스너가 없으므로 닫힘으로 나온다 (open=false).
+// TestSystemCheck: /api/admin/system — DB/queue/port check response shape.
+// Ports show as closed (open=false) since the tests have no real listeners.
 func TestSystemCheck(t *testing.T) {
 	dsn := os.Getenv("MAIL_TEST_DSN")
 	if dsn == "" {
-		t.Skip("MAIL_TEST_DSN 미설정 — 통합 테스트 skip")
+		t.Skip("MAIL_TEST_DSN not set — skipping integration tests")
 	}
 	st, err := postgres.New(context.Background(), dsn)
 	if err != nil {
@@ -29,7 +29,7 @@ func TestSystemCheck(t *testing.T) {
 		t.Fatalf("auth: %v", err)
 	}
 	handler := NewServer(st, auth).WithSystemPort([]SystemPort{
-		{Name: "imap", Addr: ":59999", Kind: "imap", Check: true}, // 닫힌 포트
+		{Name: "imap", Addr: ":59999", Kind: "imap", Check: true}, // closed port
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -40,29 +40,29 @@ func TestSystemCheck(t *testing.T) {
 	}
 	db, ok := body["db"].(map[string]any)
 	if !ok || db["ok"] != true {
-		t.Fatalf("db ok여야: %v", body["db"])
+		t.Fatalf("db should be ok: %v", body["db"])
 	}
 	queue, ok := body["queue"].(map[string]any)
 	if !ok || queue["ok"] != true {
-		t.Fatalf("queue ok여야: %v", body["queue"])
+		t.Fatalf("queue should be ok: %v", body["queue"])
 	}
 	portList, ok := body["listener"].([]any)
 	if !ok || len(portList) != 1 {
-		t.Fatalf("listener 1개여야: %v", body["listener"])
+		t.Fatalf("should have exactly 1 listener: %v", body["listener"])
 	}
 	p := portList[0].(map[string]any)
 	if p["name"] != "imap" || p["open"] != false {
-		t.Fatalf("닫힌 포트는 open=false여야: %v", p)
+		t.Fatalf("closed port should be open=false: %v", p)
 	}
 	if body["uptime"] == "" {
-		t.Fatal("uptime 있어야")
+		t.Fatal("uptime should be present")
 	}
-	t.Log("✔ 시스템 점검 (db/queue ok, 닫힌 포트 감지)")
+	t.Log("✔ system check (db/queue ok, closed port detected)")
 
-	// 일반 유저는 접근 불가 (admin 전용 미들웨어)
+	// regular users cannot access (admin-only middleware)
 	code, _, _ = callAs(t, srv, "user@krisam.in", "", "GET", "/api/admin/system", nil)
 	if code != 403 {
-		t.Fatalf("일반 유저는 403이어야: %d", code)
+		t.Fatalf("regular user should be 403: %d", code)
 	}
-	t.Log("✔ admin 전용")
+	t.Log("✔ admin only")
 }

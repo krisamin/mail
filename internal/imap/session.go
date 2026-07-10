@@ -13,24 +13,24 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// mailboxDelim은 메일박스 계층 구분자.
+// mailboxDelim is the mailbox hierarchy delimiter.
 const mailboxDelim rune = '/'
 
-// snapEntry는 SELECT 스냅샷의 한 항목. seqnum = 인덱스+1.
+// snapEntry is one entry in the SELECT snapshot. seqnum = index + 1.
 type snapEntry struct {
 	msgID int64
 	uid   goimap.UID
 }
 
-// Session은 imapserver.Session 구현체. 연결 하나당 하나.
+// Session implements imapserver.Session. One per connection.
 type Session struct {
 	backend  *Backend
-	remoteIP string // 브루트포스 방어 키
+	remoteIP string // brute-force protection key
 
-	// 인증 후 채워짐
+	// filled after authentication
 	user *store.Account
 
-	// SELECT 후 채워짐
+	// filled after SELECT
 	mailbox  *store.Mailbox
 	readOnly bool
 	snap     []snapEntry
@@ -38,7 +38,7 @@ type Session struct {
 
 var _ imapserver.Session = (*Session)(nil)
 
-// normMailbox는 INBOX 대소문자 무시 규칙(RFC 3501)을 적용한다.
+// normMailbox applies the INBOX case-insensitivity rule (RFC 3501).
 func normMailbox(name string) string {
 	if strings.EqualFold(name, "INBOX") {
 		return "INBOX"
@@ -46,7 +46,7 @@ func normMailbox(name string) string {
 	return name
 }
 
-// mapMailboxErr는 store 에러를 IMAP 상태 응답으로 변환한다.
+// mapMailboxErr converts store errors into IMAP status responses.
 func mapMailboxErr(err error) error {
 	if errors.Is(err, store.ErrNotFound) {
 		return &goimap.Error{
@@ -58,7 +58,7 @@ func mapMailboxErr(err error) error {
 	return err
 }
 
-// definedFlagList는 서버가 지원하는 시스템 플래그.
+// definedFlagList lists the system flags supported by the server.
 func definedFlagList() []goimap.Flag {
 	return []goimap.Flag{
 		goimap.FlagSeen, goimap.FlagAnswered, goimap.FlagFlagged,
@@ -72,9 +72,9 @@ func (s *Session) Close() error {
 
 // ── Not authenticated ───────────────────────────────────────
 
-// Login은 주소+앱 비밀번호 인증 (DD-02: 메일앱은 앱 비밀번호).
-// 브루트포스 방어: IP(/64) 키 + 계정 키 이중 추적 — 분산 IP로
-// 한 계정을 두드리는 패턴도 차단된다.
+// Login authenticates address + app password (DD-02: mail apps use app passwords).
+// Brute-force protection tracks both an IP (/64) key and an account key —
+// blocking distributed-IP attacks against a single account too.
 func (s *Session) Login(username, password string) error {
 	ipKey := "ip:" + guard.KeyForIP(s.remoteIP)
 	acctKey := "acct:" + strings.ToLower(username)
@@ -208,7 +208,7 @@ func (s *Session) List(w *imapserver.ListWriter, ref string, patterns []string, 
 	ctx, cancel := opCtx()
 	defer cancel()
 
-	// 패턴 없음 = 계층 구분자 조회 (RFC 3501 §6.3.8)
+	// no patterns = hierarchy delimiter query (RFC 3501 §6.3.8)
 	if len(patterns) == 0 {
 		return w.WriteList(&goimap.ListData{
 			Attrs: []goimap.MailboxAttr{goimap.MailboxAttrNoSelect},
@@ -300,8 +300,8 @@ func (s *Session) Append(mailbox string, r goimap.LiteralReader, options *goimap
 		return nil, err
 	}
 
-	// 크기 상한 — 클라이언트가 선언한 리터럴 크기({N} — r.Size())를 그대로
-	// 믿고 할당하면 {2GB} 선언만으로 OOM. 상한 초과는 즉시 거절.
+	// Size cap — trusting the client-declared literal size ({N} — r.Size())
+	// for allocation means a bare {2GB} declaration can OOM us. Reject over-limit immediately.
 	const appendLimit = 50 * 1024 * 1024 // 50MB
 	if r.Size() > appendLimit {
 		return nil, &goimap.Error{
@@ -320,8 +320,8 @@ func (s *Session) Append(mailbox string, r goimap.LiteralReader, options *goimap
 			break
 		}
 		if rerr != nil {
-			// EOF가 아닌 read 에러를 EOF 취급하면 잘린 메시지가
-			// 정상 메일로 저장된다 — 에러로 거절.
+			// Treating a non-EOF read error as EOF would store a truncated
+			// message as valid mail — reject with the error.
 			return nil, rerr
 		}
 	}
@@ -335,7 +335,7 @@ func (s *Session) Append(mailbox string, r goimap.LiteralReader, options *goimap
 		return nil, err
 	}
 
-	// 자기 세션에서 선택 중인 메일박스면 스냅샷에도 반영
+	// if this session has the mailbox selected, reflect it in the snapshot too
 	if s.mailbox != nil && s.mailbox.ID == mbox.ID {
 		s.snap = append(s.snap, snapEntry{msgID: msg.ID, uid: goimap.UID(msg.UID)})
 	}
@@ -346,19 +346,19 @@ func (s *Session) Append(mailbox string, r goimap.LiteralReader, options *goimap
 	}, nil
 }
 
-// Poll은 다른 세션이 만든 변경(신규 메일/expunge)을 스냅샷과 DB 비교로 반영한다.
+// Poll surfaces changes made by other sessions (new mail/expunge) by diffing the snapshot against the DB.
 func (s *Session) Poll(w *imapserver.UpdateWriter, allowExpunge bool) error {
 	return s.pollChanges(w, allowExpunge)
 }
 
-// Idle은 신규 메일/변경을 클라이언트에 알린다 (RFC 2177).
-// notifier가 있으면 LISTEN/NOTIFY push로 즉시 깨어나고, 없거나 알림이
-// 유실될 경우를 대비해 저빈도 폴백 폴링(기존 티커)을 함께 돈다.
+// Idle notifies the client of new mail/changes (RFC 2177).
+// With a notifier we wake immediately on LISTEN/NOTIFY push; a low-frequency
+// fallback poll (the original ticker) runs alongside in case notifications are lost.
 func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 	ticker := newIdleTicker()
 	defer ticker.Stop()
 
-	// 변경 push 구독 (선택된 메일박스가 있을 때만 의미 있음)
+	// subscribe to change push (only meaningful with a selected mailbox)
 	var notifyCh <-chan struct{}
 	if s.backend.notifier != nil && s.mailbox != nil {
 		ch, cancel := s.backend.notifier.Subscribe(s.mailbox.ID)
@@ -366,8 +366,8 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 		notifyCh = ch
 	}
 
-	// 일시적 DB 오류 한 번에 IDLE을 끊으면 클라이언트 재연결 폭풍이 온다
-	// — 연속 실패가 쌓일 때만 종료.
+	// Dropping IDLE on a single transient DB error causes a client reconnect
+	// storm — only bail after consecutive failures accumulate.
 	failCount := 0
 	poll := func() error {
 		if err := s.pollChanges(w, true); err != nil {
@@ -413,7 +413,7 @@ func (s *Session) pollChanges(w *imapserver.UpdateWriter, allowExpunge bool) err
 		curByUID[goimap.UID(m.UID)] = m
 	}
 
-	// 1) 사라진 메시지 → EXPUNGE (높은 seqnum부터)
+	// 1) vanished messages → EXPUNGE (highest seqnum first)
 	if allowExpunge {
 		for i := len(s.snap) - 1; i >= 0; i-- {
 			if _, ok := curByUID[s.snap[i].uid]; ok {
@@ -426,13 +426,13 @@ func (s *Session) pollChanges(w *imapserver.UpdateWriter, allowExpunge bool) err
 		}
 	}
 
-	// 2) 새 메시지 → 스냅샷 뒤에 추가 + EXISTS
+	// 2) new messages → append to snapshot + EXISTS
 	inSnap := make(map[goimap.UID]bool, len(s.snap))
 	for _, e := range s.snap {
 		inSnap[e.uid] = true
 	}
 	added := false
-	for _, m := range messageList { // ListMessage는 UID 오름차순
+	for _, m := range messageList { // ListMessage returns UID ascending order
 		uid := goimap.UID(m.UID)
 		if !inSnap[uid] {
 			s.snap = append(s.snap, snapEntry{msgID: m.ID, uid: uid})

@@ -9,17 +9,17 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// timeNow는 테스트에서 바꿔치기 가능하도록 변수로.
+// timeNow is a variable so tests can swap it out.
 var timeNow = time.Now
 
-// idleInterval은 IDLE 중 DB 폴링 주기 (Phase 1 임시 — Phase 2에서 LISTEN/NOTIFY).
+// idleInterval is the DB fallback-poll period during IDLE (push comes via LISTEN/NOTIFY).
 const idleInterval = 15 * time.Second
 
 func newIdleTicker() *time.Ticker {
 	return time.NewTicker(idleInterval)
 }
 
-// fromImapFlagList는 goimap.Flag → store 플래그 문자열.
+// fromImapFlagList converts goimap.Flag → store flag strings.
 func fromImapFlagList(flagList []goimap.Flag) []string {
 	if len(flagList) == 0 {
 		return nil
@@ -31,7 +31,7 @@ func fromImapFlagList(flagList []goimap.Flag) []string {
 	return out
 }
 
-// toImapFlagList는 store 플래그 문자열 → goimap.Flag.
+// toImapFlagList converts store flag strings → goimap.Flag.
 func toImapFlagList(flagList []string) []goimap.Flag {
 	out := make([]goimap.Flag, len(flagList))
 	for i, f := range flagList {
@@ -40,7 +40,7 @@ func toImapFlagList(flagList []string) []goimap.Flag {
 	return out
 }
 
-// hasFlag는 대소문자 무시 플래그 검사 (RFC 3501: 시스템 플래그는 case-insensitive).
+// hasFlag is a case-insensitive flag check (RFC 3501: system flags are case-insensitive).
 func hasFlag(flagList []string, want goimap.Flag) bool {
 	for _, f := range flagList {
 		if equalFlag(goimap.Flag(f), want) {
@@ -68,7 +68,7 @@ func lowerASCII(s string) string {
 	return string(b)
 }
 
-// applyStoreFlagList는 STORE 연산(set/add/del)을 기존 플래그에 적용한 결과를 돌려준다.
+// applyStoreFlagList returns the result of applying a STORE op (set/add/del) to existing flags.
 func applyStoreFlagList(existing []string, op *goimap.StoreFlags) []string {
 	switch op.Op {
 	case goimap.StoreFlagsSet:
@@ -93,7 +93,7 @@ func applyStoreFlagList(existing []string, op *goimap.StoreFlags) []string {
 	return existing
 }
 
-// requireSelected는 selected 상태 가드.
+// requireSelected guards the selected state.
 func (s *Session) requireSelected() error {
 	if s.mailbox == nil {
 		return errors.New("no mailbox selected")
@@ -101,8 +101,8 @@ func (s *Session) requireSelected() error {
 	return nil
 }
 
-// requireWritable은 EXAMINE(read-only)으로 선택된 메일박스의 상태 변경을
-// 막는다 (RFC 3501 §6.3.2 — EXAMINE은 영구 상태를 바꾸면 안 된다).
+// requireWritable blocks state mutation on a mailbox selected via EXAMINE
+// (read-only) (RFC 3501 §6.3.2 — EXAMINE must not change permanent state).
 func (s *Session) requireWritable() error {
 	if err := s.requireSelected(); err != nil {
 		return err
@@ -110,7 +110,7 @@ func (s *Session) requireWritable() error {
 	if s.readOnly {
 		return &goimap.Error{
 			Type: goimap.StatusResponseTypeNo,
-			// beta.8에 READ-ONLY 상수가 없어 직접 표기 (RFC 3501 §7.1)
+			// beta.8 has no READ-ONLY constant, spell it out (RFC 3501 §7.1)
 			Code: goimap.ResponseCode("READ-ONLY"),
 			Text: "mailbox is selected read-only",
 		}
@@ -118,8 +118,8 @@ func (s *Session) requireWritable() error {
 	return nil
 }
 
-// forEachInSet은 numSet(SeqSet 또는 UIDSet)에 매칭되는 스냅샷 항목을 순회한다.
-// f가 false를 돌려주면 중단.
+// forEachInSet iterates snapshot entries matching numSet (SeqSet or UIDSet).
+// Stops when f returns false.
 func (s *Session) forEachInSet(numSet goimap.NumSet, f func(seqNum uint32, entry snapEntry) bool) {
 	switch set := numSet.(type) {
 	case goimap.SeqSet:
@@ -144,7 +144,7 @@ func (s *Session) forEachInSet(numSet goimap.NumSet, f func(seqNum uint32, entry
 	}
 }
 
-// staticSeqSet은 "*"(=0)을 스냅샷 최대값으로 치환한다.
+// staticSeqSet replaces "*" (=0) with the snapshot maximum.
 func (s *Session) staticSeqSet(set goimap.SeqSet) goimap.SeqSet {
 	max := uint32(len(s.snap))
 	out := make(goimap.SeqSet, len(set))
@@ -155,7 +155,7 @@ func (s *Session) staticSeqSet(set goimap.SeqSet) goimap.SeqSet {
 	return out
 }
 
-// staticUIDSet은 "*"(=0)을 스냅샷 내 최대 UID로 치환한다.
+// staticUIDSet replaces "*" (=0) with the max UID in the snapshot.
 func (s *Session) staticUIDSet(set goimap.UIDSet) goimap.UIDSet {
 	var max uint32
 	if n := len(s.snap); n > 0 {
@@ -184,8 +184,8 @@ func staticRange(start, stop *uint32, max uint32) {
 	}
 }
 
-// loadMessage는 스냅샷 항목의 최신 메타를 DB에서 읽는다.
-// (스냅샷은 msgID/uid만 들고, 플래그 등 가변 데이터는 매번 조회)
+// loadMessageMap reads the latest metadata for snapshot entries from the DB.
+// (The snapshot only holds msgID/uid; mutable data like flags is fetched each time.)
 func (s *Session) loadMessageMap(msgIDMap map[int64]bool) (map[int64]*store.Message, error) {
 	ctx, cancel := opCtx()
 	defer cancel()

@@ -5,30 +5,31 @@ import (
 	"testing"
 )
 
-// DMARC 정책 집행 e2e — 가짜 DNS 없이 실 DNS로는 재현이 어려워
-// (테스트용 도메인의 DMARC 레코드 필요) 백엔드 플래그 동작만 검증한다.
-// 정책 판정 자체(auth.VerifyInbound의 DMARCEvaluated/DMARCPolicy)는
-// internal/auth 테스트가 가짜 DNS로 커버한다.
+// DMARC policy enforcement e2e — hard to reproduce with real DNS without a
+// fake DNS (would need a DMARC record on a test domain), so only the backend
+// flag behavior is verified here. Policy evaluation itself
+// (DMARCEvaluated/DMARCPolicy of auth.VerifyInbound) is covered by the
+// internal/auth tests with a fake DNS.
 
-// TestDMARCEnforcementFlag: WithDMARCEnforcement가 검증까지 켜는지.
+// TestDMARCEnforcementFlag: whether WithDMARCEnforcement also enables verification.
 func TestDMARCEnforcementFlag(t *testing.T) {
 	b := NewBackend(nil, "mx.test").WithDMARCEnforcement()
 	if !b.verifyInbound || !b.enforceDMARC {
-		t.Fatal("WithDMARCEnforcement는 verifyInbound+enforceDMARC 둘 다 켜야")
+		t.Fatal("WithDMARCEnforcement must enable both verifyInbound+enforceDMARC")
 	}
 	b2 := NewBackend(nil, "mx.test").WithInboundVerification()
 	if !b2.verifyInbound || b2.enforceDMARC {
-		t.Fatal("WithInboundVerification은 검증만 켜야")
+		t.Fatal("WithInboundVerification must enable verification only")
 	}
-	t.Log("✔ 백엔드 플래그")
+	t.Log("✔ backend flags")
 }
 
-// TestJunkFolderDelivery: quarantine 판정 시 Junk 폴더로 배달되는 경로 —
-// deliver가 임의 폴더를 자동 생성하는지 확인.
+// TestJunkFolderDelivery: the path that delivers to the Junk folder on a
+// quarantine verdict — verifies deliver auto-creates arbitrary folders.
 func TestJunkFolderDelivery(t *testing.T) {
 	env := setupServers(t)
 
-	// deliver를 직접 호출해 Junk 폴더 생성+배달 검증
+	// call deliver directly to verify Junk folder creation + delivery
 	sess := &Session{backend: &Backend{store: env.store, hostname: "mx.test"}}
 	maro, err := env.store.FindAccountByAddress(t.Context(), testAddr)
 	if err != nil {
@@ -36,20 +37,20 @@ func TestJunkFolderDelivery(t *testing.T) {
 	}
 	raw := []byte("From: spam@example.com\r\nTo: " + testAddr + "\r\nSubject: junk test\r\n\r\nspammy\r\n")
 	if err := sess.deliver(rcpt{address: testAddr, user: maro}, "Junk", raw, timeNow()); err != nil {
-		t.Fatalf("Junk 배달: %v", err)
+		t.Fatalf("Junk delivery: %v", err)
 	}
 
-	// Junk 폴더가 생겼고 메일이 들어있는지
+	// verify the Junk folder was created and contains the mail
 	junk, err := env.store.GetMailbox(t.Context(), maro.ID, "Junk")
 	if err != nil {
-		t.Fatalf("Junk 폴더 없음: %v", err)
+		t.Fatalf("Junk folder missing: %v", err)
 	}
 	messageList, err := env.store.ListMessage(t.Context(), junk.ID)
 	if err != nil || len(messageList) != 1 {
-		t.Fatalf("Junk 메일 1통이어야: %v %d", err, len(messageList))
+		t.Fatalf("Junk should have 1 mail: %v %d", err, len(messageList))
 	}
 	if !strings.Contains(messageList[0].Subject, "junk test") {
-		t.Fatalf("제목 이상: %q", messageList[0].Subject)
+		t.Fatalf("unexpected subject: %q", messageList[0].Subject)
 	}
-	t.Log("✔ Junk 폴더 자동 생성 + 배달")
+	t.Log("✔ Junk folder auto-created + delivered")
 }

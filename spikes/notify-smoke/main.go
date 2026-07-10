@@ -1,4 +1,4 @@
-// notify 라운드트립 스모크: Subscribe → AppendMessage → 채널 수신 확인
+// notify roundtrip smoke test: Subscribe → AppendMessage → confirm channel receipt
 package main
 
 import (
@@ -24,9 +24,9 @@ func main() {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go notifier.Run(runCtx)
-	time.Sleep(500 * time.Millisecond) // LISTEN 커넥션 안착 대기
+	time.Sleep(500 * time.Millisecond) // wait for the LISTEN connection to settle
 
-	// maro INBOX 확보
+	// ensure maro INBOX
 	acct, err := st.FindAccountByAddress(ctx, "maro@krisam.in")
 	if err != nil {
 		panic(err)

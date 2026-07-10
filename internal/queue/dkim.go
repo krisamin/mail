@@ -9,8 +9,9 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// NewDKIMSigner는 store에서 발신 도메인의 DKIM 키를 찾아 서명하는 SignFunc를 만든다.
-// 도메인에 키가 없으면(selector 비어있음) 원문 그대로 통과.
+// NewDKIMSigner builds a SignFunc that looks up the sender domain's DKIM
+// key in the store and signs. If the domain has no key (empty selector),
+// the raw message passes through as-is.
 func NewDKIMSigner(st store.Store) SignFunc {
 	return func(ctx context.Context, envelopeFrom string, raw []byte) ([]byte, error) {
 		at := strings.LastIndex(envelopeFrom, "@")
@@ -22,12 +23,12 @@ func NewDKIMSigner(st store.Store) SignFunc {
 		d, err := st.FindDomain(ctx, domainName)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
-				return raw, nil // 우리 도메인 아님 — 서명 불가, 통과
+				return raw, nil // not our domain — can't sign, pass through
 			}
 			return nil, err
 		}
 		if d.DKIMSelector == "" || d.DKIMPrivateKey == "" {
-			return raw, nil // 키 미설정 — 통과
+			return raw, nil // no key configured — pass through
 		}
 
 		signer, err := auth.ParsePrivateKey(d.DKIMPrivateKey)

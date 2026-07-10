@@ -10,17 +10,18 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// Thunderbird autoconfig (config-v1.1) — 클라이언트가 이메일 주소만으로
-// IMAP/SMTP 서버를 찾게 하는 XML. 인증 불필요 (설정값만 노출, 비밀 없음).
+// Thunderbird autoconfig (config-v1.1) — XML that lets a client find the
+// IMAP/SMTP servers from just an email address. No auth (config values only,
+// no secrets).
 //
-// 클라이언트 조회 순서 (Thunderbird 계열):
-//   1. https://autoconfig.<도메인>/mail/config-v1.1.xml?emailaddress=...
-//   2. http://autoconfig.<도메인>/mail/config-v1.1.xml (http→https 리다이렉트로 수렴)
-//   3. https://<도메인>/.well-known/autoconfig/mail/config-v1.1.xml
-// → autoconfig.<도메인>이 이 서버(웹 게이트웨이)로 향해야 한다.
+// Client lookup order (Thunderbird family):
+//   1. https://autoconfig.<domain>/mail/config-v1.1.xml?emailaddress=...
+//   2. http://autoconfig.<domain>/mail/config-v1.1.xml (converges via http→https redirect)
+//   3. https://<domain>/.well-known/autoconfig/mail/config-v1.1.xml
+// → autoconfig.<domain> must point at this server (the web gateway).
 //
-// 도메인 결정: emailaddress 쿼리 → Host 헤더(autoconfig. prefix 제거).
-// DB에 등록된 도메인만 응답 (미등록 = 404 — 우리가 안 받는 도메인).
+// Domain resolution: emailaddress query → Host header (autoconfig. prefix stripped).
+// Only DB-registered domains get a response (unregistered = 404 — not our domain).
 
 type autoconfigIncoming struct {
 	XMLName        xml.Name `xml:"incomingServer"`
@@ -58,14 +59,14 @@ type autoconfigRoot struct {
 	Provider autoconfigProvider
 }
 
-// handleAutoconfigXML은 Thunderbird autoconfig XML을 서빙한다.
+// handleAutoconfigXML serves the Thunderbird autoconfig XML.
 func (s *Server) handleAutoconfigXML(w http.ResponseWriter, r *http.Request) {
 	if s.hostname == "" {
 		writeError(w, http.StatusServiceUnavailable, "server hostname not configured")
 		return
 	}
 
-	// 도메인 결정 — emailaddress 쿼리 우선, 없으면 Host 헤더에서.
+	// domain resolution — emailaddress query first, else from the Host header.
 	domain := ""
 	if email := r.URL.Query().Get("emailaddress"); email != "" {
 		if i := strings.LastIndex(email, "@"); i >= 0 {
@@ -87,8 +88,8 @@ func (s *Server) handleAutoconfigXML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 등록된 활성 도메인만 — 우리가 안 받는 도메인의 설정을 주면
-	// 클라이언트가 엉뚱한 계정으로 이 서버에 붙으려 든다.
+	// registered active domains only — serving config for a domain we don't
+	// handle sends clients at this server with the wrong accounts.
 	if _, err := s.store.FindDomain(r.Context(), domain); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "domain not served here: "+domain)

@@ -10,23 +10,25 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// bounce DSN (RFC 3464) — 영구 실패한 발송을 발신자에게 알린다.
+// bounce DSN (RFC 3464) — notifies the sender of a permanently failed send.
 //
-// 발신자는 항상 우리 서버의 로컬 유저이므로 (submission만 큐에 넣는다)
-// SMTP 왕복 없이 발신자의 INBOX에 직접 Append한다.
+// The sender is always a local user of our server (only submission enqueues),
+// so the DSN is Appended directly to the sender's INBOX without an SMTP
+// round trip.
 //
-// 루프 방지 (RFC 5321 §4.5.5):
-//   - envelope from이 빈 값(<>)인 메시지(=DSN 자신)에는 DSN을 만들지 않는다.
-//   - DSN 자체의 envelope from은 개념상 <>이지만 우리는 로컬 Append라
-//     envelope 없이 저장 — Return-Path 헤더로 <>를 명시한다.
+// Loop prevention (RFC 5321 §4.5.5):
+//   - No DSN is generated for messages whose envelope from is empty (<>)
+//     (i.e. a DSN itself).
+//   - The DSN's own envelope from is conceptually <>, but we store it via a
+//     local Append with no envelope — the Return-Path header states <> explicitly.
 
-// buildDSN은 multipart/report(delivery-status) 메시지를 만든다.
+// buildDSN builds a multipart/report (delivery-status) message.
 func buildDSN(hostname string, m *store.OutboundMessage, reason string, now time.Time) []byte {
 	boundary := fmt.Sprintf("dsn-%d-%d", m.ID, now.Unix())
 	date := now.UTC().Format(time.RFC1123Z)
 
-	// 원문 헤더만 발췌 (message/rfc822-headers — 본문 전체를 되돌려보내면
-	// 대용량 메일 바운스가 스토리지를 이중으로 먹는다)
+	// excerpt only the original headers (message/rfc822-headers — returning
+	// the whole body would make bounces of large mails eat storage twice)
 	headerEnd := strings.Index(string(m.Raw), "\r\n\r\n")
 	origHeader := string(m.Raw)
 	if headerEnd >= 0 {
@@ -73,26 +75,26 @@ func buildDSN(hostname string, m *store.OutboundMessage, reason string, now time
 	return []byte(b.String())
 }
 
-// deliverDSN은 발신자(로컬 유저)의 INBOX에 DSN을 넣는다.
+// deliverDSN puts the DSN into the sender's (a local user's) INBOX.
 func (w *Worker) deliverDSN(ctx context.Context, m *store.OutboundMessage, reason string) {
-	// 루프 방지: DSN의 DSN은 만들지 않는다.
+	// loop prevention: never generate a DSN for a DSN.
 	if m.EnvelopeFrom == "" || m.EnvelopeFrom == "<>" {
 		return
 	}
 	sender, err := w.store.ResolveAddress(ctx, strings.ToLower(m.EnvelopeFrom))
 	if err != nil {
-		log.Printf("queue: DSN 발신자 해석 실패 from=%s: %v", m.EnvelopeFrom, err)
+		log.Printf("queue: DSN sender resolve failed from=%s: %v", m.EnvelopeFrom, err)
 		return
 	}
 	mbox, err := w.store.GetMailbox(ctx, sender.ID, "INBOX")
 	if err != nil {
-		log.Printf("queue: DSN INBOX 조회 실패 account=%d: %v", sender.ID, err)
+		log.Printf("queue: DSN INBOX lookup failed account=%d: %v", sender.ID, err)
 		return
 	}
 	dsn := buildDSN(w.hostname, m, reason, time.Now())
 	if _, err := w.store.AppendMessage(ctx, mbox.ID, dsn, nil, time.Now()); err != nil {
-		log.Printf("queue: DSN 배달 실패 account=%d: %v", sender.ID, err)
+		log.Printf("queue: DSN delivery failed account=%d: %v", sender.ID, err)
 		return
 	}
-	log.Printf("queue: DSN 배달 완료 to=%s (원 수신자 %s)", m.EnvelopeFrom, m.EnvelopeRcpt)
+	log.Printf("queue: DSN delivered to=%s (original recipient %s)", m.EnvelopeFrom, m.EnvelopeRcpt)
 }

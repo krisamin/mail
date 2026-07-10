@@ -9,25 +9,25 @@ import (
 	"time"
 )
 
-// 통합 테스트. dev Postgres 필요:
+// Integration test. Requires dev Postgres:
 //   MAIL_TEST_DSN=postgres://mail:maildev@localhost:55432/mail go test ./internal/store/postgres/ -v
-// DSN 미설정 시 skip.
+// Skips when DSN is not set.
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
 	dsn := os.Getenv("MAIL_TEST_DSN")
 	if dsn == "" {
-		t.Skip("MAIL_TEST_DSN 미설정 — 통합 테스트 skip")
+		t.Skip("MAIL_TEST_DSN not set — skipping integration test")
 	}
 	s, err := New(context.Background(), dsn)
 	if err != nil {
-		t.Fatalf("연결 실패: %v", err)
+		t.Fatalf("connection failed: %v", err)
 	}
 	t.Cleanup(s.Close)
 	return s
 }
 
-// seedAccount는 도메인+계정+주소+앱비밀번호+INBOX를 만든다 (0006 모델).
+// seedAccount creates domain+account+address+app password+INBOX (0006 model).
 func seedAccount(t *testing.T, s *Store, address, password string) int64 {
 	t.Helper()
 	ctx := context.Background()
@@ -40,7 +40,7 @@ func seedAccount(t *testing.T, s *Store, address, password string) int64 {
 		 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 		 RETURNING id`, domain).Scan(&domainID)
 	if err != nil {
-		t.Fatalf("도메인 시드: %v", err)
+		t.Fatalf("domain seed: %v", err)
 	}
 
 	var accountID int64
@@ -49,28 +49,28 @@ func seedAccount(t *testing.T, s *Store, address, password string) int64 {
 		 ON CONFLICT (oidc_subject) DO UPDATE SET oidc_email = EXCLUDED.oidc_email
 		 RETURNING id`, address).Scan(&accountID)
 	if err != nil {
-		t.Fatalf("계정 시드: %v", err)
+		t.Fatalf("account seed: %v", err)
 	}
 
 	if _, err := s.pool.Exec(ctx,
 		`INSERT INTO address (domain_id, local_part, account_id) VALUES ($1, $2, $3)
 		 ON CONFLICT (domain_id, local_part) DO NOTHING`, domainID, local, accountID); err != nil {
-		t.Fatalf("주소 시드: %v", err)
+		t.Fatalf("address seed: %v", err)
 	}
 
 	hash, err := HashPassword(password)
 	if err != nil {
-		t.Fatalf("해시: %v", err)
+		t.Fatalf("hash: %v", err)
 	}
 	_, err = s.pool.Exec(ctx,
 		`INSERT INTO app_password (account_id, label, hash) VALUES ($1, 'test', $2)`,
 		accountID, hash)
 	if err != nil {
-		t.Fatalf("앱비번 시드: %v", err)
+		t.Fatalf("app password seed: %v", err)
 	}
 
 	if _, err := s.CreateMailbox(ctx, accountID, "INBOX"); err != nil {
-		t.Fatalf("INBOX 생성: %v", err)
+		t.Fatalf("INBOX creation: %v", err)
 	}
 	return accountID
 }
@@ -79,100 +79,100 @@ func TestFullFlow(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	// 매 실행 깨끗하게 (테스트 격리)
+	// Start clean each run (test isolation)
 	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	addr := "maro@krisam.in"
 	pass := "super-secret-app-pw"
 	accountID := seedAccount(t, s, addr, pass)
-	t.Logf("시드 유저 id=%d", accountID)
+	t.Logf("seed user id=%d", accountID)
 
-	// 1) 인증 성공/실패
+	// 1) auth success/failure
 	if _, err := s.AuthenticateAppPassword(ctx, addr, pass); err != nil {
-		t.Fatalf("인증 실패(성공해야 함): %v", err)
+		t.Fatalf("auth failed (should succeed): %v", err)
 	}
 	if _, err := s.AuthenticateAppPassword(ctx, addr, "wrong"); err == nil {
-		t.Fatal("틀린 비번인데 인증 통과됨")
+		t.Fatal("auth passed with a wrong password")
 	}
-	t.Log("✔ 인증 검증 통과")
+	t.Log("✔ auth verification passed")
 
-	// 2) 메일박스 목록 (INBOX 있어야)
+	// 2) mailbox list (INBOX must exist)
 	boxList, err := s.ListMailbox(ctx, accountID)
 	if err != nil || len(boxList) != 1 || boxList[0].Name != "INBOX" {
-		t.Fatalf("메일박스 목록 이상: %v, %+v", err, boxList)
+		t.Fatalf("mailbox list wrong: %v, %+v", err, boxList)
 	}
 	inbox := boxList[0]
 	t.Logf("✔ INBOX uid_validity=%d uid_next=%d", inbox.UIDValidity, inbox.UIDNext)
 
-	// 3) 메시지 Append
+	// 3) message Append
 	raw := []byte(strings.Join([]string{
 		"From: Someone <someone@example.com>",
 		"To: Maro <maro@krisam.in>",
-		"Subject: 첫 메일",
+		"Subject: first mail",
 		"Date: Wed, 01 Jul 2026 12:00:00 +0900",
 		"",
-		"본문이야 시로~",
+		"This is the body, Shiro~",
 	}, "\r\n"))
 	msg, err := s.AppendMessage(ctx, inbox.ID, raw, []string{`\Seen`}, time.Now())
 	if err != nil {
-		t.Fatalf("Append 실패: %v", err)
+		t.Fatalf("Append failed: %v", err)
 	}
 	if msg.UID != 1 {
-		t.Fatalf("첫 UID는 1이어야 함, got %d", msg.UID)
+		t.Fatalf("first UID must be 1, got %d", msg.UID)
 	}
-	if msg.Subject != "첫 메일" {
-		t.Fatalf("헤더 캐시 파싱 실패: subject=%q", msg.Subject)
+	if msg.Subject != "first mail" {
+		t.Fatalf("header cache parsing failed: subject=%q", msg.Subject)
 	}
 	t.Logf("✔ Append: uid=%d subject=%q from=%q flags=%v", msg.UID, msg.Subject, msg.FromAddr, msg.Flags)
 
-	// 두 번째 메시지 → UID 2
+	// Second message → UID 2
 	msg2, err := s.AppendMessage(ctx, inbox.ID, raw, nil, time.Now())
 	if err != nil || msg2.UID != 2 {
-		t.Fatalf("두 번째 UID는 2여야 함: %v uid=%d", err, msg2.UID)
+		t.Fatalf("second UID must be 2: %v uid=%d", err, msg2.UID)
 	}
-	t.Logf("✔ UID 단조증가 확인: %d", msg2.UID)
+	t.Logf("✔ UID monotonic increase confirmed: %d", msg2.UID)
 
-	// 4) 상태 (2건, unseen 1건 — 두번째는 \Seen 없음)
+	// 4) status (2 messages, 1 unseen — second has no \Seen)
 	st, err := s.MailboxStatus(ctx, inbox.ID)
 	if err != nil {
-		t.Fatalf("상태: %v", err)
+		t.Fatalf("status: %v", err)
 	}
 	if st.MessageCount != 2 || st.UnseenCount != 1 || st.UIDNext != 3 {
-		t.Fatalf("상태 이상: messageList=%d unseen=%d uidnext=%d", st.MessageCount, st.UnseenCount, st.UIDNext)
+		t.Fatalf("status wrong: messageList=%d unseen=%d uidnext=%d", st.MessageCount, st.UnseenCount, st.UIDNext)
 	}
-	t.Logf("✔ 상태: messageList=%d unseen=%d uidnext=%d", st.MessageCount, st.UnseenCount, st.UIDNext)
+	t.Logf("✔ status: messageList=%d unseen=%d uidnext=%d", st.MessageCount, st.UnseenCount, st.UIDNext)
 
-	// 5) 본문 복원 검증
+	// 5) body restore verification
 	blob, err := s.GetMessageBlob(ctx, msg.ID)
 	if err != nil || !bytes.Equal(blob, raw) {
-		t.Fatalf("본문 불일치: err=%v", err)
+		t.Fatalf("body mismatch: err=%v", err)
 	}
-	t.Log("✔ 본문 원문 복원 일치")
+	t.Log("✔ body restored identical to original")
 
-	// 6) 플래그 교체
+	// 6) flag replacement
 	if err := s.SetFlag(ctx, msg2.ID, []string{`\Seen`, `\Flagged`}); err != nil {
 		t.Fatalf("SetFlag: %v", err)
 	}
 	messageList, _ := s.ListMessage(ctx, inbox.ID)
 	for _, m := range messageList {
 		if m.ID == msg2.ID && len(m.Flags) != 2 {
-			t.Fatalf("플래그 교체 실패: %v", m.Flags)
+			t.Fatalf("flag replacement failed: %v", m.Flags)
 		}
 	}
-	t.Log("✔ 플래그 교체 확인")
+	t.Log("✔ flag replacement confirmed")
 
-	// 7) Expunge (msg에 \Deleted 달고 지우기)
+	// 7) Expunge (mark msg \Deleted and remove)
 	_ = s.SetFlag(ctx, msg.ID, []string{`\Deleted`})
 	expunged, err := s.ExpungeDeleted(ctx, inbox.ID, nil)
 	if err != nil || len(expunged) != 1 || expunged[0] != 1 {
-		t.Fatalf("Expunge 이상: %v %v", err, expunged)
+		t.Fatalf("Expunge wrong: %v %v", err, expunged)
 	}
-	t.Logf("✔ Expunge: uid %v 삭제됨", expunged)
+	t.Logf("✔ Expunge: uid %v deleted", expunged)
 
-	// 최종 1건 남음
+	// 1 message remaining at the end
 	final, _ := s.MailboxStatus(ctx, inbox.ID)
 	if final.MessageCount != 1 {
-		t.Fatalf("최종 메시지 수 이상: %d", final.MessageCount)
+		t.Fatalf("final message count wrong: %d", final.MessageCount)
 	}
-	t.Log("✔ 전체 흐름 통과")
+	t.Log("✔ full flow passed")
 }

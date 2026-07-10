@@ -6,8 +6,8 @@ import (
 	"github.com/emersion/go-message/mail"
 )
 
-// parseHeaderCache는 raw 메일에서 Subject/From을 뽑는다 (헤더 캐시용).
-// best-effort — 파싱 실패 시 빈 문자열 반환.
+// parseHeaderCache extracts Subject/From from the raw mail (for the header cache).
+// best-effort — returns empty strings on parse failure.
 func parseHeaderCache(raw []byte) (subject, fromAddr string) {
 	mr, err := mail.CreateReader(bytes.NewReader(raw))
 	if err != nil {

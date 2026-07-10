@@ -6,13 +6,13 @@ import (
 	"github.com/krisamin/mail/internal/store"
 )
 
-// TestBackfillDomainAddress: 도메인 없이 로그인한(bare) 계정이
-// 도메인 추가 시점에 소급으로 주소+INBOX를 받는지.
+// TestBackfillDomainAddress: verifies that a (bare) account that logged in
+// without a domain retroactively receives address+INBOX when the domain is added.
 func TestBackfillDomainAddress(t *testing.T) {
 	st := addressTestStore(t)
 	ctx := t.Context()
 
-	// 1) 도메인 미등록 상태에서 두 유저 로그인 → bare 계정
+	// 1) two users log in while domain is unregistered → bare accounts
 	alice, err := st.ProvisionAccount(ctx, "sub-alice", "alice@late.example")
 	if err != nil {
 		t.Fatalf("alice: %v", err)
@@ -21,49 +21,49 @@ func TestBackfillDomainAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bob: %v", err)
 	}
-	// 다른 도메인 유저 — backfill 대상 아님
+	// user on another domain — not a backfill target
 	other, err := st.ProvisionAccount(ctx, "sub-other", "other@elsewhere.example")
 	if err != nil {
 		t.Fatalf("other: %v", err)
 	}
 
-	// 2) 도메인 추가 + backfill
+	// 2) add domain + backfill
 	dom, err := st.CreateDomain(ctx, "late.example")
 	if err != nil {
-		t.Fatalf("도메인: %v", err)
+		t.Fatalf("domain: %v", err)
 	}
 	created, err := st.BackfillDomainAddress(ctx, dom.ID)
 	if err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
 	if created != 2 {
-		t.Fatalf("backfill 2명이어야: %d", created)
+		t.Fatalf("backfill should cover 2 users: %d", created)
 	}
 
-	// 3) alice/bob 주소+INBOX 생김, other는 그대로
+	// 3) alice/bob get address+INBOX, other stays unchanged
 	for _, u := range []*store.Account{alice, bob} {
 		addressList, err := st.ListAccountAddress(ctx, u.ID)
 		if err != nil || len(addressList) != 1 {
-			t.Fatalf("%s 주소 1개여야: %v %+v", u.OIDCEmail, err, addressList)
+			t.Fatalf("%s should have 1 address: %v %+v", u.OIDCEmail, err, addressList)
 		}
 		boxList, err := st.ListMailbox(ctx, u.ID)
 		if err != nil || len(boxList) != 1 || boxList[0].Name != "INBOX" {
-			t.Fatalf("%s INBOX 있어야: %v %+v", u.OIDCEmail, err, boxList)
+			t.Fatalf("%s should have INBOX: %v %+v", u.OIDCEmail, err, boxList)
 		}
 	}
 	if addressList, _ := st.ListAccountAddress(ctx, other.ID); len(addressList) != 0 {
-		t.Fatalf("other는 주소가 없어야: %+v", addressList)
+		t.Fatalf("other must have no addresses: %+v", addressList)
 	}
 
-	// 4) 멱등 — 재실행 시 0건
+	// 4) idempotency — rerun yields 0
 	again, err := st.BackfillDomainAddress(ctx, dom.ID)
 	if err != nil || again != 0 {
-		t.Fatalf("재실행은 0건이어야: %v %d", err, again)
+		t.Fatalf("rerun must yield 0: %v %d", err, again)
 	}
 
-	// 5) 수신 경로 확인 — backfill된 주소로 라우팅되는지
+	// 5) delivery path check — routing via the backfilled address
 	if u, err := st.FindAccountByAddress(ctx, "alice@late.example"); err != nil || u.ID != alice.ID {
-		t.Fatalf("backfill 주소 라우팅: %v", err)
+		t.Fatalf("backfilled address routing: %v", err)
 	}
-	t.Log("✔ 도메인 추가 소급 프로비저닝 (2명 생성, 멱등, 라우팅)")
+	t.Log("✔ retroactive provisioning on domain add (2 created, idempotent, routing)")
 }
