@@ -71,11 +71,16 @@ func main() {
 		log.Fatalf("마이그레이션 실패: %v", err)
 	}
 
-	errCh := make(chan error, 4)
+	errCh := make(chan error, 5) // sender: IMAP/SMTP/submission/SMTPS/API
+
+	// 메일박스 변경 push 허브 (LISTEN/NOTIFY) — IDLE이 폴링 대신 즉시 깨어남
+	notifyCtx, notifyCancel := context.WithCancel(context.Background())
+	notifier := postgres.NewNotifier(st)
+	go notifier.Run(notifyCtx)
 
 	// IMAP 서버 — TLS 설정 시 implicit TLS, 미설정 시 평문(프록시/dev 전제)
 	imapOpts := &imapserver.Options{
-		NewSession: imapbackend.NewBackend(st).NewSession,
+		NewSession: imapbackend.NewBackend(st).WithNotifier(notifier).NewSession,
 		TLSConfig:  tlsConfig,
 	}
 	if tlsConfig == nil {
@@ -155,7 +160,8 @@ func main() {
 	// 재기동 불필요). relay 미설정 도메인의 발송은 일시 오류로 재시도된다.
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	worker := queue.NewWorker(st, queue.NewResolvingSender(st), queue.Config{}).
-		WithSigner(queue.NewDKIMSigner(st))
+		WithSigner(queue.NewDKIMSigner(st)).
+		WithHostname(hostname)
 	workerDone := make(chan struct{})
 	go func() {
 		worker.Run(workerCtx)
@@ -231,6 +237,7 @@ func main() {
 	defer cancel()
 
 	workerCancel() // 큐 워커: 현재 배치 마치고 정지
+	notifyCancel() // LISTEN 루프 정지
 	_ = apiSrv.Shutdown(shutdownCtx)
 	_ = smtpSrv.Shutdown(shutdownCtx)
 	_ = subSrv.Shutdown(shutdownCtx)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -68,6 +69,13 @@ func (s *Store) AppendMessage(ctx context.Context, mailboxID int64, raw []byte, 
 		}
 	}
 	m.Flags = flagList
+
+	// 6) 변경 알림 — 커밋 시점에 발행돼 IDLE 세션이 즉시 깨어난다
+	if _, err := tx.Exec(ctx,
+		`SELECT pg_notify('mailbox_change', $1)`,
+		strconv.FormatInt(mailboxID, 10)); err != nil {
+		return nil, fmt.Errorf("변경 알림: %w", err)
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("커밋: %w", err)
@@ -195,7 +203,19 @@ func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID int64, uidSet []ui
 		}
 		out = append(out, uint32(uid))
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 삭제가 실제로 있었을 때만 변경 알림 (IDLE 세션 EXPUNGE 반영)
+	if len(out) > 0 {
+		if _, err := s.pool.Exec(ctx,
+			`SELECT pg_notify('mailbox_change', $1)`,
+			strconv.FormatInt(mailboxID, 10)); err != nil {
+			// 알림 실패는 치명적이지 않다 — 폴백 폴링이 흡수
+			_ = err
+		}
+	}
+	return out, nil
 }
 
 // CopyMessage는 메시지를 다른 메일박스로 복사한다 (blob은 공유, 메타 복제).

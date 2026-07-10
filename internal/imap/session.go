@@ -345,17 +345,46 @@ func (s *Session) Poll(w *imapserver.UpdateWriter, allowExpunge bool) error {
 	return s.pollChanges(w, allowExpunge)
 }
 
-// Idle은 주기적으로 pollChanges를 돌려 신규 메일을 알린다 (RFC 2177).
-// Phase 2+에서 LISTEN/NOTIFY 기반 push로 교체 예정.
+// Idle은 신규 메일/변경을 클라이언트에 알린다 (RFC 2177).
+// notifier가 있으면 LISTEN/NOTIFY push로 즉시 깨어나고, 없거나 알림이
+// 유실될 경우를 대비해 저빈도 폴백 폴링(기존 티커)을 함께 돈다.
 func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 	ticker := newIdleTicker()
 	defer ticker.Stop()
+
+	// 변경 push 구독 (선택된 메일박스가 있을 때만 의미 있음)
+	var notifyCh <-chan struct{}
+	if s.backend.notifier != nil && s.mailbox != nil {
+		ch, cancel := s.backend.notifier.Subscribe(s.mailbox.ID)
+		defer cancel()
+		notifyCh = ch
+	}
+
+	// 일시적 DB 오류 한 번에 IDLE을 끊으면 클라이언트 재연결 폭풍이 온다
+	// — 연속 실패가 쌓일 때만 종료.
+	failCount := 0
+	poll := func() error {
+		if err := s.pollChanges(w, true); err != nil {
+			failCount++
+			if failCount >= 3 {
+				return err
+			}
+			return nil
+		}
+		failCount = 0
+		return nil
+	}
+
 	for {
 		select {
 		case <-stop:
 			return nil
+		case <-notifyCh:
+			if err := poll(); err != nil {
+				return err
+			}
 		case <-ticker.C:
-			if err := s.pollChanges(w, true); err != nil {
+			if err := poll(); err != nil {
 				return err
 			}
 		}

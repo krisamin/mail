@@ -28,11 +28,24 @@ const opTimeout = 30 * time.Second
 type Backend struct {
 	store   store.Store
 	limiter *guard.Limiter // 인증 브루트포스 방어 (IP 단위)
+	// notifier는 메일박스 변경 push 허브 (nil이면 IDLE이 폴링만 사용).
+	notifier MailboxNotifier
+}
+
+// MailboxNotifier는 메일박스 변경 구독 인터페이스 (postgres.Notifier가 구현).
+type MailboxNotifier interface {
+	Subscribe(mailboxID int64) (<-chan struct{}, func())
 }
 
 // NewBackend는 store 위에 IMAP 백엔드를 만든다.
 func NewBackend(st store.Store) *Backend {
 	return &Backend{store: st, limiter: guard.NewLimiter()}
+}
+
+// WithNotifier는 LISTEN/NOTIFY 허브를 단다 — IDLE이 폴링 대신 push로 깨어난다.
+func (b *Backend) WithNotifier(n MailboxNotifier) *Backend {
+	b.notifier = n
+	return b
 }
 
 // NewSession은 imapserver.Options.NewSession에 꽂는 콜백.

@@ -70,6 +70,8 @@ type Worker struct {
 	cfg    Config
 	// signer는 발송 전 DKIM 서명 훅 (nil이면 서명 없이 발송).
 	signer SignFunc
+	// hostname은 DSN의 Reporting-MTA/mailer-daemon 주소용.
+	hostname string
 }
 
 // SignFunc는 발송 직전 메시지를 서명한다. 실패하면 원문 그대로 발송
@@ -84,6 +86,12 @@ func NewWorker(st store.Store, sender Sender, cfg Config) *Worker {
 // WithSigner는 DKIM 서명 훅을 단다.
 func (w *Worker) WithSigner(f SignFunc) *Worker {
 	w.signer = f
+	return w
+}
+
+// WithHostname은 DSN 생성에 쓸 호스트명을 단다 (미설정이면 DSN 비활성).
+func (w *Worker) WithHostname(hostname string) *Worker {
+	w.hostname = hostname
 	return w
 }
 
@@ -156,7 +164,10 @@ func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
 		}
 		log.Printf("queue: 영구 실패 id=%d to=%s: %v (attempt %d/%d)",
 			m.ID, m.EnvelopeRcpt, err, m.AttemptCount+1, w.cfg.MaxAttemptCount)
-		// TODO(Phase 2-3 후속): 발신자에게 bounce(DSN) 메일 생성
+		// 발신자에게 bounce DSN (RFC 3464) — 발신자는 로컬 유저라 INBOX 직행
+		if w.hostname != "" {
+			w.deliverDSN(ctx, m, err.Error())
+		}
 		return
 	}
 
