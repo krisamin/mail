@@ -89,9 +89,10 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 		ip := remoteIP(s.remoteAddr)
 		ipKey := ""
 		if ip != nil {
-			ipKey = ip.String()
+			ipKey = "ip:" + guard.KeyForIP(ip.String())
 		}
-		if !s.backend.limiter.Allow(ipKey) {
+		acctKey := "acct:" + strings.ToLower(username)
+		if !s.backend.limiter.Allow(ipKey) || !s.backend.limiter.Allow(acctKey) {
 			return &gosmtp.SMTPError{
 				Code:         421,
 				EnhancedCode: gosmtp.EnhancedCode{4, 7, 0},
@@ -106,6 +107,7 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 		if err != nil {
 			if errors.Is(err, store.ErrAuthFailed) || errors.Is(err, store.ErrNotFound) {
 				s.backend.limiter.Fail(ipKey)
+				s.backend.limiter.Fail(acctKey)
 				return &gosmtp.SMTPError{
 					Code:         535,
 					EnhancedCode: gosmtp.EnhancedCode{5, 7, 8},
@@ -115,6 +117,7 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 			return err
 		}
 		s.backend.limiter.Success(ipKey)
+		s.backend.limiter.Success(acctKey)
 		s.user = u
 		s.accountAddr = strings.ToLower(username)
 		return nil

@@ -82,7 +82,6 @@ export const ko = {
   "domain.title": "도메인",
   "domain.description": "메일을 받고 보낼 도메인을 관리해요. 주소·계정 연결은 계정 페이지에서 해요.",
   "domain.dkimIssued": "DKIM 키가 생성됐어요 — 아래 DNS TXT 레코드를 등록해 주세요:",
-  "domain.dnsVerifyPrefix": "DNS 검증 —",
   "domain.expectedValue": "등록할 값",
   "domain.none": "도메인이 없어요.",
   "domain.dnsVerify": "DNS 검증",

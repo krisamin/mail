@@ -9,6 +9,7 @@ import (
 	goimap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 
+	"github.com/krisamin/mail/internal/guard"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -72,9 +73,12 @@ func (s *Session) Close() error {
 // ── Not authenticated ───────────────────────────────────────
 
 // Login은 주소+앱 비밀번호 인증 (DD-02: 메일앱은 앱 비밀번호).
-// IP 단위 브루트포스 방어: 반복 실패 시 일정 시간 차단.
+// 브루트포스 방어: IP(/64) 키 + 계정 키 이중 추적 — 분산 IP로
+// 한 계정을 두드리는 패턴도 차단된다.
 func (s *Session) Login(username, password string) error {
-	if !s.backend.limiter.Allow(s.remoteIP) {
+	ipKey := "ip:" + guard.KeyForIP(s.remoteIP)
+	acctKey := "acct:" + strings.ToLower(username)
+	if !s.backend.limiter.Allow(ipKey) || !s.backend.limiter.Allow(acctKey) {
 		return &goimap.Error{
 			Type: goimap.StatusResponseTypeNo,
 			Text: "too many failed attempts, try again later",
@@ -87,12 +91,14 @@ func (s *Session) Login(username, password string) error {
 	u, err := s.backend.store.AuthenticateAppPassword(ctx, username, password)
 	if err != nil {
 		if errors.Is(err, store.ErrAuthFailed) || errors.Is(err, store.ErrNotFound) {
-			s.backend.limiter.Fail(s.remoteIP)
+			s.backend.limiter.Fail(ipKey)
+			s.backend.limiter.Fail(acctKey)
 			return imapserver.ErrAuthFailed
 		}
 		return err
 	}
-	s.backend.limiter.Success(s.remoteIP)
+	s.backend.limiter.Success(ipKey)
+	s.backend.limiter.Success(acctKey)
 	s.user = u
 	return nil
 }

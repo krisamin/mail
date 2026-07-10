@@ -79,7 +79,6 @@ export const ja: Record<keyof typeof ko, string> = {
   "domain.description":
     "メールを送受信するドメインを管理します。アドレスとアカウントの紐づけはアカウントページで行います。",
   "domain.dkimIssued": "DKIM キーを作成しました — 以下の DNS TXT レコードを登録してください:",
-  "domain.dnsVerifyPrefix": "DNS 検証 —",
   "domain.expectedValue": "登録する値",
   "domain.none": "ドメインはまだありません。",
   "domain.dnsVerify": "DNS 検証",

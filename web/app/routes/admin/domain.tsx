@@ -121,6 +121,47 @@ const dnsBadge = (status: string): { tone: "ok" | "warn" | "bad" | "muted"; mark
   }
 };
 
+// DNS check results, rendered inline inside the owning domain row.
+function DnsResultPanel({ dns }: { dns: DnsVerify }) {
+  const t = useT();
+  return (
+    <ul className="mt-1 flex flex-col gap-1.5 rounded-md bg-bg-0/50 p-2.5">
+      {dnsCheckList(dns).map(([label, check]) => {
+        const badge = dnsBadge(check.status);
+        return (
+          <li key={label} className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-2">
+              <Badge tone={badge.tone} className="font-medium">
+                {badge.mark} {label}
+              </Badge>
+              {check.found && (
+                <span
+                  className="max-w-lg truncate font-mono text-[10px] text-text-2"
+                  title={check.found}
+                >
+                  {check.found}
+                </span>
+              )}
+            </div>
+            {check.note && <p className="pl-1 text-[11px] text-text-2">{check.note}</p>}
+            {check.expected && check.status !== "ok" && (
+              <div className="flex items-start gap-1.5">
+                <p
+                  className="flex-1 break-all rounded bg-bg-0 p-1.5 pl-1 font-mono text-[10px] text-text-1"
+                  title={t("domain.expectedValue")}
+                >
+                  {check.expected}
+                </p>
+                <CopyButton value={check.expected} />
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export default function DomainList({ loaderData, actionData }: Route.ComponentProps) {
   const { domainList } = loaderData;
   const t = useT();
@@ -151,48 +192,6 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
             {actionData.dkim.dnsTxt}
           </p>
         </Banner>
-      )}
-
-      {actionData?.ok && "dns" in actionData && actionData.dns && (
-        <Card className="p-4">
-          <p className="mb-2 text-sm font-medium">
-            {t("domain.dnsVerifyPrefix")} <span className="font-mono">{actionData.dns.domain}</span>
-          </p>
-          <ul className="flex flex-col gap-1.5">
-            {dnsCheckList(actionData.dns).map(([label, check]) => {
-              const badge = dnsBadge(check.status);
-              return (
-                <li key={label} className="flex flex-col gap-0.5">
-                  <div className="flex items-center gap-2">
-                    <Badge tone={badge.tone} className="font-medium">
-                      {badge.mark} {label}
-                    </Badge>
-                    {check.found && (
-                      <span
-                        className="max-w-lg truncate font-mono text-[10px] text-text-2"
-                        title={check.found}
-                      >
-                        {check.found}
-                      </span>
-                    )}
-                  </div>
-                  {check.note && <p className="pl-1 text-[11px] text-text-2">{check.note}</p>}
-                  {check.expected && check.status !== "ok" && (
-                    <div className="flex items-start gap-1.5">
-                      <p
-                        className="flex-1 break-all rounded bg-bg-0 p-1.5 pl-1 font-mono text-[10px] text-text-1"
-                        title={t("domain.expectedValue")}
-                      >
-                        {check.expected}
-                      </p>
-                      <CopyButton value={check.expected} />
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </Card>
       )}
 
       <Form method="post" ref={createFormRef} className="flex gap-2">
@@ -291,6 +290,11 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                     </Form>
                   )}
                 </div>
+
+                {actionData?.ok &&
+                  "dns" in actionData &&
+                  actionData.dns &&
+                  actionData.dns.domain === d.name && <DnsResultPanel dns={actionData.dns} />}
               </li>
             ))}
           </ul>

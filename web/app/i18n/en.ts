@@ -78,7 +78,6 @@ export const en: Record<keyof typeof ko, string> = {
   "domain.description":
     "Domains this server receives and sends mail for. Address ↔ account wiring lives on the accounts page.",
   "domain.dkimIssued": "DKIM key created — register this DNS TXT record:",
-  "domain.dnsVerifyPrefix": "DNS check —",
   "domain.expectedValue": "Value to register",
   "domain.none": "No domains yet.",
   "domain.dnsVerify": "Verify DNS",
