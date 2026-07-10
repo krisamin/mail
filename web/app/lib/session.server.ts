@@ -1,10 +1,16 @@
-import { createCookieSessionStorage, redirect } from "react-router";
+import { createMemorySessionStorage, redirect } from "react-router";
 
-// Session cookie — holds only the (short-lived) id_token and a user summary.
+// Session storage — server-side (in-memory), the cookie carries only a
+// session ID. The id_token alone is ~4KB which overflows the 4096-byte
+// browser cookie limit once state/returnTo are added on the /login hop
+// ("Cookie length will exceed browser maximum"), so token material must
+// never live in the cookie itself.
+// Trade-off: sessions reset on pod restart — fine here (single replica,
+// and the IdP SSO session silently re-issues on the /login round-trip).
 // Dev default secret; production must set SESSION_SECRET.
 const secret = process.env.SESSION_SECRET ?? "mail-dev-session-secret";
 
-export const sessionStorage = createCookieSessionStorage({
+export const sessionStorage = createMemorySessionStorage({
   cookie: {
     name: "__mail_session",
     httpOnly: true,
@@ -27,7 +33,7 @@ export type SessionUser = {
 export const getSession = (request: Request) =>
   sessionStorage.getSession(request.headers.get("Cookie"));
 
-// Token liveness check — the cookie lives 8h but the id_token expires much
+// Token liveness check — the session lives 8h but the id_token expires much
 // sooner (per IdP settings). An expired token would 401 at the Go API's JWKS
 // check and kill the loader, so treat it as signed-out here instead. The
 // guard bounces to /login, and as long as the IdP SSO session is alive the
