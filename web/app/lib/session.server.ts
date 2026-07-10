@@ -12,7 +12,12 @@ const secret = process.env.SESSION_SECRET ?? "mail-dev-session-secret";
 
 export const sessionStorage = createMemorySessionStorage({
   cookie: {
-    name: "__mail_session",
+    // Renamed from "__mail_session" when sessions moved server-side: the old
+    // cookie held the full session data under the same secret, so it still
+    // parses — but as an object where a session ID string is expected, which
+    // silently breaks the store lookup (state mismatch on OIDC callback).
+    // A new name makes stale cookies invisible; /login clears the legacy one.
+    name: "__mail_sid",
     httpOnly: true,
     path: "/",
     sameSite: "lax",

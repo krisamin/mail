@@ -14,7 +14,11 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   // Where to land after sign-in (default /).
   session.set("returnTo", url.searchParams.get("returnTo") ?? "/");
 
-  return redirect(await buildAuthorizeUrl(redirectUri, state), {
-    headers: { "Set-Cookie": await sessionStorage.commitSession(session) },
-  });
+  const headers = new Headers();
+  headers.append("Set-Cookie", await sessionStorage.commitSession(session));
+  // Drop the legacy cookie-storage session (pre-server-side-session era) so
+  // stale full-data cookies stop shadowing the new session ID cookie.
+  headers.append("Set-Cookie", "__mail_session=; Path=/; HttpOnly; Max-Age=0");
+
+  return redirect(await buildAuthorizeUrl(redirectUri, state), { headers });
 };
