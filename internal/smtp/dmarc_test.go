@@ -44,7 +44,7 @@ func TestJunkFolderDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Junk 폴더 없음: %v", err)
 	}
-	messageList, err := env.store.ListMessages(t.Context(), junk.ID)
+	messageList, err := env.store.ListMessage(t.Context(), junk.ID)
 	if err != nil || len(messageList) != 1 {
 		t.Fatalf("Junk 메일 1통이어야: %v %d", err, len(messageList))
 	}

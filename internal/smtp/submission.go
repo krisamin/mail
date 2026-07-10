@@ -58,11 +58,11 @@ type SubmissionSession struct {
 	remoteAddr string
 	heloName   string
 
-	user     *store.Account // 인증 성공 시 채워짐
-	accountAddr string      // 인증에 쓴 주소 (envelope from 검증용)
+	user        *store.Account // 인증 성공 시 채워짐
+	accountAddr string         // 인증에 쓴 주소 (envelope from 검증용)
 
 	from     string
-	rcptList    []rcpt   // 로컬 배달 대상
+	rcptList []rcpt   // 로컬 배달 대상
 	external []string // 외부 도메인 → 발송 큐 대상
 }
 

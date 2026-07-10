@@ -20,7 +20,7 @@ export type SessionUser = {
   sub: string;
   name: string;
   email: string;
-  groups: string[];
+  groupList: string[];
   idToken: string;
 };
 
@@ -36,4 +36,4 @@ export const getUser = async (request: Request): Promise<SessionUser | null> => 
 export const ADMIN_GROUP = process.env.MAIL_ADMIN_GROUP ?? "mail-admin";
 
 export const isAdmin = (user: SessionUser | null): boolean =>
-  !!user && user.groups.some((g) => g === ADMIN_GROUP || g === `/${ADMIN_GROUP}`);
+  !!user && user.groupList.some((g) => g === ADMIN_GROUP || g === `/${ADMIN_GROUP}`);

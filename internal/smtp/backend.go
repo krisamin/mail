@@ -83,7 +83,7 @@ type Session struct {
 	remoteAddr string
 	heloName   string
 
-	from  string
+	from     string
 	rcptList []rcpt
 }
 

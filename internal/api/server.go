@@ -64,7 +64,7 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("POST /api/admin/account/{id}/app-password", s.handleCreateAppPassword)
 	admin.HandleFunc("DELETE /api/admin/app-password/{id}", s.handleRevokeAppPassword)
 	admin.HandleFunc("GET /api/admin/queue", s.handleListQueue)
-	admin.HandleFunc("GET /api/admin/queue/stats", s.handleQueueStats)
+	admin.HandleFunc("GET /api/admin/queue/stat", s.handleQueueStat)
 	admin.HandleFunc("POST /api/admin/queue/{id}/retry", s.handleRetryQueue)
 	admin.HandleFunc("GET /api/admin/relay", s.handleListRelay)
 	admin.HandleFunc("POST /api/admin/relay", s.handleCreateRelay)
@@ -73,6 +73,7 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("PUT /api/admin/domain/{id}/relay", s.handleSetDomainRelay)
 	admin.HandleFunc("GET /api/admin/domain/{id}/dns", s.handleVerifyDomainDNS)
 	admin.HandleFunc("GET /api/admin/system", s.handleSystemCheck)
+	admin.HandleFunc("GET /api/admin/system/external", s.handleSystemExternal)
 
 	s.mux.Handle("/api/admin/", auth.RequireAdmin(admin))
 
@@ -411,12 +412,12 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 // ── 앱 비밀번호 ─────────────────────────────────────────────
 
 type appPasswordDTO struct {
-	ID        int64   `json:"id"`
-	Label     string  `json:"label"`
-	ScopeList    []string `json:"scopeList"`
-	LastUsed  *string `json:"lastUsed"`
-	CreatedAt string  `json:"createdAt"`
-	Revoked   bool    `json:"revoked"`
+	ID        int64    `json:"id"`
+	Label     string   `json:"label"`
+	ScopeList []string `json:"scopeList"`
+	LastUsed  *string  `json:"lastUsed"`
+	CreatedAt string   `json:"createdAt"`
+	Revoked   bool     `json:"revoked"`
 }
 
 func toAppPasswordDTO(p *store.AppPassword) appPasswordDTO {
@@ -526,7 +527,7 @@ type queueDTO struct {
 	From          string `json:"from"`
 	Rcpt          string `json:"rcpt"`
 	Status        string `json:"status"`
-	AttemptCount      int    `json:"attemptCount"`
+	AttemptCount  int    `json:"attemptCount"`
 	NextAttemptAt string `json:"nextAttemptAt"`
 	LastError     string `json:"lastError"`
 	CreatedAt     string `json:"createdAt"`
@@ -552,13 +553,13 @@ func (s *Server) handleListQueue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *Server) handleQueueStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.store.OutboundStats(r.Context())
+func (s *Server) handleQueueStat(w http.ResponseWriter, r *http.Request) {
+	statMap, err := s.store.OutboundStat(r.Context())
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, stats)
+	writeJSON(w, http.StatusOK, statMap)
 }
 
 func (s *Server) handleRetryQueue(w http.ResponseWriter, r *http.Request) {

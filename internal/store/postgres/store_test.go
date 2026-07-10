@@ -137,10 +137,10 @@ func TestFullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("상태: %v", err)
 	}
-	if st.NumMessages != 2 || st.NumUnseen != 1 || st.UIDNext != 3 {
-		t.Fatalf("상태 이상: messageList=%d unseen=%d uidnext=%d", st.NumMessages, st.NumUnseen, st.UIDNext)
+	if st.MessageCount != 2 || st.UnseenCount != 1 || st.UIDNext != 3 {
+		t.Fatalf("상태 이상: messageList=%d unseen=%d uidnext=%d", st.MessageCount, st.UnseenCount, st.UIDNext)
 	}
-	t.Logf("✔ 상태: messageList=%d unseen=%d uidnext=%d", st.NumMessages, st.NumUnseen, st.UIDNext)
+	t.Logf("✔ 상태: messageList=%d unseen=%d uidnext=%d", st.MessageCount, st.UnseenCount, st.UIDNext)
 
 	// 5) 본문 복원 검증
 	blob, err := s.GetMessageBlob(ctx, msg.ID)
@@ -150,10 +150,10 @@ func TestFullFlow(t *testing.T) {
 	t.Log("✔ 본문 원문 복원 일치")
 
 	// 6) 플래그 교체
-	if err := s.SetFlags(ctx, msg2.ID, []string{`\Seen`, `\Flagged`}); err != nil {
-		t.Fatalf("SetFlags: %v", err)
+	if err := s.SetFlag(ctx, msg2.ID, []string{`\Seen`, `\Flagged`}); err != nil {
+		t.Fatalf("SetFlag: %v", err)
 	}
-	messageList, _ := s.ListMessages(ctx, inbox.ID)
+	messageList, _ := s.ListMessage(ctx, inbox.ID)
 	for _, m := range messageList {
 		if m.ID == msg2.ID && len(m.Flags) != 2 {
 			t.Fatalf("플래그 교체 실패: %v", m.Flags)
@@ -162,7 +162,7 @@ func TestFullFlow(t *testing.T) {
 	t.Log("✔ 플래그 교체 확인")
 
 	// 7) Expunge (msg에 \Deleted 달고 지우기)
-	_ = s.SetFlags(ctx, msg.ID, []string{`\Deleted`})
+	_ = s.SetFlag(ctx, msg.ID, []string{`\Deleted`})
 	expunged, err := s.ExpungeDeleted(ctx, inbox.ID, nil)
 	if err != nil || len(expunged) != 1 || expunged[0] != 1 {
 		t.Fatalf("Expunge 이상: %v %v", err, expunged)
@@ -171,8 +171,8 @@ func TestFullFlow(t *testing.T) {
 
 	// 최종 1건 남음
 	final, _ := s.MailboxStatus(ctx, inbox.ID)
-	if final.NumMessages != 1 {
-		t.Fatalf("최종 메시지 수 이상: %d", final.NumMessages)
+	if final.MessageCount != 1 {
+		t.Fatalf("최종 메시지 수 이상: %d", final.MessageCount)
 	}
 	t.Log("✔ 전체 흐름 통과")
 }

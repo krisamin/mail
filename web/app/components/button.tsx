@@ -2,7 +2,7 @@ import type { ButtonHTMLAttributes } from "react";
 import { Link, type LinkProps } from "react-router";
 
 // Button variants — one source of truth for every clickable style.
-const styles = {
+const styleMap = {
   /** Solid accent CTA (form submit, primary action) */
   primary:
     "rounded-md bg-accent px-4 py-2 text-center text-sm font-medium text-bg-0 hover:bg-accent-hover disabled:opacity-50",
@@ -17,14 +17,14 @@ const styles = {
   linkDanger: "text-xs text-bad hover:underline disabled:opacity-50",
 } as const;
 
-export type ButtonVariant = keyof typeof styles;
+export type ButtonVariant = keyof typeof styleMap;
 
 export const Button = ({
   variant = "primary",
   className = "",
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) => (
-  <button type="submit" {...props} className={`${styles[variant]} ${className}`} />
+  <button type="submit" {...props} className={`${styleMap[variant]} ${className}`} />
 );
 
 export const ButtonLink = ({
@@ -32,7 +32,7 @@ export const ButtonLink = ({
   className = "",
   ...props
 }: LinkProps & { variant?: ButtonVariant }) => (
-  <Link {...props} className={`${styles[variant]} ${className}`} />
+  <Link {...props} className={`${styleMap[variant]} ${className}`} />
 );
 
 /** Active/inactive toggle — submit button styled as a state pill. */

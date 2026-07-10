@@ -1,8 +1,8 @@
 // Package auth는 메일 인증(DKIM 서명·검증, SPF, DMARC)을 담당한다 (Phase 2-4).
 //
-// - 발송: 발신 도메인에 DKIM 키가 있으면 서명 (queue 워커에서 호출)
-// - 수신: SPF/DKIM/DMARC를 검증해 Authentication-Results 헤더를 붙임
-//   (Phase 2-4는 기록만. 정책적 거절/격리는 Phase 4 안티스팸에서)
+//   - 발송: 발신 도메인에 DKIM 키가 있으면 서명 (queue 워커에서 호출)
+//   - 수신: SPF/DKIM/DMARC를 검증해 Authentication-Results 헤더를 붙임
+//     (Phase 2-4는 기록만. 정책적 거절/격리는 Phase 4 안티스팸에서)
 package auth
 
 import (

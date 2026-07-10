@@ -4,30 +4,30 @@ import { apiFetch, type Account, type Domain } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
 import { Badge, Card, EmptyText, PageTitle, StatCard } from "~/components";
 
-// Admin dashboard — high-level stats and quick links.
+// Admin dashboard — high-level stat cards and quick links.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
-  const [domainList, accountList, queueStats] = await Promise.all([
+  const [domainList, accountList, queueStatMap] = await Promise.all([
     apiFetch<Domain[]>(user.idToken, "/api/admin/domain").then((r) => r ?? []),
     apiFetch<Account[]>(user.idToken, "/api/admin/account").then((r) => r ?? []),
-    apiFetch<Record<string, number>>(user.idToken, "/api/admin/queue/stats"),
+    apiFetch<Record<string, number>>(user.idToken, "/api/admin/queue/stat"),
   ]);
-  return { domainList, accountCount: accountList.length, queueStats };
+  return { domainList, accountCount: accountList.length, queueStatMap };
 };
 
 export default function AdminIndex({ loaderData }: Route.ComponentProps) {
-  const { domainList, accountCount, queueStats } = loaderData;
-  const activeDomains = domainList.filter((d) => d.active).length;
+  const { domainList, accountCount, queueStatMap } = loaderData;
+  const activeDomainCount = domainList.filter((d) => d.active).length;
   return (
     <div className="flex flex-col gap-6">
       <PageTitle title="대시보드" />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard label="활성 도메인" value={activeDomains} tone="text-ok" />
+        <StatCard label="활성 도메인" value={activeDomainCount} tone="text-ok" />
         <StatCard label="계정" value={accountCount} />
-        <StatCard label="발송 대기" value={queueStats.pending ?? 0} tone="text-warn" />
-        <StatCard label="발송 실패" value={queueStats.failed ?? 0} tone="text-bad" />
+        <StatCard label="발송 대기" value={queueStatMap.pending ?? 0} tone="text-warn" />
+        <StatCard label="발송 실패" value={queueStatMap.failed ?? 0} tone="text-bad" />
       </div>
 
       <Card>

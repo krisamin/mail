@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 // Status badge — tiny colored pill for states (active, DKIM, queue status, ...).
-const tones = {
+const toneMap = {
   ok: "bg-ok/20 text-ok",
   warn: "bg-warn/20 text-warn",
   bad: "bg-bad/20 text-bad",
@@ -9,7 +9,7 @@ const tones = {
   muted: "bg-bg-3 text-muted",
 } as const;
 
-export type BadgeTone = keyof typeof tones;
+export type BadgeTone = keyof typeof toneMap;
 
 export const Badge = ({
   tone = "muted",
@@ -20,7 +20,7 @@ export const Badge = ({
   className?: string;
   children: ReactNode;
 }) => (
-  <span className={`rounded px-1.5 py-0.5 text-[10px] ${tones[tone]} ${className}`}>
+  <span className={`rounded px-1.5 py-0.5 text-[10px] ${toneMap[tone]} ${className}`}>
     {children}
   </span>
 );

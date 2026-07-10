@@ -21,7 +21,7 @@ import (
 
 // Expunge는 \Deleted 메시지를 삭제하고 EXPUNGE 응답을 쓴다.
 // uids가 nil이면 전체(CLOSE/EXPUNGE), 아니면 UID EXPUNGE.
-func (s *Session) Expunge(w *imapserver.ExpungeWriter, uids *goimap.UIDSet) error {
+func (s *Session) Expunge(w *imapserver.ExpungeWriter, uidSet *goimap.UIDSet) error {
 	if err := s.requireSelected(); err != nil {
 		return err
 	}
@@ -29,8 +29,8 @@ func (s *Session) Expunge(w *imapserver.ExpungeWriter, uids *goimap.UIDSet) erro
 	defer cancel()
 
 	var uidFilter []uint32
-	if uids != nil {
-		static := s.staticUIDSet(*uids)
+	if uidSet != nil {
+		static := s.staticUIDSet(*uidSet)
 		for _, e := range s.snap {
 			if static.Contains(e.uid) {
 				uidFilter = append(uidFilter, uint32(e.uid))
@@ -74,8 +74,8 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 
 	// 본문 섹션 요청 중 Peek 아닌 게 있으면 \Seen 부여 (RFC 3501 §6.4.5)
 	markSeen := false
-	for _, bs := range options.BodySection {
-		if !bs.Peek {
+	for _, section := range options.BodySection {
+		if !section.Peek {
 			markSeen = true
 			break
 		}
@@ -97,7 +97,7 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 		return nil
 	}
 
-	metas, err := s.loadMessages(idList)
+	metaMap, err := s.loadMessageMap(idList)
 	if err != nil {
 		return err
 	}
@@ -107,16 +107,16 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 		len(options.BinarySectionSize) > 0
 
 	for _, h := range hits {
-		m := metas[h.entry.msgID]
+		m := metaMap[h.entry.msgID]
 		if m == nil {
 			continue // 다른 세션이 지움 — 다음 Poll에서 EXPUNGE로 반영
 		}
 
-		flags := m.Flags
-		if markSeen && !hasFlag(flags, goimap.FlagSeen) {
-			flags = append(append([]string{}, flags...), string(goimap.FlagSeen))
+		flagList := m.Flags
+		if markSeen && !hasFlag(flagList, goimap.FlagSeen) {
+			flagList = append(append([]string{}, flagList...), string(goimap.FlagSeen))
 			ctx, cancel := opCtx()
-			err := s.backend.store.SetFlags(ctx, m.ID, flags)
+			err := s.backend.store.SetFlag(ctx, m.ID, flagList)
 			cancel()
 			if err != nil {
 				return err
@@ -139,7 +139,7 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 		mw := w.CreateMessage(h.seqNum)
 		mw.WriteUID(h.entry.uid)
 		if options.Flags {
-			mw.WriteFlags(toImapFlags(flags))
+			mw.WriteFlags(toImapFlagList(flagList))
 		}
 		if options.InternalDate {
 			mw.WriteInternalDate(m.InternalDate)
@@ -153,9 +153,9 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 		if options.BodyStructure != nil {
 			mw.WriteBodyStructure(imapserver.ExtractBodyStructure(bytes.NewReader(raw)))
 		}
-		for _, bs := range options.BodySection {
-			buf := imapserver.ExtractBodySection(bytes.NewReader(raw), bs)
-			wc := mw.WriteBodySection(bs, int64(len(buf)))
+		for _, section := range options.BodySection {
+			buf := imapserver.ExtractBodySection(bytes.NewReader(raw), section)
+			wc := mw.WriteBodySection(section, int64(len(buf)))
 			_, werr := wc.Write(buf)
 			cerr := wc.Close()
 			if werr != nil {
@@ -165,9 +165,9 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 				return cerr
 			}
 		}
-		for _, bs := range options.BinarySection {
-			buf := imapserver.ExtractBinarySection(bytes.NewReader(raw), bs)
-			wc := mw.WriteBinarySection(bs, int64(len(buf)))
+		for _, section := range options.BinarySection {
+			buf := imapserver.ExtractBinarySection(bytes.NewReader(raw), section)
+			wc := mw.WriteBinarySection(section, int64(len(buf)))
 			_, werr := wc.Write(buf)
 			cerr := wc.Close()
 			if werr != nil {
@@ -188,7 +188,7 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 }
 
 // Store는 플래그를 변경하고 (Silent 아니면) FETCH 응답으로 결과를 쓴다.
-func (s *Session) Store(w *imapserver.FetchWriter, numSet goimap.NumSet, flags *goimap.StoreFlags, options *goimap.StoreOptions) error {
+func (s *Session) Store(w *imapserver.FetchWriter, numSet goimap.NumSet, op *goimap.StoreFlags, options *goimap.StoreOptions) error {
 	if err := s.requireSelected(); err != nil {
 		return err
 	}
@@ -202,21 +202,21 @@ func (s *Session) Store(w *imapserver.FetchWriter, numSet goimap.NumSet, flags *
 		return nil
 	}
 
-	metas, err := s.loadMessages(idList)
+	metaMap, err := s.loadMessageMap(idList)
 	if err != nil {
 		return err
 	}
-	for _, m := range metas {
-		next := applyStoreFlags(m.Flags, flags)
+	for _, m := range metaMap {
+		next := applyStoreFlagList(m.Flags, op)
 		ctx, cancel := opCtx()
-		err := s.backend.store.SetFlags(ctx, m.ID, next)
+		err := s.backend.store.SetFlag(ctx, m.ID, next)
 		cancel()
 		if err != nil {
 			return err
 		}
 	}
 
-	if !flags.Silent {
+	if !op.Silent {
 		return s.Fetch(w, numSet, &goimap.FetchOptions{Flags: true})
 	}
 	return nil
@@ -286,7 +286,7 @@ func (s *Session) Search(kind imapserver.NumKind, criteria *goimap.SearchCriteri
 	for _, e := range s.snap {
 		idList[e.msgID] = true
 	}
-	metas, err := s.loadMessages(idList)
+	metaMap, err := s.loadMessageMap(idList)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +297,7 @@ func (s *Session) Search(kind imapserver.NumKind, criteria *goimap.SearchCriteri
 		uidSet goimap.UIDSet
 	)
 	for i, e := range s.snap {
-		m := metas[e.msgID]
+		m := metaMap[e.msgID]
 		if m == nil {
 			continue
 		}

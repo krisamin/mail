@@ -52,11 +52,11 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 	res := &VerifyResult{}
 
 	// ── SPF (RFC 7208) ──────────────────────────────────────
-	var spfOpts []spf.Option
+	var spfOptionList []spf.Option
 	if opts.SPFResolver != nil {
-		spfOpts = append(spfOpts, spf.WithResolver(opts.SPFResolver))
+		spfOptionList = append(spfOptionList, spf.WithResolver(opts.SPFResolver))
 	}
-	spfResult, _ := spf.CheckHostWithSender(opts.RemoteIP, opts.HeloName, opts.EnvelopeFrom, spfOpts...)
+	spfResult, _ := spf.CheckHostWithSender(opts.RemoteIP, opts.HeloName, opts.EnvelopeFrom, spfOptionList...)
 	res.SPFPass = spfResult == spf.Pass
 	resultList = append(resultList, &authres.SPFResult{
 		Value: authresValue(string(spfResult)),
@@ -70,7 +70,7 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 		dkimOpts = &dkim.VerifyOptions{LookupTXT: opts.LookupTXT}
 	}
 	verificationList, err := dkim.VerifyWithOptions(bytes.NewReader(raw), dkimOpts)
-	var dkimDomains []string // pass한 서명 도메인 (DMARC 정렬용)
+	var dkimDomainList []string // pass한 서명 도메인 (DMARC 정렬용)
 	if err != nil && len(verificationList) == 0 {
 		resultList = append(resultList, &authres.DKIMResult{Value: authres.ResultNone})
 	}
@@ -80,7 +80,7 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 			value = authres.ResultFail
 		} else {
 			res.DKIMPass = true
-			dkimDomains = append(dkimDomains, v.Domain)
+			dkimDomainList = append(dkimDomainList, v.Domain)
 		}
 		resultList = append(resultList, &authres.DKIMResult{
 			Value:      value,
@@ -105,7 +105,7 @@ func VerifyInbound(raw []byte, opts VerifyOptions) *VerifyResult {
 			spfAligned := res.SPFPass && domainAligned(envelopeDomain(opts.EnvelopeFrom), fromDomain)
 			// DKIM 정렬: pass한 서명 도메인 vs From 헤더 도메인
 			dkimAligned := false
-			for _, d := range dkimDomains {
+			for _, d := range dkimDomainList {
 				if domainAligned(d, fromDomain) {
 					dkimAligned = true
 					break
@@ -160,18 +160,18 @@ func envelopeDomain(addr string) string {
 // headerFromDomain은 From 헤더의 주소 도메인을 뽑는다 (DMARC 기준 신원).
 func headerFromDomain(raw []byte) string {
 	// 헤더 블록만 스캔 (본문 앞 빈 줄까지)
-	lines := bytes.Split(raw, []byte("\r\n"))
+	lineList := bytes.Split(raw, []byte("\r\n"))
 	var fromLine string
-	for i := 0; i < len(lines); i++ {
-		if len(lines[i]) == 0 {
+	for i := 0; i < len(lineList); i++ {
+		if len(lineList[i]) == 0 {
 			break
 		}
-		if bytes.HasPrefix(bytes.ToLower(lines[i]), []byte("from:")) {
-			fromLine = string(lines[i][5:])
+		if bytes.HasPrefix(bytes.ToLower(lineList[i]), []byte("from:")) {
+			fromLine = string(lineList[i][5:])
 			// folded header 이어붙이기
-			for j := i + 1; j < len(lines) && len(lines[j]) > 0 &&
-				(lines[j][0] == ' ' || lines[j][0] == '\t'); j++ {
-				fromLine += string(lines[j])
+			for j := i + 1; j < len(lineList) && len(lineList[j]) > 0 &&
+				(lineList[j][0] == ' ' || lineList[j][0] == '\t'); j++ {
+				fromLine += string(lineList[j])
 			}
 			break
 		}

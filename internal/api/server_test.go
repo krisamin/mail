@@ -220,12 +220,12 @@ func TestQueueEndpoints(t *testing.T) {
 	}
 	// store 직접 접근 대신 API로 확인 가능한 상태를 만들려면 enqueue가 필요한데
 	// enqueue는 submission 경로라 여기선 통계 0 확인 + 빈 목록만 검증
-	code, stats, _ := call(t, srv, "GET", "/api/admin/queue/stats", nil)
+	code, statMap, _ := call(t, srv, "GET", "/api/admin/queue/stat", nil)
 	if code != 200 {
 		t.Fatalf("통계: %d", code)
 	}
-	if len(stats) != 0 {
-		t.Fatalf("빈 큐 통계여야: %v", stats)
+	if len(statMap) != 0 {
+		t.Fatalf("빈 큐 통계여야: %v", statMap)
 	}
 	code, _, list := call(t, srv, "GET", "/api/admin/queue?status=failed", nil)
 	if code != 200 || len(list) != 0 {

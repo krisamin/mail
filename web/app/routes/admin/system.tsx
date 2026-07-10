@@ -1,11 +1,13 @@
-import { useRevalidator } from "react-router";
+import { useEffect } from "react";
+import { useFetcher, useRevalidator } from "react-router";
 import type { Route } from "./+types/system";
 import { apiFetch } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
 import { Badge, Button, Card, PageTitle } from "~/components";
 
-// System check — internal listeners (self-dial), external reachability
-// (public hostname + standard ports), DB latency, queue stats, uptime.
+// System check — fast page load: listener/DB/queue only.
+// External reachability is slow (blocked port = dial timeout) so it loads
+// asynchronously via fetcher after render — no more navbar freeze.
 
 type PortCheck = {
   name: string;
@@ -20,17 +22,30 @@ type SystemStatus = {
   uptime: string;
   hostname: string;
   db: { ok: boolean; latency: string; error?: string };
-  queue: { ok: boolean; stats?: Record<string, number>; error?: string };
+  queue: { ok: boolean; statMap?: Record<string, number>; error?: string };
   listener: PortCheck[];
-  external: PortCheck[];
   externalHost: string;
+  note: string;
+};
+
+type ExternalStatus = {
+  externalHost: string;
+  external: PortCheck[];
   note: string;
 };
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
+  const url = new URL(request.url);
+
+  // fetcher 경로: ?external=1 이면 느린 외부 점검만 수행
+  if (url.searchParams.get("external") === "1") {
+    const external = await apiFetch<ExternalStatus>(user.idToken, "/api/admin/system/external");
+    return { kind: "external" as const, external };
+  }
+
   const status = await apiFetch<SystemStatus>(user.idToken, "/api/admin/system");
-  return { status, checkedAt: new Date().toISOString() };
+  return { kind: "status" as const, status, checkedAt: new Date().toISOString() };
 };
 
 const PortRowList = ({ list, okLabel, badLabel }: { list: PortCheck[]; okLabel: string; badLabel: string }) => (
@@ -54,8 +69,28 @@ const PortRowList = ({ list, okLabel, badLabel }: { list: PortCheck[]; okLabel: 
 );
 
 export default function System({ loaderData }: Route.ComponentProps) {
-  const { status, checkedAt } = loaderData;
   const revalidator = useRevalidator();
+  const externalFetcher = useFetcher<typeof loader>();
+
+  // 렌더 후 외부 점검을 비동기로 — 페이지 진입은 즉시, 느린 건 따로 채움
+  useEffect(() => {
+    if (externalFetcher.state === "idle" && !externalFetcher.data) {
+      externalFetcher.load("/admin/system?external=1");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (loaderData.kind !== "status") return null; // fetcher 응답은 화면 직접 렌더 안 함
+  const { status, checkedAt } = loaderData;
+
+  const externalData =
+    externalFetcher.data?.kind === "external" ? externalFetcher.data.external : null;
+  const externalLoading = !externalData;
+
+  const recheck = () => {
+    revalidator.revalidate();
+    externalFetcher.load("/admin/system?external=1");
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -68,8 +103,8 @@ export default function System({ loaderData }: Route.ComponentProps) {
             </span>
             <Button
               variant="outline"
-              onClick={() => revalidator.revalidate()}
-              disabled={revalidator.state !== "idle"}
+              onClick={recheck}
+              disabled={revalidator.state !== "idle" || externalFetcher.state !== "idle"}
             >
               다시 점검
             </Button>
@@ -102,8 +137,8 @@ export default function System({ loaderData }: Route.ComponentProps) {
               <Badge tone={status.queue.ok ? "ok" : "bad"}>{status.queue.ok ? "정상" : "오류"}</Badge>
             </div>
             <p className="text-sm text-text-1">
-              대기 {status.queue.stats?.pending ?? 0} · 완료 {status.queue.stats?.sent ?? 0} · 실패{" "}
-              {status.queue.stats?.failed ?? 0}
+              대기 {status.queue.statMap?.pending ?? 0} · 완료 {status.queue.statMap?.sent ?? 0} · 실패{" "}
+              {status.queue.statMap?.failed ?? 0}
             </p>
             {status.queue.error && <p className="text-[11px] text-bad">{status.queue.error}</p>}
           </div>
@@ -118,7 +153,13 @@ export default function System({ loaderData }: Route.ComponentProps) {
             LB·라우터 포워딩이 뚫려야 성공. 헤어핀 NAT 미지원 라우터에선 오탐 가능.
           </p>
         </div>
-        <PortRowList list={status.external} okLabel="도달" badLabel="차단" />
+        {externalLoading ? (
+          <p className="px-4 py-6 text-center text-xs text-text-2">
+            점검 중… (차단된 포트는 타임아웃까지 수 초 걸려요)
+          </p>
+        ) : (
+          <PortRowList list={externalData.external} okLabel="도달" badLabel="차단" />
+        )}
       </Card>
 
       <Card>

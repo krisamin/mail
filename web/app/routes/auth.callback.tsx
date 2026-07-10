@@ -17,15 +17,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   const redirectUri = `${publicOrigin(request)}/auth/callback`;
-  const tokens = await exchangeCode(code, redirectUri);
-  const claims = decodeClaims(tokens.idToken);
+  const tokenSet = await exchangeCode(code, redirectUri);
+  const claims = decodeClaims(tokenSet.idToken);
 
   // ── JIT 프로비저닝: 계정을 만들거나 갱신한다 (멱등). 도메인 미등록
   // email이어도 로그인은 허용 — 계정만 생기고 주소/메일함이 없을 뿐.
   // admin은 OIDC 그룹으로 판정되므로 빈 DB에서도 관리 화면에 들어갈 수 있다.
   // (Go API가 토큰 검증 + 계정/주소/INBOX 생성)
   try {
-    await apiFetch(tokens.idToken, "/api/me/provision", { method: "POST" });
+    await apiFetch(tokenSet.idToken, "/api/me/provision", { method: "POST" });
   } catch (e) {
     if (e instanceof ApiError) {
       throw new Response(`로그인 확인 실패: ${e.message}`, { status: 403 });
@@ -37,8 +37,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     sub: claims.sub,
     name: claims.name ?? claims.preferred_username ?? claims.sub,
     email: claims.email ?? "",
-    groups: claims.groups ?? [],
-    idToken: tokens.idToken,
+    groupList: claims.groups ?? [],
+    idToken: tokenSet.idToken,
   };
 
   const returnTo = (session.get("returnTo") as string | undefined) ?? "/";

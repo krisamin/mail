@@ -139,13 +139,13 @@ func TestAddressModel(t *testing.T) {
 		addr      string
 		want      bool
 	}{
-		{maro.ID, "maro@krisam.in", true},    // primary
-		{maro.ID, "test@kirby.so", true},     // 추가 주소
-		{maro.ID, "random@kirby.so", true},   // 본인 catch-all
-		{guest.ID, "test@kirby.so", false},   // 남의 주소
-		{guest.ID, "gyestt@kirby.so", true},  // 본인 주소 (kirby)
-		{maro.ID, "gyestt@kirby.so", false},  // guest의 정확 주소 — catch-all 있어도 정확이 우선
-		{maro.ID, "x@nowhere.com", false},    // 외부
+		{maro.ID, "maro@krisam.in", true},   // primary
+		{maro.ID, "test@kirby.so", true},    // 추가 주소
+		{maro.ID, "random@kirby.so", true},  // 본인 catch-all
+		{guest.ID, "test@kirby.so", false},  // 남의 주소
+		{guest.ID, "gyestt@kirby.so", true}, // 본인 주소 (kirby)
+		{maro.ID, "gyestt@kirby.so", false}, // guest의 정확 주소 — catch-all 있어도 정확이 우선
+		{maro.ID, "x@nowhere.com", false},   // 외부
 	} {
 		got, err := st.CanSendAs(ctx, tc.accountID, tc.addr)
 		if err != nil || got != tc.want {

@@ -50,9 +50,9 @@ func NewAuthenticator(ctx context.Context, cfg AuthConfig) (*Authenticator, erro
 
 // claims는 우리가 쓰는 토큰 클레임.
 type claims struct {
-	Subject string   `json:"sub"`
-	Email   string   `json:"email"`
-	Groups  []string `json:"groups"`
+	Subject   string   `json:"sub"`
+	Email     string   `json:"email"`
+	GroupList []string `json:"groups"`
 }
 
 // ctxKey는 컨텍스트 키.
@@ -62,9 +62,9 @@ const identityKey ctxKey = iota
 
 // Identity는 인증된 호출자 정보.
 type Identity struct {
-	Subject string
-	Email   string
-	Groups  []string
+	Subject   string
+	Email     string
+	GroupList []string
 }
 
 // IdentityFrom은 요청 컨텍스트에서 인증 정보를 꺼낸다.
@@ -78,7 +78,7 @@ func IdentityFrom(ctx context.Context) *Identity {
 // 신원을 지정할 수 있다 (미지정 시 admin 취급 — 기존 테스트 호환).
 func (a *Authenticator) authenticate(r *http.Request) (*Identity, int, string) {
 	if a.cfg.InsecureSkipVerify {
-		id := &Identity{Subject: "test", Email: "test@localhost", Groups: []string{a.cfg.AdminGroup}}
+		id := &Identity{Subject: "test", Email: "test@localhost", GroupList: []string{a.cfg.AdminGroup}}
 		if sub := r.Header.Get("X-Test-Sub"); sub != "" {
 			id.Subject = sub
 		}
@@ -90,10 +90,10 @@ func (a *Authenticator) authenticate(r *http.Request) (*Identity, int, string) {
 			}
 		}
 		if g, ok := r.Header["X-Test-Groups"]; ok {
-			id.Groups = nil
+			id.GroupList = nil
 			for _, part := range strings.Split(strings.Join(g, ","), ",") {
 				if part = strings.TrimSpace(part); part != "" {
-					id.Groups = append(id.Groups, part)
+					id.GroupList = append(id.GroupList, part)
 				}
 			}
 		}
@@ -112,7 +112,7 @@ func (a *Authenticator) authenticate(r *http.Request) (*Identity, int, string) {
 	if err := idToken.Claims(&c); err != nil {
 		return nil, http.StatusUnauthorized, "invalid claims"
 	}
-	return &Identity{Subject: c.Subject, Email: c.Email, Groups: c.Groups}, 0, ""
+	return &Identity{Subject: c.Subject, Email: c.Email, GroupList: c.GroupList}, 0, ""
 }
 
 // RequireUser는 Bearer 토큰 검증만 하는 미들웨어 (그룹 불필요).
@@ -136,7 +136,7 @@ func (a *Authenticator) RequireAdmin(next http.Handler) http.Handler {
 			writeError(w, status, msg)
 			return
 		}
-		if !hasGroup(id.Groups, a.cfg.AdminGroup) {
+		if !hasGroup(id.GroupList, a.cfg.AdminGroup) {
 			writeError(w, http.StatusForbidden, "admin group required")
 			return
 		}

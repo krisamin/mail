@@ -19,30 +19,30 @@ func newIdleTicker() *time.Ticker {
 	return time.NewTicker(idleInterval)
 }
 
-// fromImapFlags는 goimap.Flag → store 플래그 문자열.
-func fromImapFlags(flags []goimap.Flag) []string {
-	if len(flags) == 0 {
+// fromImapFlagList는 goimap.Flag → store 플래그 문자열.
+func fromImapFlagList(flagList []goimap.Flag) []string {
+	if len(flagList) == 0 {
 		return nil
 	}
-	out := make([]string, len(flags))
-	for i, f := range flags {
+	out := make([]string, len(flagList))
+	for i, f := range flagList {
 		out[i] = string(f)
 	}
 	return out
 }
 
-// toImapFlags는 store 플래그 문자열 → goimap.Flag.
-func toImapFlags(flags []string) []goimap.Flag {
-	out := make([]goimap.Flag, len(flags))
-	for i, f := range flags {
+// toImapFlagList는 store 플래그 문자열 → goimap.Flag.
+func toImapFlagList(flagList []string) []goimap.Flag {
+	out := make([]goimap.Flag, len(flagList))
+	for i, f := range flagList {
 		out[i] = goimap.Flag(f)
 	}
 	return out
 }
 
 // hasFlag는 대소문자 무시 플래그 검사 (RFC 3501: 시스템 플래그는 case-insensitive).
-func hasFlag(flags []string, want goimap.Flag) bool {
-	for _, f := range flags {
+func hasFlag(flagList []string, want goimap.Flag) bool {
+	for _, f := range flagList {
 		if equalFlag(goimap.Flag(f), want) {
 			return true
 		}
@@ -68,11 +68,11 @@ func lowerASCII(s string) string {
 	return string(b)
 }
 
-// applyStoreFlags는 STORE 연산(set/add/del)을 기존 플래그에 적용한 결과를 돌려준다.
-func applyStoreFlags(existing []string, op *goimap.StoreFlags) []string {
+// applyStoreFlagList는 STORE 연산(set/add/del)을 기존 플래그에 적용한 결과를 돌려준다.
+func applyStoreFlagList(existing []string, op *goimap.StoreFlags) []string {
 	switch op.Op {
 	case goimap.StoreFlagsSet:
-		return fromImapFlags(op.Flags)
+		return fromImapFlagList(op.Flags)
 	case goimap.StoreFlagsAdd:
 		out := append([]string{}, existing...)
 		for _, f := range op.Flags {
@@ -84,7 +84,7 @@ func applyStoreFlags(existing []string, op *goimap.StoreFlags) []string {
 	case goimap.StoreFlagsDel:
 		var out []string
 		for _, e := range existing {
-			if !hasFlag(fromImapFlags(op.Flags), goimap.Flag(e)) {
+			if !hasFlag(fromImapFlagList(op.Flags), goimap.Flag(e)) {
 				out = append(out, e)
 			}
 		}
@@ -169,17 +169,17 @@ func staticRange(start, stop *uint32, max uint32) {
 
 // loadMessage는 스냅샷 항목의 최신 메타를 DB에서 읽는다.
 // (스냅샷은 msgID/uid만 들고, 플래그 등 가변 데이터는 매번 조회)
-func (s *Session) loadMessages(msgIDs map[int64]bool) (map[int64]*store.Message, error) {
+func (s *Session) loadMessageMap(msgIDMap map[int64]bool) (map[int64]*store.Message, error) {
 	ctx, cancel := opCtx()
 	defer cancel()
 
-	messageList, err := s.backend.store.ListMessages(ctx, s.mailbox.ID)
+	messageList, err := s.backend.store.ListMessage(ctx, s.mailbox.ID)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[int64]*store.Message, len(msgIDs))
+	out := make(map[int64]*store.Message, len(msgIDMap))
 	for _, m := range messageList {
-		if msgIDs[m.ID] {
+		if msgIDMap[m.ID] {
 			out[m.ID] = m
 		}
 	}

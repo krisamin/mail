@@ -180,7 +180,7 @@ func checkDMARC(ctx context.Context, domain string) dnsCheckDTO {
 		}
 	}
 	return dnsCheckDTO{
-		Status: "missing",
+		Status:   "missing",
 		Expected: "v=DMARC1; p=none; rua=mailto:postmaster@" + domain,
 		Note:     name + " TXT 없음",
 	}

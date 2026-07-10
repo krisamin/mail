@@ -75,7 +75,7 @@ type Account struct {
 // Mailbox는 IMAP 폴더 (INBOX, Sent, ...).
 type Mailbox struct {
 	ID          int64
-	AccountID      int64
+	AccountID   int64
 	Name        string
 	UIDValidity uint32 // 생성 시 고정. 재생성되면 바뀜 → 클라 캐시 무효화
 	UIDNext     uint32 // 다음 부여할 UID
@@ -100,10 +100,10 @@ type Message struct {
 // AppPassword는 메일앱(IMAP/SMTP) 인증용 앱 비밀번호. OAuth로 발급/revoke.
 type AppPassword struct {
 	ID        int64
-	AccountID    int64
+	AccountID int64
 	Label     string // 'Thunderbird 노트북'
 	Hash      string // argon2id
-	ScopeList    []string
+	ScopeList []string
 	LastUsed  *time.Time
 	CreatedAt time.Time
 	RevokedAt *time.Time
@@ -138,7 +138,7 @@ type OutboundMessage struct {
 	EnvelopeRcpt  string
 	Raw           []byte
 	Status        string
-	AttemptCount      int
+	AttemptCount  int
 	NextAttemptAt time.Time
 	LastError     string
 	CreatedAt     time.Time
@@ -146,11 +146,11 @@ type OutboundMessage struct {
 
 // MailboxStatus는 SELECT/STATUS가 요구하는 집계값.
 type MailboxStatus struct {
-	NumMessages uint32
-	NumUnseen   uint32
-	NumRecent   uint32
-	UIDNext     uint32
-	UIDValidity uint32
+	MessageCount uint32
+	UnseenCount  uint32
+	NumRecent    uint32
+	UIDNext      uint32
+	UIDValidity  uint32
 }
 
 // ── 인터페이스 ──────────────────────────────────────────────
@@ -188,10 +188,10 @@ type Store interface {
 	MailboxStatus(ctx context.Context, mailboxID int64) (*MailboxStatus, error)
 
 	// 메시지
-	AppendMessage(ctx context.Context, mailboxID int64, raw []byte, flags []string, internalDate time.Time) (*Message, error)
-	ListMessages(ctx context.Context, mailboxID int64) ([]*Message, error)
+	AppendMessage(ctx context.Context, mailboxID int64, raw []byte, flagList []string, internalDate time.Time) (*Message, error)
+	ListMessage(ctx context.Context, mailboxID int64) ([]*Message, error)
 	GetMessageBlob(ctx context.Context, messageID int64) ([]byte, error)
-	SetFlags(ctx context.Context, messageID int64, flags []string) error
+	SetFlag(ctx context.Context, messageID int64, flagList []string) error
 	// ExpungeDeleted는 \Deleted 메시지를 실제 삭제한다.
 	// uids가 nil이면 전체, 아니면 해당 UID들만 (IMAP UID EXPUNGE 대응).
 	ExpungeDeleted(ctx context.Context, mailboxID int64, uids []uint32) ([]uint32, error)
@@ -263,8 +263,8 @@ type AdminStore interface {
 	ListOutbound(ctx context.Context, status string, limit int) ([]*OutboundMessage, error)
 	// RetryOutbound는 failed 항목을 pending으로 되돌린다 (즉시 due).
 	RetryOutbound(ctx context.Context, id int64) error
-	// OutboundStats는 상태별 건수.
-	OutboundStats(ctx context.Context) (map[string]int64, error)
+	// OutboundStat는 상태별 건수.
+	OutboundStat(ctx context.Context) (map[string]int64, error)
 
 	// relay (0005) — password는 쓰기 전용 (List가 돌려주는 값도 API 레이어에서 마스킹)
 	ListRelay(ctx context.Context) ([]*Relay, error)

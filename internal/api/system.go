@@ -62,9 +62,10 @@ type portCheckDTO struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// handleSystemCheck는 리스너/외부 도달성/DB/큐 상태를 모아 돌려준다.
+// handleSystemCheck는 리스너/DB/큐 상태를 모아 돌려준다 (빠른 점검만).
+// 외부 도달성은 느려서(차단 포트 = 타임아웃 대기) 별도 엔드포인트로 분리.
 func (s *Server) handleSystemCheck(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	// ── DB ping
@@ -81,13 +82,13 @@ func (s *Server) handleSystemCheck(w http.ResponseWriter, r *http.Request) {
 
 	// ── 발송 큐
 	var queueStatus map[string]any
-	if stats, err := s.store.OutboundStats(ctx); err == nil {
-		queueStatus = map[string]any{"ok": true, "stats": stats}
+	if statMap, err := s.store.OutboundStat(ctx); err == nil {
+		queueStatus = map[string]any{"ok": true, "statMap": statMap}
 	} else {
 		queueStatus = map[string]any{"ok": false, "error": err.Error()}
 	}
 
-	// ── 내부 리스너 self-dial
+	// ── 내부 리스너 self-dial (로컬이라 즉시)
 	listenerList := make([]portCheckDTO, 0, len(s.systemPortList))
 	for _, p := range s.systemPortList {
 		if !p.Check {
@@ -96,7 +97,24 @@ func (s *Server) handleSystemCheck(w http.ResponseWriter, r *http.Request) {
 		listenerList = append(listenerList, checkListener(ctx, p))
 	}
 
-	// ── 외부 도달성 (표준 포트, 공인 경로) — 병렬로
+	writeJSON(w, http.StatusOK, map[string]any{
+		"uptime":       time.Since(processStart).Round(time.Second).String(),
+		"hostname":     s.hostname,
+		"db":           dbStatus,
+		"queue":        queueStatus,
+		"listener":     listenerList,
+		"externalHost": s.externalHost,
+		"note": "리스너=프로세스 내부 self-dial (데몬 정상 여부만). " +
+			"외부 도달성은 /api/admin/system/external (별도 — 차단 포트는 타임아웃까지 걸림).",
+	})
+}
+
+// handleSystemExternal은 외부 도달성만 점검한다 (느림 — 차단 포트는
+// 다이얼 타임아웃 5초까지 대기. 병렬이라 최대 ~5초).
+func (s *Server) handleSystemExternal(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
 	externalList := make([]portCheckDTO, len(s.externalPortList))
 	if s.externalHost != "" && len(s.externalPortList) > 0 {
 		done := make(chan struct{})
@@ -112,16 +130,10 @@ func (s *Server) handleSystemCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"uptime":   time.Since(processStart).Round(time.Second).String(),
-		"hostname": s.hostname,
-		"db":       dbStatus,
-		"queue":    queueStatus,
-		"listener": listenerList,
-		"external": externalList,
 		"externalHost": s.externalHost,
-		"note": "리스너=프로세스 내부 self-dial (데몬 정상 여부만). " +
-			"외부 도달성=공인 호스트네임으로 실접속 (LB/라우터 포워딩 포함 — " +
-			"단, 서버에서 나가는 경로라 헤어핀 NAT 미지원 라우터에선 오탐 가능).",
+		"external":     externalList,
+		"note": "공인 호스트네임으로 실접속 (LB/라우터 포워딩 포함) — " +
+			"단, 서버에서 나가는 경로라 헤어핀 NAT 미지원 라우터에선 오탐 가능.",
 	})
 }
 

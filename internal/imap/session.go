@@ -56,8 +56,8 @@ func mapMailboxErr(err error) error {
 	return err
 }
 
-// definedFlags는 서버가 지원하는 시스템 플래그.
-func definedFlags() []goimap.Flag {
+// definedFlagList는 서버가 지원하는 시스템 플래그.
+func definedFlagList() []goimap.Flag {
 	return []goimap.Flag{
 		goimap.FlagSeen, goimap.FlagAnswered, goimap.FlagFlagged,
 		goimap.FlagDeleted, goimap.FlagDraft,
@@ -106,7 +106,7 @@ func (s *Session) Select(name string, options *goimap.SelectOptions) (*goimap.Se
 	if err != nil {
 		return nil, mapMailboxErr(err)
 	}
-	messageList, err := s.backend.store.ListMessages(ctx, mbox.ID)
+	messageList, err := s.backend.store.ListMessage(ctx, mbox.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -126,9 +126,9 @@ func (s *Session) Select(name string, options *goimap.SelectOptions) (*goimap.Se
 	s.readOnly = options != nil && options.ReadOnly
 
 	return &goimap.SelectData{
-		Flags:          definedFlags(),
-		PermanentFlags: append(definedFlags(), goimap.FlagWildcard),
-		NumMessages:    st.NumMessages,
+		Flags:          definedFlagList(),
+		PermanentFlags: append(definedFlagList(), goimap.FlagWildcard),
+		NumMessages:    st.MessageCount,
 		UIDNext:        goimap.UID(st.UIDNext),
 		UIDValidity:    st.UIDValidity,
 	}, nil
@@ -261,11 +261,11 @@ func (s *Session) Status(name string, options *goimap.StatusOptions) (*goimap.St
 
 	data := goimap.StatusData{Mailbox: name}
 	if options.NumMessages {
-		n := st.NumMessages
+		n := st.MessageCount
 		data.NumMessages = &n
 	}
 	if options.NumUnseen {
-		n := st.NumUnseen
+		n := st.UnseenCount
 		data.NumUnseen = &n
 	}
 	if options.UIDNext {
@@ -307,7 +307,7 @@ func (s *Session) Append(mailbox string, r goimap.LiteralReader, options *goimap
 	if t.IsZero() {
 		t = timeNow()
 	}
-	msg, err := s.backend.store.AppendMessage(ctx, mbox.ID, raw, fromImapFlags(options.Flags), t)
+	msg, err := s.backend.store.AppendMessage(ctx, mbox.ID, raw, fromImapFlagList(options.Flags), t)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +352,7 @@ func (s *Session) pollChanges(w *imapserver.UpdateWriter, allowExpunge bool) err
 	ctx, cancel := opCtx()
 	defer cancel()
 
-	messageList, err := s.backend.store.ListMessages(ctx, s.mailbox.ID)
+	messageList, err := s.backend.store.ListMessage(ctx, s.mailbox.ID)
 	if err != nil {
 		return err
 	}
@@ -380,7 +380,7 @@ func (s *Session) pollChanges(w *imapserver.UpdateWriter, allowExpunge bool) err
 		inSnap[e.uid] = true
 	}
 	added := false
-	for _, m := range messageList { // ListMessages는 UID 오름차순
+	for _, m := range messageList { // ListMessage는 UID 오름차순
 		uid := goimap.UID(m.UID)
 		if !inSnap[uid] {
 			s.snap = append(s.snap, snapEntry{msgID: m.ID, uid: uid})

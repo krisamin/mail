@@ -127,8 +127,8 @@ func (s *Store) MailboxStatus(ctx context.Context, mailboxID int64) (*store.Mail
 	}
 	st.UIDNext = uint32(uidNext)
 	st.UIDValidity = uint32(uidValidity)
-	st.NumMessages = uint32(numMessages)
-	st.NumUnseen = uint32(numUnseen)
+	st.MessageCount = uint32(numMessages)
+	st.UnseenCount = uint32(numUnseen)
 	st.NumRecent = 0 // RECENT는 obsolete, 0으로
 	return &st, nil
 }

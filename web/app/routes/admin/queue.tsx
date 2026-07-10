@@ -4,18 +4,18 @@ import { ApiError, apiFetch, type QueueItem } from "~/lib/api.server";
 import { getUser } from "~/lib/session.server";
 import { Badge, Button, Card, EmptyText, ErrorBanner, PageTitle, type BadgeTone } from "~/components";
 
-// Outbound queue — filter by status, retry failed items.
+// Outbound queue — filter by status, retry failed entries.
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = (await getUser(request))!;
   const url = new URL(request.url);
   const status = url.searchParams.get("status") ?? "";
 
-  const [items, stats] = await Promise.all([
+  const [itemList, statMap] = await Promise.all([
     apiFetch<QueueItem[]>(user.idToken, `/api/admin/queue?status=${status}`),
-    apiFetch<Record<string, number>>(user.idToken, "/api/admin/queue/stats"),
+    apiFetch<Record<string, number>>(user.idToken, "/api/admin/queue/stat"),
   ]);
-  return { items: items ?? [], stats, status };
+  return { itemList: itemList ?? [], statMap, status };
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
@@ -36,7 +36,7 @@ const statusTone: Record<string, BadgeTone> = {
   failed: "bad",
 };
 
-const filters = [
+const filterList = [
   { value: "", label: "전체" },
   { value: "pending", label: "대기" },
   { value: "sent", label: "완료" },
@@ -44,7 +44,7 @@ const filters = [
 ];
 
 export default function Queue({ loaderData, actionData }: Route.ComponentProps) {
-  const { items, stats, status } = loaderData;
+  const { itemList, statMap, status } = loaderData;
   const [, setSearchParams] = useSearchParams();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
@@ -55,7 +55,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
         title="발송 큐"
         aside={
           <p className="text-xs text-text-2">
-            대기 {stats.pending ?? 0} · 완료 {stats.sent ?? 0} · 실패 {stats.failed ?? 0}
+            대기 {statMap.pending ?? 0} · 완료 {statMap.sent ?? 0} · 실패 {statMap.failed ?? 0}
           </p>
         }
       />
@@ -63,7 +63,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
       <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
       <div className="flex gap-1">
-        {filters.map((f) => (
+        {filterList.map((f) => (
           <button
             key={f.value}
             type="button"
@@ -78,11 +78,11 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
       </div>
 
       <Card>
-        {items.length === 0 ? (
+        {itemList.length === 0 ? (
           <EmptyText>항목 없음</EmptyText>
         ) : (
           <ul className="divide-y divide-line">
-            {items.map((m) => (
+            {itemList.map((m) => (
               <li key={m.id} className="flex flex-col gap-1 px-4 py-2.5">
                 <div className="flex items-center justify-between">
                   <p className="truncate text-sm">

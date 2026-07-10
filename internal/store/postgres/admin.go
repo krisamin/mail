@@ -433,8 +433,8 @@ func (s *Store) RetryOutbound(ctx context.Context, id int64) error {
 	return nil
 }
 
-// OutboundStats는 상태별 건수.
-func (s *Store) OutboundStats(ctx context.Context) (map[string]int64, error) {
+// OutboundStat는 상태별 건수.
+func (s *Store) OutboundStat(ctx context.Context) (map[string]int64, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT status, count(*) FROM outbound_queue GROUP BY status`)
 	if err != nil {

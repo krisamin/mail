@@ -14,7 +14,7 @@ import (
 
 // AppendMessage는 메일박스에 메시지를 추가한다.
 // UID는 mailboxList.uid_next를 트랜잭션으로 읽고 증가시켜 부여한다.
-func (s *Store) AppendMessage(ctx context.Context, mailboxID int64, raw []byte, flags []string, internalDate time.Time) (*store.Message, error) {
+func (s *Store) AppendMessage(ctx context.Context, mailboxID int64, raw []byte, flagList []string, internalDate time.Time) (*store.Message, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("트랜잭션 시작: %w", err)
@@ -60,14 +60,14 @@ func (s *Store) AppendMessage(ctx context.Context, mailboxID int64, raw []byte, 
 	}
 
 	// 5) 플래그 저장
-	for _, f := range flags {
+	for _, f := range flagList {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO message_flag (message_id, flag) VALUES ($1, $2)
 			 ON CONFLICT DO NOTHING`, m.ID, f); err != nil {
 			return nil, fmt.Errorf("플래그 저장: %w", err)
 		}
 	}
-	m.Flags = flags
+	m.Flags = flagList
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("커밋: %w", err)
@@ -75,8 +75,8 @@ func (s *Store) AppendMessage(ctx context.Context, mailboxID int64, raw []byte, 
 	return &m, nil
 }
 
-// ListMessages는 메일박스의 모든 메시지를 UID 순으로 반환한다 (플래그 포함).
-func (s *Store) ListMessages(ctx context.Context, mailboxID int64) ([]*store.Message, error) {
+// ListMessage는 메일박스의 모든 메시지를 UID 순으로 반환한다 (플래그 포함).
+func (s *Store) ListMessage(ctx context.Context, mailboxID int64) ([]*store.Message, error) {
 	const q = `
 		SELECT id, mailbox_id, uid, blob_id, size_bytes, internal_date,
 		       COALESCE(subject, ''), COALESCE(from_addr, ''), created_at
@@ -106,7 +106,7 @@ func (s *Store) ListMessages(ctx context.Context, mailboxID int64) ([]*store.Mes
 	if len(messageList) > 0 {
 		frows, err := s.pool.Query(ctx,
 			`SELECT message_id, flag FROM message_flag WHERE message_id = ANY($1)`,
-			mapKeys(byID))
+			mapKeyList(byID))
 		if err != nil {
 			return nil, fmt.Errorf("플래그 로드: %w", err)
 		}
@@ -144,8 +144,8 @@ func (s *Store) GetMessageBlob(ctx context.Context, messageID int64) ([]byte, er
 	return content, nil
 }
 
-// SetFlags는 메시지의 플래그를 지정된 집합으로 교체한다.
-func (s *Store) SetFlags(ctx context.Context, messageID int64, flags []string) error {
+// SetFlag는 메시지의 플래그를 지정된 집합으로 교체한다.
+func (s *Store) SetFlag(ctx context.Context, messageID int64, flagList []string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -155,7 +155,7 @@ func (s *Store) SetFlags(ctx context.Context, messageID int64, flags []string) e
 	if _, err := tx.Exec(ctx, `DELETE FROM message_flag WHERE message_id = $1`, messageID); err != nil {
 		return fmt.Errorf("기존 플래그 삭제: %w", err)
 	}
-	for _, f := range flags {
+	for _, f := range flagList {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO message_flag (message_id, flag) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 			messageID, f); err != nil {
@@ -167,7 +167,7 @@ func (s *Store) SetFlags(ctx context.Context, messageID int64, flags []string) e
 
 // ExpungeDeleted는 \Deleted 플래그가 붙은 메시지를 실제 삭제하고, 삭제된 UID들을 반환한다.
 // uids가 nil이면 메일박스 전체 대상, 아니면 해당 UID들만 (IMAP UID EXPUNGE).
-func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID int64, uids []uint32) ([]uint32, error) {
+func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID int64, uidSet []uint32) ([]uint32, error) {
 	const q = `
 		DELETE FROM message m
 		WHERE m.mailbox_id = $1
@@ -176,9 +176,9 @@ func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID int64, uids []uint
 		              WHERE f.message_id = m.id AND f.flag = '\Deleted')
 		RETURNING m.uid`
 	var uidFilter []int64
-	if uids != nil {
-		uidFilter = make([]int64, len(uids))
-		for i, u := range uids {
+	if uidSet != nil {
+		uidFilter = make([]int64, len(uidSet))
+		for i, u := range uidSet {
 			uidFilter[i] = int64(u)
 		}
 	}
@@ -248,7 +248,7 @@ func (s *Store) CopyMessage(ctx context.Context, messageID, destMailboxID int64)
 	return &m, nil
 }
 
-func mapKeys(m map[int64]*store.Message) []int64 {
+func mapKeyList(m map[int64]*store.Message) []int64 {
 	out := make([]int64, 0, len(m))
 	for k := range m {
 		out = append(out, k)

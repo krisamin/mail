@@ -87,7 +87,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 };
 
-const dnsChecks = (dns: DnsVerify) =>
+const dnsCheckList = (dns: DnsVerify) =>
   [
     ["MX", dns.mx],
     ["SPF", dns.spf],
@@ -124,7 +124,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
             DNS 검증 — <span className="font-mono">{actionData.dns.domain}</span>
           </p>
           <ul className="flex flex-col gap-1.5">
-            {dnsChecks(actionData.dns).map(([label, check]) => (
+            {dnsCheckList(actionData.dns).map(([label, check]) => (
               <li key={label} className="flex flex-col gap-0.5">
                 <div className="flex items-center gap-2">
                   <Badge
