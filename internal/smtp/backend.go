@@ -44,6 +44,12 @@ type Backend struct {
 	// checker screens connections (DNSBL reject, rDNS/HELO quarantine).
 	// nil = screening disabled.
 	checker *spam.Checker
+	// scanner is the rspamd content scanner (nil = disabled).
+	scanner *spam.Scanner
+	// greylistEnabled turns on triplet greylisting at RCPT time.
+	greylistEnabled bool
+	// greylistMinDelay is the wait before a retry passes (default 1m).
+	greylistMinDelay time.Duration
 }
 
 // NewBackend creates an inbound backend on top of store.
@@ -55,6 +61,25 @@ func NewBackend(st store.Store, hostname string) *Backend {
 // at MAIL FROM (554); missing FCrDNS + implausible HELO quarantines to Junk.
 func (b *Backend) WithSpamChecker(c *spam.Checker) *Backend {
 	b.checker = c
+	return b
+}
+
+// WithGreylist enables triplet greylisting at RCPT time. minDelay <= 0 uses
+// the 1-minute default. Senders with verified FCrDNS skip greylisting — the
+// delay penalty is reserved for the fire-and-forget bot profile.
+func (b *Backend) WithGreylist(minDelay time.Duration) *Backend {
+	if minDelay <= 0 {
+		minDelay = time.Minute
+	}
+	b.greylistEnabled = true
+	b.greylistMinDelay = minDelay
+	return b
+}
+
+// WithScanner enables rspamd content scanning at DATA time:
+// reject action → 554, header/greylist actions → Junk. Fail-open on errors.
+func (b *Backend) WithScanner(sc *spam.Scanner) *Backend {
+	b.scanner = sc
 	return b
 }
 
@@ -101,6 +126,10 @@ type Session struct {
 	// suspicious marks a weak-signal connection (no FCrDNS + bogus HELO) —
 	// delivery goes to Junk instead of INBOX.
 	suspicious bool
+	// rdnsVerified: the client passed FCrDNS (set in Mail when screening is
+	// on). Verified MTAs skip greylisting — the 451 delay penalty targets
+	// fire-and-forget bots, not real mail servers.
+	rdnsVerified bool
 }
 
 var _ gosmtp.Session = (*Session)(nil)
@@ -123,6 +152,7 @@ func (s *Session) Mail(from string, opts *gosmtp.MailOptions) error {
 		}
 		// weak signals: never reject, quarantine at delivery time
 		conn := s.backend.checker.CheckConnection(ctx, ip, s.heloName)
+		s.rdnsVerified = conn.RDNSOk
 		if conn.Suspicious {
 			s.suspicious = true
 			log.Printf("smtp: suspicious connection ip=%s helo=%q signals=%v from=%s",
@@ -136,6 +166,8 @@ func (s *Session) Mail(from string, opts *gosmtp.MailOptions) error {
 // Rcpt verifies the recipient is one of our users. Otherwise 550 5.1.1.
 // ★Rejecting here is what prevents backscatter (accept-then-bounce spam).
 // Aliases and wildcards are also deliverable (ResolveAddress).
+// With greylisting on, unverified first-contact triplets get 451 — real MTAs
+// retry (RFC 5321 §4.5.4.1), fire-and-forget bots don't come back.
 func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
@@ -151,8 +183,52 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 		}
 		return err
 	}
+
+	// Greylist AFTER recipient validation (an unknown user stays a clean 550)
+	// and only for unverified sources — FCrDNS-verified MTAs and private/dev
+	// addresses skip the delay.
+	if s.backend.greylistEnabled && !s.rdnsVerified {
+		if ip := remoteIP(s.remoteAddr); ip != nil && !isPrivateIP(ip) {
+			pass, gerr := s.backend.store.CheckGreylist(ctx,
+				greylistSourceNet(ip),
+				strings.ToLower(s.from), strings.ToLower(to),
+				s.backend.greylistMinDelay, greylistStaleAfter)
+			if gerr != nil {
+				// fail-open: an internal error must never bounce mail
+				log.Printf("smtp: greylist check failed (fail-open) from=%s to=%s: %v", s.from, to, gerr)
+			} else if !pass {
+				log.Printf("smtp: greylisted from=%s to=%s ip=%s", s.from, to, ip)
+				return &gosmtp.SMTPError{
+					Code:         451,
+					EnhancedCode: gosmtp.EnhancedCode{4, 7, 1},
+					Message:      "greylisted, please retry shortly",
+				}
+			}
+		}
+	}
+
 	s.rcptList = append(s.rcptList, rcpt{address: to, user: u})
 	return nil
+}
+
+// greylistStaleAfter: a triplet idle this long loses its trust and rejoins
+// probation (bots often reuse old from/rcpt pairs months later).
+const greylistStaleAfter = 30 * 24 * time.Hour
+
+// greylistSourceNet widens the key: legitimate providers retry from sibling
+// hosts, so IPv4 keys on the /24 and IPv6 on the /64.
+func greylistSourceNet(ip net.IP) string {
+	if v4 := ip.To4(); v4 != nil {
+		return fmt.Sprintf("%d.%d.%d.0/24", v4[0], v4[1], v4[2])
+	}
+	v6 := ip.To16()
+	masked := v6.Mask(net.CIDRMask(64, 128))
+	return masked.String() + "/64"
+}
+
+// isPrivateIP reports loopback/RFC1918/link-local (mirrors spam.isPrivate).
+func isPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
 }
 
 // Data receives the body and delivers it to each recipient's INBOX.
@@ -172,9 +248,36 @@ func (s *Session) Data(r io.Reader) error {
 		return err
 	}
 
-	// SPF/DKIM/DMARC verification → record Authentication-Results + policy decision
+	// rspamd content scan — reject beats everything; junk verdicts merge
+	// with the connection-screening quarantine below. Fail-open on errors.
 	var authHeader []byte
 	folder := "INBOX"
+	if s.backend.scanner != nil {
+		ip := remoteIP(s.remoteAddr)
+		var rcptAddrList []string
+		for _, rc := range s.rcptList {
+			rcptAddrList = append(rcptAddrList, rc.address)
+		}
+		result, err := s.backend.scanner.Scan(context.Background(), raw, ip, s.heloName, s.from, rcptAddrList)
+		if err != nil {
+			log.Printf("smtp: rspamd scan unavailable (fail-open) from=%s: %v", s.from, err)
+		} else {
+			switch result.Action {
+			case spam.ScanReject:
+				log.Printf("smtp: rspamd reject from=%s score=%.1f/%.1f action=%q",
+					s.from, result.Score, result.RequiredScore, result.RawAction)
+				return &gosmtp.SMTPError{
+					Code:         554,
+					EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
+					Message:      "message rejected as spam",
+				}
+			case spam.ScanJunk:
+				folder = "Junk"
+				log.Printf("smtp: rspamd quarantine → Junk from=%s score=%.1f/%.1f action=%q",
+					s.from, result.Score, result.RequiredScore, result.RawAction)
+			}
+		}
+	}
 	if s.suspicious {
 		// connection screening (no FCrDNS + implausible HELO) → quarantine
 		folder = "Junk"

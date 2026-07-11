@@ -121,6 +121,21 @@ func main() {
 		mxBackend.WithSpamChecker(spam.NewChecker(zoneList))
 		log.Printf("maild: connection screening active (dnsbl=%v, rDNS/HELO quarantine)", zoneList)
 	}
+	// greylisting: first-contact triplets get 451, retries pass.
+	// FCrDNS-verified senders skip it (requires the spam checker above).
+	if os.Getenv("MAIL_GREYLIST") == "true" {
+		delay := time.Minute
+		if d, err := time.ParseDuration(env("MAIL_GREYLIST_DELAY", "1m")); err == nil && d > 0 {
+			delay = d
+		}
+		mxBackend.WithGreylist(delay)
+		log.Printf("maild: greylisting active (delay=%s, FCrDNS-verified senders exempt)", delay)
+	}
+	// rspamd content scanning (reject → 554, add-header/greylist → Junk)
+	if rspamdURL := os.Getenv("MAIL_RSPAMD_URL"); rspamdURL != "" {
+		mxBackend.WithScanner(spam.NewScanner(rspamdURL, os.Getenv("MAIL_RSPAMD_PASSWORD")))
+		log.Printf("maild: rspamd scanning active (url=%s)", rspamdURL)
+	}
 	smtpSrv := gosmtp.NewServer(mxBackend)
 	smtpSrv.Addr = smtpAddr
 	smtpSrv.Domain = hostname

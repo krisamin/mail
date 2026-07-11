@@ -274,6 +274,14 @@ type Store interface {
 	// position order — the delivery path (SMTP inbound/submission) evaluates
 	// these on INBOX-bound mail.
 	ListActiveFilterRule(ctx context.Context, accountID int64) ([]*FilterRule, error)
+
+	// CheckGreylist records/updates the (sourceNet, from, rcpt) triplet and
+	// reports whether the message may pass (0010). First contact returns
+	// false (caller answers 451); a retry at least minDelay after first_seen
+	// passes and the triplet stays trusted. Rows idle longer than staleAfter
+	// are treated as new. Errors must fail-open at the caller (an internal
+	// error must never bounce mail).
+	CheckGreylist(ctx context.Context, sourceNet, from, rcpt string, minDelay, staleAfter time.Duration) (bool, error)
 }
 
 // AdminStore is the extended interface used by the management plane (Admin API) (Phase 3).
