@@ -5,12 +5,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/krisamin/mail/internal/store"
 )
 
 func TestBuildDSN(t *testing.T) {
 	m := &store.OutboundMessage{
-		ID:           42,
+		ID:           uuid.MustParse("00000000-0000-0000-0000-000000000042"),
 		EnvelopeFrom: "maro@kirby.so",
 		EnvelopeRcpt: "nobody@example.com",
 		Raw: []byte("From: maro@kirby.so\r\nTo: nobody@example.com\r\nSubject: hello\r\n\r\n" +

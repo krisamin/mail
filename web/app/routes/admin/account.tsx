@@ -65,7 +65,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
           method: "POST",
           body: {
             localPart: String(form.get("localPart") ?? ""),
-            domainId: Number(form.get("domainId")),
+            domainId: String(form.get("domainId")),
           },
         });
         return { ok: true as const };
@@ -115,7 +115,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
   const nav = useNavigation();
   const busy = nav.state !== "idle";
   // Which form is in flight — label only that button, not every control.
-  const pending = (intent: string, idField?: string, idValue?: number) =>
+  const pending = (intent: string, idField?: string, idValue?: string) =>
     busy &&
     nav.formData?.get("intent") === intent &&
     (idField === undefined || nav.formData?.get(idField) === String(idValue));

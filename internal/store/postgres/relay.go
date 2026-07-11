@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/krisamin/mail/internal/store"
@@ -149,7 +150,7 @@ func (s *Store) UpdateRelay(ctx context.Context, r *store.Relay) (*store.Relay, 
 }
 
 // DeleteRelay deletes a relay. The domain's relay_id is FK ON DELETE SET NULL.
-func (s *Store) DeleteRelay(ctx context.Context, id int64) error {
+func (s *Store) DeleteRelay(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM relay WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("relay delete: %w", err)
@@ -161,7 +162,7 @@ func (s *Store) DeleteRelay(ctx context.Context, id int64) error {
 }
 
 // SetDomainRelay assigns the domain's outbound relay (nil = use default).
-func (s *Store) SetDomainRelay(ctx context.Context, domainID int64, relayID *int64) error {
+func (s *Store) SetDomainRelay(ctx context.Context, domainID uuid.UUID, relayID *uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE domain SET relay_id = $2 WHERE id = $1`, domainID, relayID)
 	if err != nil {

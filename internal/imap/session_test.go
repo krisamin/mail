@@ -11,6 +11,7 @@ import (
 	goimap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/emersion/go-imap/v2/imapserver"
+	"github.com/google/uuid"
 
 	"github.com/krisamin/mail/internal/store/postgres"
 )
@@ -48,7 +49,7 @@ func setupServer(t *testing.T) (addr string) {
 	// seed: domain + account + address + app password + INBOX (0006 model)
 	local := testAddr[:strings.LastIndex(testAddr, "@")]
 	domain := testAddr[strings.LastIndex(testAddr, "@")+1:]
-	var domainID, accountID int64
+	var domainID, accountID uuid.UUID
 	if err := st.Pool().QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ($1) RETURNING id`, domain).Scan(&domainID); err != nil {
 		t.Fatalf("domain seed: %v", err)

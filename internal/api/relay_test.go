@@ -15,7 +15,7 @@ func TestRelayEndpoints(t *testing.T) {
 	if code != 201 {
 		t.Fatalf("domain: %d", code)
 	}
-	domID := int64(dom["id"].(float64))
+	domID := dom["id"].(string)
 
 	// 1) Create (with password) → response has no password + hasPassword=true
 	code, rl, _ := call(t, srv, "POST", "/api/admin/relay", map[string]any{
@@ -31,7 +31,7 @@ func TestRelayEndpoints(t *testing.T) {
 	if rl["hasPassword"] != true {
 		t.Fatalf("hasPassword should be true: %v", rl)
 	}
-	relayID := int64(rl["id"].(float64))
+	relayID := rl["id"].(string)
 	t.Log("✔ relay created + password not exposed (hasPassword only)")
 
 	// 2) List also has no password
@@ -45,7 +45,7 @@ func TestRelayEndpoints(t *testing.T) {
 	t.Log("✔ list does not expose password")
 
 	// 3) Update — empty password string = keep (hasPassword still true)
-	code, updated, _ := call(t, srv, "PUT", fmt.Sprintf("/api/admin/relay/%d", relayID),
+	code, updated, _ := call(t, srv, "PUT", fmt.Sprintf("/api/admin/relay/%s", relayID),
 		map[string]any{"name": "resend", "host": "smtp2.resend.com", "port": 587,
 			"username": "resend", "password": "", "isDefault": true})
 	if code != 200 || updated["host"] != "smtp2.resend.com" || updated["hasPassword"] != true {
@@ -54,12 +54,12 @@ func TestRelayEndpoints(t *testing.T) {
 	t.Log("✔ empty password string on update = keep existing")
 
 	// 4) Assign + unassign domain relay
-	code, _, _ = call(t, srv, "PUT", fmt.Sprintf("/api/admin/domain/%d/relay", domID),
+	code, _, _ = call(t, srv, "PUT", fmt.Sprintf("/api/admin/domain/%s/relay", domID),
 		map[string]any{"relayId": relayID})
 	if code != 200 {
 		t.Fatalf("assign domain relay: %d", code)
 	}
-	code, _, _ = call(t, srv, "PUT", fmt.Sprintf("/api/admin/domain/%d/relay", domID),
+	code, _, _ = call(t, srv, "PUT", fmt.Sprintf("/api/admin/domain/%s/relay", domID),
 		map[string]any{"relayId": nil})
 	if code != 200 {
 		t.Fatalf("unassign domain relay: %d", code)
@@ -67,11 +67,11 @@ func TestRelayEndpoints(t *testing.T) {
 	t.Log("✔ domain relay assign/unassign")
 
 	// 5) Delete
-	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/relay/%d", relayID), nil)
+	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/relay/%s", relayID), nil)
 	if code != 204 {
 		t.Fatalf("delete relay: %d", code)
 	}
-	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/relay/%d", relayID), nil)
+	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/relay/%s", relayID), nil)
 	if code != 404 {
 		t.Fatalf("deleting a nonexistent relay should be 404: %d", code)
 	}

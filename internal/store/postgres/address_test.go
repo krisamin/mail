@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -135,7 +136,7 @@ func TestAddressModel(t *testing.T) {
 
 	// 7) CanSendAs
 	for _, tc := range []struct {
-		accountID int64
+		accountID uuid.UUID
 		addr      string
 		want      bool
 	}{
@@ -170,7 +171,7 @@ func TestAddressModel(t *testing.T) {
 	// Deleting the last regular address is refused — if guest deletes gyestt only primary remains.
 	// Deleting guest's primary (guest@krisam.in) is OK because gyestt exists,
 	// then deleting gyestt (the last one) must be refused.
-	var guestPrimaryID int64
+	var guestPrimaryID uuid.UUID
 	guestAddressList, _ := st.ListAccountAddress(ctx, guest.ID)
 	for _, a := range guestAddressList {
 		if a.DomainName == "krisam.in" {
@@ -190,7 +191,7 @@ func TestAddressModel(t *testing.T) {
 	t.Log("✔ listing (JOIN fields) + last-address deletion guard")
 
 	// catch-all can be deleted even if it's the last one (not a regular address)
-	var catchAllID int64
+	var catchAllID uuid.UUID
 	maroAddressList, _ := st.ListAccountAddress(ctx, maro.ID)
 	for _, a := range maroAddressList {
 		if a.LocalPart == "*" {

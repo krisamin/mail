@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	goimap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/emersion/go-imap/v2/imapserver"
@@ -53,7 +55,7 @@ func setupServers(t *testing.T) *testEnv {
 	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	// seed: krisam.in domain + 2 accounts (maro has an INBOX, shiro doesn't — verifies auto-creation)
-	var domainID int64
+	var domainID uuid.UUID
 	if err := st.Pool().QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('krisam.in') RETURNING id`).Scan(&domainID); err != nil {
 		t.Fatalf("domain seed: %v", err)
@@ -64,7 +66,7 @@ func setupServers(t *testing.T) *testEnv {
 	}
 	for _, addr := range []string{testAddr, testAddr2} {
 		local := addr[:strings.LastIndex(addr, "@")]
-		var accountID int64
+		var accountID uuid.UUID
 		if err := st.Pool().QueryRow(ctx,
 			`INSERT INTO account (oidc_subject, oidc_email) VALUES ('test:' || $1::text, $1) RETURNING id`,
 			addr).Scan(&accountID); err != nil {

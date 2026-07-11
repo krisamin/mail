@@ -88,12 +88,12 @@ func (w *Worker) deliverDSN(ctx context.Context, m *store.OutboundMessage, reaso
 	}
 	mbox, err := w.store.GetMailbox(ctx, sender.ID, "INBOX")
 	if err != nil {
-		log.Printf("queue: DSN INBOX lookup failed account=%d: %v", sender.ID, err)
+		log.Printf("queue: DSN INBOX lookup failed account=%s: %v", sender.ID, err)
 		return
 	}
 	dsn := buildDSN(w.hostname, m, reason, time.Now())
 	if _, err := w.store.AppendMessage(ctx, mbox.ID, dsn, nil, time.Now()); err != nil {
-		log.Printf("queue: DSN delivery failed account=%d: %v", sender.ID, err)
+		log.Printf("queue: DSN delivery failed account=%s: %v", sender.ID, err)
 		return
 	}
 	log.Printf("queue: DSN delivered to=%s (original recipient %s)", m.EnvelopeFrom, m.EnvelopeRcpt)

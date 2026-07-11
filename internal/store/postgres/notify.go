@@ -3,9 +3,10 @@ package postgres
 import (
 	"context"
 	"log"
-	"strconv"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Notifier — mailbox change notification hub based on Postgres LISTEN/NOTIFY.
@@ -27,17 +28,17 @@ type Notifier struct {
 	store *Store
 
 	mu     sync.Mutex
-	subMap map[int64]map[chan struct{}]bool // mailboxID → subscriber set
+	subMap map[uuid.UUID]map[chan struct{}]bool // mailboxID → subscriber set
 }
 
 // NewNotifier creates the hub. Run must be started in a separate goroutine for it to work.
 func NewNotifier(st *Store) *Notifier {
-	return &Notifier{store: st, subMap: map[int64]map[chan struct{}]bool{}}
+	return &Notifier{store: st, subMap: map[uuid.UUID]map[chan struct{}]bool{}}
 }
 
 // Subscribe returns a mailbox change channel. The second return value is the
 // cancel function — must be called when IDLE ends (prevents leaks).
-func (n *Notifier) Subscribe(mailboxID int64) (<-chan struct{}, func()) {
+func (n *Notifier) Subscribe(mailboxID uuid.UUID) (<-chan struct{}, func()) {
 	// buffer 1 — coalesce on notification bursts (IDLE only needs a "changed" signal)
 	ch := make(chan struct{}, 1)
 	n.mu.Lock()
@@ -59,7 +60,7 @@ func (n *Notifier) Subscribe(mailboxID int64) (<-chan struct{}, func()) {
 }
 
 // dispatch sends a non-blocking signal to all subscribers of the mailbox.
-func (n *Notifier) dispatch(mailboxID int64) {
+func (n *Notifier) dispatch(mailboxID uuid.UUID) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for ch := range n.subMap[mailboxID] {
@@ -110,7 +111,7 @@ func (n *Notifier) listenOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		id, err := strconv.ParseInt(notification.Payload, 10, 64)
+		id, err := uuid.Parse(notification.Payload)
 		if err != nil {
 			continue
 		}

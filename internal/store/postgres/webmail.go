@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/krisamin/mail/internal/store"
@@ -17,7 +17,7 @@ import (
 
 // ListMailboxSummary returns the account's mailboxes with total/unseen counts.
 // INBOX sorts first, the rest alphabetically.
-func (s *Store) ListMailboxSummary(ctx context.Context, accountID int64) ([]*store.MailboxSummary, error) {
+func (s *Store) ListMailboxSummary(ctx context.Context, accountID uuid.UUID) ([]*store.MailboxSummary, error) {
 	const q = `
 		SELECT mb.name,
 			(SELECT count(*) FROM message m WHERE m.mailbox_id = mb.id) AS num_messages,
@@ -52,7 +52,7 @@ func (s *Store) ListMailboxSummary(ctx context.Context, accountID int64) ([]*sto
 // beforeUID=0 starts at the top; otherwise only messages with uid < beforeUID
 // are returned (cursor pagination — stable under concurrent delivery, unlike
 // OFFSET which shifts when new mail arrives between pages).
-func (s *Store) ListMessagePage(ctx context.Context, accountID int64, mailboxName string, limit int, beforeUID uint32) ([]*store.Message, error) {
+func (s *Store) ListMessagePage(ctx context.Context, accountID uuid.UUID, mailboxName string, limit int, beforeUID uint32) ([]*store.Message, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -72,7 +72,7 @@ func (s *Store) ListMessagePage(ctx context.Context, accountID int64, mailboxNam
 	defer rows.Close()
 
 	var messageList []*store.Message
-	byID := map[int64]*store.Message{}
+	byID := map[uuid.UUID]*store.Message{}
 	for rows.Next() {
 		var m store.Message
 		if err := rows.Scan(&m.ID, &m.MailboxID, &m.UID, &m.BlobID, &m.SizeBytes,
@@ -93,7 +93,7 @@ func (s *Store) ListMessagePage(ctx context.Context, accountID int64, mailboxNam
 
 // GetAccountMessage loads one message with an ownership check baked into the
 // JOIN. Returns the message plus the name of the mailbox it lives in.
-func (s *Store) GetAccountMessage(ctx context.Context, accountID, messageID int64) (*store.Message, string, error) {
+func (s *Store) GetAccountMessage(ctx context.Context, accountID, messageID uuid.UUID) (*store.Message, string, error) {
 	const q = `
 		SELECT m.id, m.mailbox_id, m.uid, m.blob_id, m.size_bytes, m.internal_date,
 		       COALESCE(m.subject, ''), COALESCE(m.from_addr, ''), m.created_at, mb.name
@@ -111,7 +111,7 @@ func (s *Store) GetAccountMessage(ctx context.Context, accountID, messageID int6
 	if err != nil {
 		return nil, "", fmt.Errorf("message lookup: %w", err)
 	}
-	if err := s.loadFlag(ctx, map[int64]*store.Message{m.ID: &m}); err != nil {
+	if err := s.loadFlag(ctx, map[uuid.UUID]*store.Message{m.ID: &m}); err != nil {
 		return nil, "", err
 	}
 	return &m, mailboxName, nil
@@ -122,7 +122,7 @@ func (s *Store) GetAccountMessage(ctx context.Context, accountID, messageID int6
 // The message gets a fresh UID in the destination (IMAP UIDs are
 // mailbox-scoped and never reused); both mailboxes are notified so IDLE
 // sessions see the disappearance/appearance immediately.
-func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID int64, destName string) error {
+func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID uuid.UUID, destName string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID int
 	defer tx.Rollback(ctx)
 
 	// ownership check + source mailbox
-	var srcMailboxID int64
+	var srcMailboxID uuid.UUID
 	err = tx.QueryRow(ctx, `
 		SELECT m.mailbox_id FROM message m
 		JOIN mailbox mb ON mb.id = m.mailbox_id
@@ -143,7 +143,7 @@ func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID int
 	}
 
 	// destination (create on demand)
-	var destMailboxID int64
+	var destMailboxID uuid.UUID
 	err = tx.QueryRow(ctx,
 		`SELECT id FROM mailbox WHERE account_id = $1 AND name = $2`,
 		accountID, destName).Scan(&destMailboxID)
@@ -173,9 +173,9 @@ func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID int
 		return fmt.Errorf("move update: %w", err)
 	}
 
-	for _, id := range []int64{srcMailboxID, destMailboxID} {
+	for _, id := range []uuid.UUID{srcMailboxID, destMailboxID} {
 		if _, err := tx.Exec(ctx, `SELECT pg_notify('mailbox_change', $1)`,
-			strconv.FormatInt(id, 10)); err != nil {
+			id.String()); err != nil {
 			return fmt.Errorf("move notify: %w", err)
 		}
 	}
@@ -185,8 +185,8 @@ func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID int
 // DeleteAccountMessage physically deletes one message (ownership-checked).
 // The webmail layer uses this only for messages already in Trash — everything
 // else is moved to Trash first (two-step delete like every mail client).
-func (s *Store) DeleteAccountMessage(ctx context.Context, accountID, messageID int64) error {
-	var mailboxID int64
+func (s *Store) DeleteAccountMessage(ctx context.Context, accountID, messageID uuid.UUID) error {
+	var mailboxID uuid.UUID
 	err := s.pool.QueryRow(ctx, `
 		DELETE FROM message m
 		USING mailbox mb
@@ -199,7 +199,7 @@ func (s *Store) DeleteAccountMessage(ctx context.Context, accountID, messageID i
 		return fmt.Errorf("message delete: %w", err)
 	}
 	if _, err := s.pool.Exec(ctx, `SELECT pg_notify('mailbox_change', $1)`,
-		strconv.FormatInt(mailboxID, 10)); err != nil {
+		mailboxID.String()); err != nil {
 		// notification failure is not fatal — fallback polling absorbs it
 		_ = err
 	}
@@ -208,7 +208,7 @@ func (s *Store) DeleteAccountMessage(ctx context.Context, accountID, messageID i
 
 // SetAccountMessageFlag replaces the flags of an account-owned message and
 // notifies the mailbox (flag changes show up in IMAP IDLE too).
-func (s *Store) SetAccountMessageFlag(ctx context.Context, accountID, messageID int64, flagList []string) error {
+func (s *Store) SetAccountMessageFlag(ctx context.Context, accountID, messageID uuid.UUID, flagList []string) error {
 	m, _, err := s.GetAccountMessage(ctx, accountID, messageID)
 	if err != nil {
 		return err
@@ -217,14 +217,14 @@ func (s *Store) SetAccountMessageFlag(ctx context.Context, accountID, messageID 
 		return err
 	}
 	if _, err := s.pool.Exec(ctx, `SELECT pg_notify('mailbox_change', $1)`,
-		strconv.FormatInt(m.MailboxID, 10)); err != nil {
+		m.MailboxID.String()); err != nil {
 		_ = err
 	}
 	return nil
 }
 
 // EnsureMailbox finds or creates a mailbox by name (webmail Sent/Trash flows).
-func (s *Store) EnsureMailbox(ctx context.Context, accountID int64, name string) (*store.Mailbox, error) {
+func (s *Store) EnsureMailbox(ctx context.Context, accountID uuid.UUID, name string) (*store.Mailbox, error) {
 	box, err := s.GetMailbox(ctx, accountID, name)
 	if errors.Is(err, store.ErrNotFound) {
 		box, err = s.CreateMailbox(ctx, accountID, name)
@@ -233,7 +233,7 @@ func (s *Store) EnsureMailbox(ctx context.Context, accountID int64, name string)
 }
 
 // loadFlag bulk-loads flags for the given messages (shared by list/detail).
-func (s *Store) loadFlag(ctx context.Context, byID map[int64]*store.Message) error {
+func (s *Store) loadFlag(ctx context.Context, byID map[uuid.UUID]*store.Message) error {
 	if len(byID) == 0 {
 		return nil
 	}
@@ -245,7 +245,7 @@ func (s *Store) loadFlag(ctx context.Context, byID map[int64]*store.Message) err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var mid int64
+		var mid uuid.UUID
 		var flag string
 		if err := rows.Scan(&mid, &flag); err != nil {
 			return err

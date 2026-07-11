@@ -5,11 +5,13 @@
 // hook, this works anywhere (k8s, etc.), and both empty and existing DBs
 // converge along the same path.
 //
-// Adopting an existing DB (baseline): if schema_migration is empty but the
-// domain table already exists, the DB is assumed to have been created by the
-// initdb hook, and all currently known migrations are merely recorded as
-// "already applied" (not re-executed). This is a one-off rule that only
-// applies to the dev DB as of that point (0001~0005).
+// UUID reset (2026-07): every entity key moved from BIGSERIAL to UUID and the
+// step-by-step migrations were squashed into a fresh-start 0001. A database
+// created by the pre-UUID era is incompatible — the runner detects it (domain
+// table exists but no schema_migration record for 0001_init, or a non-uuid
+// domain.id) and refuses to start so nobody silently mixes the two worlds.
+// Wipe the database (DROP SCHEMA public CASCADE; CREATE SCHEMA public;) to
+// migrate — discarding the data was an explicit decision.
 package migration
 
 import (
@@ -60,26 +62,27 @@ func Run(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	// baseline: no history but the schema exists → adopting an initdb-hook-era DB.
-	// ★The baseline set is fixed to 0001~0005, which existed in the hook era —
-	// marking later migrations (0006+) as "applied" would actually skip them.
-	if len(appliedMap) == 0 {
+	// Pre-UUID era guard: a schema exists but 0001_init was never recorded by
+	// this (squashed, UUID) runner — that database was built by the old
+	// BIGSERIAL migrations and is incompatible. Also catch a stale history
+	// where domain.id is not uuid. Refuse to start instead of corrupting.
+	if !appliedMap["0001_init"] {
 		var domainExists *string
 		if err := conn.QueryRow(ctx, `SELECT to_regclass('public.domain')::text`).Scan(&domainExists); err != nil {
-			return fmt.Errorf("migration: baseline detection: %w", err)
+			return fmt.Errorf("migration: era detection: %w", err)
 		}
 		if domainExists != nil {
-			baselineList := []string{
-				"0001_init", "0002_outbound_queue", "0003_dkim_key", "0004_alias", "0005_relay",
-			}
-			for _, name := range baselineList {
-				if _, err := conn.Exec(ctx,
-					`INSERT INTO schema_migration (version) VALUES ($1)`, name); err != nil {
-					return fmt.Errorf("migration: baseline record(%s): %w", name, err)
-				}
-				appliedMap[name] = true
-			}
-			log.Printf("migration: existing schema detected — recorded %d baseline entries", len(baselineList))
+			return fmt.Errorf("migration: existing pre-UUID schema detected — wipe the database (DROP SCHEMA public CASCADE; CREATE SCHEMA public;) before starting this version")
+		}
+	} else {
+		var idType string
+		if err := conn.QueryRow(ctx, `
+			SELECT COALESCE((SELECT data_type FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'domain' AND column_name = 'id'), '')`).Scan(&idType); err != nil {
+			return fmt.Errorf("migration: era detection: %w", err)
+		}
+		if idType != "" && idType != "uuid" {
+			return fmt.Errorf("migration: domain.id is %s (pre-UUID schema with stale history) — wipe the database before starting this version", idType)
 		}
 	}
 

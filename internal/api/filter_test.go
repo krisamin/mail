@@ -28,7 +28,7 @@ func TestFilterRule(t *testing.T) {
 	if code != 201 || rule1["position"].(float64) != 1 {
 		t.Fatalf("create rule1: %d %v", code, rule1)
 	}
-	rule1ID := int64(rule1["id"].(float64))
+	rule1ID := rule1["id"].(string)
 
 	// invalid enum → 400
 	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "POST", "/api/me/filter", map[string]any{
@@ -56,21 +56,21 @@ func TestFilterRule(t *testing.T) {
 	if code != 201 || rule2["position"].(float64) != 2 {
 		t.Fatalf("create rule2: %d %v", code, rule2)
 	}
-	rule2ID := int64(rule2["id"].(float64))
+	rule2ID := rule2["id"].(string)
 
 	// 3) reorder — rule2 up, now first
 	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "POST",
-		fmt.Sprintf("/api/me/filter/%d/move", rule2ID), map[string]int{"direction": -1})
+		fmt.Sprintf("/api/me/filter/%s/move", rule2ID), map[string]int{"direction": -1})
 	if code != 204 {
 		t.Fatalf("move up: %d", code)
 	}
 	code, _, ruleList := callAs(t, srv, "maro@krisam.in", "", "GET", "/api/me/filter", nil)
-	if code != 200 || len(ruleList) != 2 || int64(ruleList[0]["id"].(float64)) != rule2ID {
+	if code != 200 || len(ruleList) != 2 || ruleList[0]["id"].(string) != rule2ID {
 		t.Fatalf("order after move: %v", ruleList)
 	}
 	// up again at the edge — no-op, still 204
 	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "POST",
-		fmt.Sprintf("/api/me/filter/%d/move", rule2ID), map[string]int{"direction": -1})
+		fmt.Sprintf("/api/me/filter/%s/move", rule2ID), map[string]int{"direction": -1})
 	if code != 204 {
 		t.Fatalf("edge move: %d", code)
 	}
@@ -78,7 +78,7 @@ func TestFilterRule(t *testing.T) {
 
 	// 4) cross-account isolation — guest cannot touch maro's rule
 	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "DELETE",
-		fmt.Sprintf("/api/me/filter/%d", rule1ID), nil)
+		fmt.Sprintf("/api/me/filter/%s", rule1ID), nil)
 	if code != 404 {
 		t.Fatalf("cross-account delete should be 404: %d", code)
 	}
@@ -153,7 +153,7 @@ func TestFilterRule(t *testing.T) {
 
 	// 8) update — deactivate the discard rule, mail passes again
 	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "PUT",
-		fmt.Sprintf("/api/me/filter/%d", rule2ID), map[string]any{
+		fmt.Sprintf("/api/me/filter/%s", rule2ID), map[string]any{
 			"name": "drop", "active": false, "field": "subject", "matchType": "contains",
 			"pattern": "buy now", "action": "discard",
 		})

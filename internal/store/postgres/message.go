@@ -5,9 +5,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/krisamin/mail/internal/store"
@@ -15,7 +15,7 @@ import (
 
 // AppendMessage appends a message to a mailbox.
 // The UID is assigned by reading and incrementing mailbox.uid_next in a transaction.
-func (s *Store) AppendMessage(ctx context.Context, mailboxID int64, raw []byte, flagList []string, internalDate time.Time) (*store.Message, error) {
+func (s *Store) AppendMessage(ctx context.Context, mailboxID uuid.UUID, raw []byte, flagList []string, internalDate time.Time) (*store.Message, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
@@ -36,7 +36,7 @@ func (s *Store) AppendMessage(ctx context.Context, mailboxID int64, raw []byte, 
 
 	// 2) store the blob
 	sum := sha256.Sum256(raw)
-	var blobID int64
+	var blobID uuid.UUID
 	err = tx.QueryRow(ctx,
 		`INSERT INTO message_blob (content, sha256) VALUES ($1, $2) RETURNING id`,
 		raw, sum[:]).Scan(&blobID)
@@ -73,7 +73,7 @@ func (s *Store) AppendMessage(ctx context.Context, mailboxID int64, raw []byte, 
 	// 6) change notification — published at commit time so IDLE sessions wake immediately
 	if _, err := tx.Exec(ctx,
 		`SELECT pg_notify('mailbox_change', $1)`,
-		strconv.FormatInt(mailboxID, 10)); err != nil {
+		mailboxID.String()); err != nil {
 		return nil, fmt.Errorf("change notify: %w", err)
 	}
 
@@ -84,7 +84,7 @@ func (s *Store) AppendMessage(ctx context.Context, mailboxID int64, raw []byte, 
 }
 
 // ListMessage returns all messages of a mailbox in UID order (flags included).
-func (s *Store) ListMessage(ctx context.Context, mailboxID int64) ([]*store.Message, error) {
+func (s *Store) ListMessage(ctx context.Context, mailboxID uuid.UUID) ([]*store.Message, error) {
 	const q = `
 		SELECT id, mailbox_id, uid, blob_id, size_bytes, internal_date,
 		       COALESCE(subject, ''), COALESCE(from_addr, ''), created_at
@@ -96,7 +96,7 @@ func (s *Store) ListMessage(ctx context.Context, mailboxID int64) ([]*store.Mess
 	defer rows.Close()
 
 	var messageList []*store.Message
-	byID := map[int64]*store.Message{}
+	byID := map[uuid.UUID]*store.Message{}
 	for rows.Next() {
 		var m store.Message
 		if err := rows.Scan(&m.ID, &m.MailboxID, &m.UID, &m.BlobID, &m.SizeBytes,
@@ -120,7 +120,7 @@ func (s *Store) ListMessage(ctx context.Context, mailboxID int64) ([]*store.Mess
 		}
 		defer frows.Close()
 		for frows.Next() {
-			var mid int64
+			var mid uuid.UUID
 			var flag string
 			if err := frows.Scan(&mid, &flag); err != nil {
 				return nil, err
@@ -137,7 +137,7 @@ func (s *Store) ListMessage(ctx context.Context, mailboxID int64) ([]*store.Mess
 }
 
 // GetMessageBlob returns the raw body of a message.
-func (s *Store) GetMessageBlob(ctx context.Context, messageID int64) ([]byte, error) {
+func (s *Store) GetMessageBlob(ctx context.Context, messageID uuid.UUID) ([]byte, error) {
 	const q = `
 		SELECT b.content FROM message_blob b
 		JOIN message m ON m.blob_id = b.id WHERE m.id = $1`
@@ -153,7 +153,7 @@ func (s *Store) GetMessageBlob(ctx context.Context, messageID int64) ([]byte, er
 }
 
 // SetFlag replaces the message's flags with the given set.
-func (s *Store) SetFlag(ctx context.Context, messageID int64, flagList []string) error {
+func (s *Store) SetFlag(ctx context.Context, messageID uuid.UUID, flagList []string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -175,7 +175,7 @@ func (s *Store) SetFlag(ctx context.Context, messageID int64, flagList []string)
 
 // ExpungeDeleted physically deletes messages flagged \Deleted and returns the deleted UIDs.
 // nil uids means the whole mailbox; otherwise only the given UIDs (IMAP UID EXPUNGE).
-func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID int64, uidSet []uint32) ([]uint32, error) {
+func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID uuid.UUID, uidSet []uint32) ([]uint32, error) {
 	const q = `
 		DELETE FROM message m
 		WHERE m.mailbox_id = $1
@@ -210,7 +210,7 @@ func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID int64, uidSet []ui
 	if len(out) > 0 {
 		if _, err := s.pool.Exec(ctx,
 			`SELECT pg_notify('mailbox_change', $1)`,
-			strconv.FormatInt(mailboxID, 10)); err != nil {
+			mailboxID.String()); err != nil {
 			// notification failure is not fatal — fallback polling absorbs it
 			_ = err
 		}
@@ -219,7 +219,7 @@ func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID int64, uidSet []ui
 }
 
 // CopyMessage copies a message to another mailbox (blob shared, metadata duplicated).
-func (s *Store) CopyMessage(ctx context.Context, messageID, destMailboxID int64) (*store.Message, error) {
+func (s *Store) CopyMessage(ctx context.Context, messageID, destMailboxID uuid.UUID) (*store.Message, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -268,8 +268,8 @@ func (s *Store) CopyMessage(ctx context.Context, messageID, destMailboxID int64)
 	return &m, nil
 }
 
-func mapKeyList(m map[int64]*store.Message) []int64 {
-	out := make([]int64, 0, len(m))
+func mapKeyList(m map[uuid.UUID]*store.Message) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(m))
 	for k := range m {
 		out = append(out, k)
 	}

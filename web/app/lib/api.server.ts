@@ -48,17 +48,17 @@ export const apiFetch = async <T>(
 // ── DTO types (kept in sync with Go internal/api) ───────────
 
 export type Domain = {
-  id: number;
+  id: string;
   name: string;
   active: boolean;
   createdAt: string;
   dkimSelector: string;
   dkimPublicTxt?: string;
-  relayId?: number | null;
+  relayId?: string | null;
 };
 
 export type Account = {
-  id: number;
+  id: string;
   subject: string;
   email: string;
   kind: "user" | "service";
@@ -67,7 +67,7 @@ export type Account = {
 };
 
 export type AppPassword = {
-  id: number;
+  id: string;
   label: string;
   scopeList: string[];
   lastUsed: string | null;
@@ -76,11 +76,11 @@ export type AppPassword = {
 };
 
 export type Address = {
-  id: number;
-  domainId: number;
+  id: string;
+  domainId: string;
   domainName: string;
   localPart: string; // '*' = catch-all
-  accountId: number;
+  accountId: string;
   accountEmail: string;
   createdAt: string;
 };
@@ -92,7 +92,7 @@ export type AccountOverview = {
 };
 
 export type QueueItem = {
-  id: number;
+  id: string;
   from: string;
   rcpt: string;
   status: string;
@@ -105,7 +105,7 @@ export type QueueItem = {
 export type DKIMResult = { selector: string; dnsName: string; dnsTxt: string };
 
 export type Relay = {
-  id: number;
+  id: string;
   name: string;
   host: string;
   port: number;
@@ -146,7 +146,7 @@ export type MailboxSummary = {
 };
 
 export type MessageRow = {
-  id: number;
+  id: string;
   uid: number;
   subject: string;
   fromAddr: string;
@@ -186,7 +186,7 @@ export type MessageDetail = MessageRow & {
 export type SendResult = { delivered: number; queued: number };
 
 export type FilterRule = {
-  id: number;
+  id: string;
   position: number;
   name: string;
   active: boolean;

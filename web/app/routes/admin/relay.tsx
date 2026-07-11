@@ -78,7 +78,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
         const relayIdRaw = String(form.get("relayId") ?? "");
         await apiFetch(user.idToken, `/api/admin/domain/${form.get("domainId")}/relay`, {
           method: "PUT",
-          body: { relayId: relayIdRaw === "" ? null : Number(relayIdRaw) },
+          body: { relayId: relayIdRaw === "" ? null : String(relayIdRaw) },
         });
         return { ok: true as const };
       }

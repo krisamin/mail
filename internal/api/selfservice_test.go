@@ -94,7 +94,7 @@ func TestSelfService(t *testing.T) {
 	if code != 201 || pw["plaintext"] == nil {
 		t.Fatalf("issue: %d %v", code, pw)
 	}
-	guestPwID := int64(pw["appPassword"].(map[string]any)["id"].(float64))
+	guestPwID := pw["appPassword"].(map[string]any)["id"].(string)
 	t.Logf("✔ own app password issued: %v", pw["plaintext"])
 
 	code, _, passwordList := callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/app-password", nil)
@@ -104,7 +104,7 @@ func TestSelfService(t *testing.T) {
 
 	// 4) IDOR prevention — maro tries to revoke guest's password → 404
 	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "DELETE",
-		fmt.Sprintf("/api/me/app-password/%d", guestPwID), nil)
+		fmt.Sprintf("/api/me/app-password/%s", guestPwID), nil)
 	if code != 404 {
 		t.Fatalf("revoking someone else's password should be 404 (IDOR): %d", code)
 	}
@@ -112,7 +112,7 @@ func TestSelfService(t *testing.T) {
 
 	// own revoke succeeds
 	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "DELETE",
-		fmt.Sprintf("/api/me/app-password/%d", guestPwID), nil)
+		fmt.Sprintf("/api/me/app-password/%s", guestPwID), nil)
 	if code != 204 {
 		t.Fatalf("own revoke: %d", code)
 	}

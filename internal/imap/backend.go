@@ -17,6 +17,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/emersion/go-imap/v2/imapserver"
 
 	"github.com/krisamin/mail/internal/guard"
@@ -36,7 +38,7 @@ type Backend struct {
 
 // MailboxNotifier is the mailbox-change subscription interface (implemented by postgres.Notifier).
 type MailboxNotifier interface {
-	Subscribe(mailboxID int64) (<-chan struct{}, func())
+	Subscribe(mailboxID uuid.UUID) (<-chan struct{}, func())
 }
 
 // NewBackend creates an IMAP backend on top of the store.

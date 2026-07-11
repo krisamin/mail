@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+
+	"github.com/google/uuid"
 )
 
 // Account overview API — accounts + addresses + app passwords in one response.
@@ -33,11 +35,11 @@ func (s *Server) handleAccountOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	addressMap := map[int64][]addressDTO{}
+	addressMap := map[uuid.UUID][]addressDTO{}
 	for _, a := range addressList {
 		addressMap[a.AccountID] = append(addressMap[a.AccountID], toAddressDTO(a))
 	}
-	passwordMap := map[int64][]appPasswordDTO{}
+	passwordMap := map[uuid.UUID][]appPasswordDTO{}
 	for _, p := range appPasswordList {
 		passwordMap[p.AccountID] = append(passwordMap[p.AccountID], toAppPasswordDTO(p))
 	}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Integration test. Requires dev Postgres:
@@ -28,13 +30,13 @@ func testStore(t *testing.T) *Store {
 }
 
 // seedAccount creates domain+account+address+app password+INBOX (0006 model).
-func seedAccount(t *testing.T, s *Store, address, password string) int64 {
+func seedAccount(t *testing.T, s *Store, address, password string) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 	local := address[:strings.LastIndex(address, "@")]
 	domain := address[strings.LastIndex(address, "@")+1:]
 
-	var domainID int64
+	var domainID uuid.UUID
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ($1)
 		 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
@@ -43,7 +45,7 @@ func seedAccount(t *testing.T, s *Store, address, password string) int64 {
 		t.Fatalf("domain seed: %v", err)
 	}
 
-	var accountID int64
+	var accountID uuid.UUID
 	err = s.pool.QueryRow(ctx,
 		`INSERT INTO account (oidc_subject, oidc_email) VALUES ('test:' || $1::text, $1)
 		 ON CONFLICT (oidc_subject) DO UPDATE SET oidc_email = EXCLUDED.oidc_email

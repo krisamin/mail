@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/argon2"
 
@@ -122,7 +123,7 @@ func (s *Store) AuthenticateAppPassword(ctx context.Context, address, password s
 	defer rows.Close()
 
 	for rows.Next() {
-		var id int64
+		var id uuid.UUID
 		var hash string
 		if err := rows.Scan(&id, &hash); err != nil {
 			return nil, err

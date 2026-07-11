@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -12,13 +14,13 @@ import (
 // on that domain delivers to the target account).
 
 type addressDTO struct {
-	ID           int64  `json:"id"`
-	DomainID     int64  `json:"domainId"`
-	DomainName   string `json:"domainName"`
-	LocalPart    string `json:"localPart"` // '*' = catch-all
-	AccountID    int64  `json:"accountId"`
-	AccountEmail string `json:"accountEmail"`
-	CreatedAt    string `json:"createdAt"`
+	ID           uuid.UUID `json:"id"`
+	DomainID     uuid.UUID `json:"domainId"`
+	DomainName   string    `json:"domainName"`
+	LocalPart    string    `json:"localPart"` // '*' = catch-all
+	AccountID    uuid.UUID `json:"accountId"`
+	AccountEmail string    `json:"accountEmail"`
+	CreatedAt    string    `json:"createdAt"`
 }
 
 func toAddressDTO(a *store.Address) addressDTO {
@@ -77,10 +79,10 @@ func (s *Server) handleCreateAddress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		LocalPart string `json:"localPart"`
-		AccountID int64  `json:"accountId"`
+		LocalPart string    `json:"localPart"`
+		AccountID uuid.UUID `json:"accountId"`
 	}
-	if err := decodeBody(r, &req); err != nil || req.AccountID == 0 {
+	if err := decodeBody(r, &req); err != nil || req.AccountID == uuid.Nil {
 		writeError(w, http.StatusBadRequest, "invalid body (localPart, accountId required)")
 		return
 	}
@@ -96,10 +98,10 @@ func (s *Server) handleCreateAccountAddress(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req struct {
-		LocalPart string `json:"localPart"`
-		DomainID  int64  `json:"domainId"`
+		LocalPart string    `json:"localPart"`
+		DomainID  uuid.UUID `json:"domainId"`
 	}
-	if err := decodeBody(r, &req); err != nil || req.DomainID == 0 {
+	if err := decodeBody(r, &req); err != nil || req.DomainID == uuid.Nil {
 		writeError(w, http.StatusBadRequest, "invalid body (localPart, domainId required)")
 		return
 	}
@@ -107,7 +109,7 @@ func (s *Server) handleCreateAccountAddress(w http.ResponseWriter, r *http.Reque
 }
 
 // createAddress is the shared body of both handlers — verifies the account exists, then creates.
-func (s *Server) createAddress(w http.ResponseWriter, r *http.Request, domainID int64, localPart string, accountID int64) {
+func (s *Server) createAddress(w http.ResponseWriter, r *http.Request, domainID uuid.UUID, localPart string, accountID uuid.UUID) {
 	if _, err := s.store.FindAccountByID(r.Context(), accountID); err != nil {
 		mapStoreErr(w, err)
 		return

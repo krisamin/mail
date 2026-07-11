@@ -4,6 +4,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
+
 	goimap "github.com/emersion/go-imap/v2"
 
 	"github.com/krisamin/mail/internal/store"
@@ -186,7 +188,7 @@ func staticRange(start, stop *uint32, max uint32) {
 
 // loadMessageMap reads the latest metadata for snapshot entries from the DB.
 // (The snapshot only holds msgID/uid; mutable data like flags is fetched each time.)
-func (s *Session) loadMessageMap(msgIDMap map[int64]bool) (map[int64]*store.Message, error) {
+func (s *Session) loadMessageMap(msgIDMap map[uuid.UUID]bool) (map[uuid.UUID]*store.Message, error) {
 	ctx, cancel := opCtx()
 	defer cancel()
 
@@ -194,7 +196,7 @@ func (s *Session) loadMessageMap(msgIDMap map[int64]bool) (map[int64]*store.Mess
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[int64]*store.Message, len(msgIDMap))
+	out := make(map[uuid.UUID]*store.Message, len(msgIDMap))
 	for _, m := range messageList {
 		if msgIDMap[m.ID] {
 			out[m.ID] = m

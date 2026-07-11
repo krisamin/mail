@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	// registers message.CharsetReader — without it non-UTF-8 mail
 	// (EUC-KR, ISO-2022-JP, ...) fails to decode.
 	_ "github.com/emersion/go-message/charset"
@@ -45,15 +47,15 @@ type mailboxSummaryDTO struct {
 }
 
 type messageRowDTO struct {
-	ID           int64  `json:"id"`
-	UID          uint32 `json:"uid"`
-	Subject      string `json:"subject"`
-	FromAddr     string `json:"fromAddr"`
-	InternalDate string `json:"internalDate"`
-	SizeBytes    int64  `json:"sizeBytes"`
-	Seen         bool   `json:"seen"`
-	Flagged      bool   `json:"flagged"`
-	Answered     bool   `json:"answered"`
+	ID           uuid.UUID `json:"id"`
+	UID          uint32    `json:"uid"`
+	Subject      string    `json:"subject"`
+	FromAddr     string    `json:"fromAddr"`
+	InternalDate string    `json:"internalDate"`
+	SizeBytes    int64     `json:"sizeBytes"`
+	Seen         bool      `json:"seen"`
+	Flagged      bool      `json:"flagged"`
+	Answered     bool      `json:"answered"`
 }
 
 type attachmentDTO struct {
@@ -496,7 +498,7 @@ func (s *Server) handleMeSendMessage(w http.ResponseWriter, r *http.Request) {
 		CcList    []string `json:"ccList"`
 		Subject   string   `json:"subject"`
 		TextBody  string   `json:"textBody"`
-		InReplyTo int64    `json:"inReplyTo"` // optional message id being replied to
+		InReplyTo string   `json:"inReplyTo"` // optional message id (uuid) being replied to
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -534,8 +536,8 @@ func (s *Server) handleMeSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	// reply threading — from the message being replied to
 	var inReplyToID string
-	if req.InReplyTo > 0 {
-		if orig, _, err := s.store.GetAccountMessage(r.Context(), u.ID, req.InReplyTo); err == nil {
+	if replyID, err := uuid.Parse(req.InReplyTo); err == nil {
+		if orig, _, err := s.store.GetAccountMessage(r.Context(), u.ID, replyID); err == nil {
 			if raw, err := s.store.GetMessageBlob(r.Context(), orig.ID); err == nil {
 				var d messageDetailDTO
 				parseMessageBody(raw, &d)
@@ -623,13 +625,13 @@ func (s *Server) handleMeSendMessage(w http.ResponseWriter, r *http.Request) {
 	// not fatal: the mail is out, a missing Sent copy must not error the send.
 	if box, err := s.store.EnsureMailbox(r.Context(), u.ID, "Sent"); err == nil {
 		if _, err := s.store.AppendMessage(r.Context(), box.ID, raw, []string{"\\Seen"}, time.Now()); err != nil {
-			log.Printf("api: Sent copy failed account=%d: %v", u.ID, err)
+			log.Printf("api: Sent copy failed account=%s: %v", u.ID, err)
 		}
 	}
 
 	// mark the original answered (best-effort)
-	if req.InReplyTo > 0 {
-		if orig, _, err := s.store.GetAccountMessage(r.Context(), u.ID, req.InReplyTo); err == nil {
+	if replyID, err := uuid.Parse(req.InReplyTo); err == nil {
+		if orig, _, err := s.store.GetAccountMessage(r.Context(), u.ID, replyID); err == nil {
 			has := false
 			for _, f := range orig.Flags {
 				if f == "\\Answered" {

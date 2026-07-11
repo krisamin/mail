@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	goimap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 	gomessage "github.com/emersion/go-message"
@@ -90,7 +92,7 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet goimap.NumSet, options
 		entry  snapEntry
 	}
 	var hits []hit
-	idList := map[int64]bool{}
+	idList := map[uuid.UUID]bool{}
 	s.forEachInSet(numSet, func(seqNum uint32, e snapEntry) bool {
 		hits = append(hits, hit{seqNum, e})
 		idList[e.msgID] = true
@@ -196,7 +198,7 @@ func (s *Session) Store(w *imapserver.FetchWriter, numSet goimap.NumSet, op *goi
 		return err
 	}
 
-	idList := map[int64]bool{}
+	idList := map[uuid.UUID]bool{}
 	s.forEachInSet(numSet, func(_ uint32, e snapEntry) bool {
 		idList[e.msgID] = true
 		return true
@@ -285,7 +287,7 @@ func (s *Session) Search(kind imapserver.NumKind, criteria *goimap.SearchCriteri
 		return nil, err
 	}
 
-	idList := make(map[int64]bool, len(s.snap))
+	idList := make(map[uuid.UUID]bool, len(s.snap))
 	for _, e := range s.snap {
 		idList[e.msgID] = true
 	}

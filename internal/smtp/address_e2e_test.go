@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/emersion/go-sasl"
 	gosmtp "github.com/emersion/go-smtp"
 )
@@ -22,7 +24,7 @@ func TestAliasDelivery(t *testing.T) {
 	ctx := context.Background()
 
 	// seed: kirby.so domain + 2 extra addresses (on the maro account)
-	var kirbyID, krisamID int64
+	var kirbyID, krisamID uuid.UUID
 	if err := env.store.Pool().QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
 		t.Fatalf("kirby.so seed: %v", err)
@@ -92,7 +94,7 @@ func TestInternalRoutingTwoDomains(t *testing.T) {
 	ctx := context.Background()
 
 	// kirby.so + catch-all (maro)
-	var kirbyID int64
+	var kirbyID uuid.UUID
 	if err := env.store.Pool().QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('kirby.so') RETURNING id`).Scan(&kirbyID); err != nil {
 		t.Fatalf("kirby.so seed: %v", err)
@@ -153,7 +155,7 @@ func TestSubmissionSendAsAlias(t *testing.T) {
 	env, subAddr := setupSubmission(t)
 	ctx := context.Background()
 
-	var krisamID int64
+	var krisamID uuid.UUID
 	if err := env.store.Pool().QueryRow(ctx,
 		`SELECT id FROM domain WHERE name = 'krisam.in'`).Scan(&krisamID); err != nil {
 		t.Fatalf("krisam.in lookup: %v", err)

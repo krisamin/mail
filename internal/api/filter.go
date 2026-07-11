@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -12,17 +14,17 @@ import (
 // first match wins. Spam/DMARC quarantine beats filters (see smtp.deliver).
 
 type filterRuleDTO struct {
-	ID            int64  `json:"id"`
-	Position      int    `json:"position"`
-	Name          string `json:"name"`
-	Active        bool   `json:"active"`
-	Field         string `json:"field"`
-	HeaderName    string `json:"headerName"`
-	MatchType     string `json:"matchType"`
-	Pattern       string `json:"pattern"`
-	Action        string `json:"action"`
-	ActionMailbox string `json:"actionMailbox"`
-	CreatedAt     string `json:"createdAt"`
+	ID            uuid.UUID `json:"id"`
+	Position      int       `json:"position"`
+	Name          string    `json:"name"`
+	Active        bool      `json:"active"`
+	Field         string    `json:"field"`
+	HeaderName    string    `json:"headerName"`
+	MatchType     string    `json:"matchType"`
+	Pattern       string    `json:"pattern"`
+	Action        string    `json:"action"`
+	ActionMailbox string    `json:"actionMailbox"`
+	CreatedAt     string    `json:"createdAt"`
 }
 
 func toFilterRuleDTO(r *store.FilterRule) filterRuleDTO {
@@ -47,7 +49,7 @@ type filterRuleBody struct {
 	ActionMailbox string `json:"actionMailbox"`
 }
 
-func (b *filterRuleBody) toRule(accountID int64) *store.FilterRule {
+func (b *filterRuleBody) toRule(accountID uuid.UUID) *store.FilterRule {
 	active := true
 	if b.Active != nil {
 		active = *b.Active

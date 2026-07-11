@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -36,13 +38,13 @@ type Verdict struct {
 // Evaluate runs the account's active rules against the raw message and
 // returns the first match's verdict. No match (or any error) returns the
 // zero Verdict — fail-open, delivery proceeds as INBOX.
-func Evaluate(ctx context.Context, st store.Store, accountID int64, raw []byte) Verdict {
+func Evaluate(ctx context.Context, st store.Store, accountID uuid.UUID, raw []byte) Verdict {
 	ctx, cancel := context.WithTimeout(ctx, evalTimeout)
 	defer cancel()
 
 	ruleList, err := st.ListActiveFilterRule(ctx, accountID)
 	if err != nil {
-		log.Printf("filter: rule lookup failed account=%d: %v", accountID, err)
+		log.Printf("filter: rule lookup failed account=%s: %v", accountID, err)
 		return Verdict{}
 	}
 	if len(ruleList) == 0 {

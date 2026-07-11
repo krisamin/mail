@@ -90,7 +90,7 @@ func TestAdminFullFlow(t *testing.T) {
 	if code != 201 || dom["name"] != "krisam.in" {
 		t.Fatalf("create domain: %d %v", code, dom)
 	}
-	domID := int64(dom["id"].(float64))
+	domID := dom["id"].(string)
 	t.Logf("✔ domain created (lowercase normalization): %v", dom["name"])
 
 	// duplicate → 409
@@ -106,7 +106,7 @@ func TestAdminFullFlow(t *testing.T) {
 	t.Log("✔ duplicate 409 / validation 400")
 
 	// 2) Generate DKIM key — default RSA-2048 (Gmail compatible), ed25519 optional
-	code, dkim, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/dkim", domID),
+	code, dkim, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%s/dkim", domID),
 		map[string]string{"selector": "mail"})
 	if code != 200 {
 		t.Fatalf("create DKIM: %d %v", code, dkim)
@@ -118,19 +118,19 @@ func TestAdminFullFlow(t *testing.T) {
 	t.Logf("✔ DKIM RSA-2048 generated (default): %s = %.40s...", dkim["dnsName"], dnsTxt)
 
 	// explicit ed25519 generation also works (key rotation = regeneration)
-	code, dkimEd, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/dkim", domID),
+	code, dkimEd, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%s/dkim", domID),
 		map[string]string{"selector": "mail", "keyType": "ed25519"})
 	if code != 200 || !strings.HasPrefix(dkimEd["dnsTxt"].(string), "v=DKIM1; k=ed25519; p=") {
 		t.Fatalf("create ed25519: %d %v", code, dkimEd)
 	}
 	// invalid keyType → 400
-	code, _, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/dkim", domID),
+	code, _, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%s/dkim", domID),
 		map[string]string{"selector": "mail", "keyType": "dsa"})
 	if code != 400 {
 		t.Fatalf("invalid keyType should be 400: %d", code)
 	}
 	// subsequent checks assume the state regenerated with the RSA default
-	code, dkim, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%d/dkim", domID),
+	code, dkim, _ = call(t, srv, "POST", fmt.Sprintf("/api/admin/domain/%s/dkim", domID),
 		map[string]string{"selector": "mail"})
 	if code != 200 {
 		t.Fatalf("regenerate DKIM: %d", code)
@@ -156,11 +156,11 @@ func TestAdminFullFlow(t *testing.T) {
 	if code != 200 || user["email"] != "maro@krisam.in" {
 		t.Fatalf("user provisioning: %d %v", code, user)
 	}
-	accountID := int64(user["id"].(float64))
+	accountID := user["id"].(string)
 	t.Log("✔ user JIT provisioning (address + INBOX automatic)")
 
 	// 4) Issue app password — plaintext exposed once
-	code, pw, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/account/%d/app-password", accountID),
+	code, pw, _ := call(t, srv, "POST", fmt.Sprintf("/api/admin/account/%s/app-password", accountID),
 		map[string]string{"label": "Thunderbird"})
 	if code != 201 {
 		t.Fatalf("issue app password: %d %v", code, pw)
@@ -173,35 +173,35 @@ func TestAdminFullFlow(t *testing.T) {
 
 	// verify via the store that the issued password actually authenticates SMTP/IMAP
 	// (protocol level is covered by existing tests — only hash consistency here)
-	code, _, passwordList := call(t, srv, "GET", fmt.Sprintf("/api/admin/account/%d/app-password", accountID), nil)
+	code, _, passwordList := call(t, srv, "GET", fmt.Sprintf("/api/admin/account/%s/app-password", accountID), nil)
 	if code != 200 || len(passwordList) != 1 || passwordList[0]["revoked"] != false {
 		t.Fatalf("app password list: %d %v", code, passwordList)
 	}
 
 	// 5) revoke
-	pwID := int64(passwordList[0]["id"].(float64))
-	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/app-password/%d", pwID), nil)
+	pwID := passwordList[0]["id"].(string)
+	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/app-password/%s", pwID), nil)
 	if code != 204 {
 		t.Fatalf("revoke: %d", code)
 	}
-	code, _, passwordList = call(t, srv, "GET", fmt.Sprintf("/api/admin/account/%d/app-password", accountID), nil)
+	code, _, passwordList = call(t, srv, "GET", fmt.Sprintf("/api/admin/account/%s/app-password", accountID), nil)
 	if passwordList[0]["revoked"] != true {
 		t.Fatal("revoke not applied")
 	}
 	// double revoke → 404
-	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/app-password/%d", pwID), nil)
+	code, _, _ = call(t, srv, "DELETE", fmt.Sprintf("/api/admin/app-password/%s", pwID), nil)
 	if code != 404 {
 		t.Fatalf("double revoke should be 404: %d", code)
 	}
 	t.Log("✔ app password revoke + double revoke 404")
 
 	// 6) Deactivate user/domain
-	code, _, _ = call(t, srv, "PATCH", fmt.Sprintf("/api/admin/account/%d", accountID),
+	code, _, _ = call(t, srv, "PATCH", fmt.Sprintf("/api/admin/account/%s", accountID),
 		map[string]bool{"active": false})
 	if code != 200 {
 		t.Fatalf("deactivate user: %d", code)
 	}
-	code, _, _ = call(t, srv, "PATCH", fmt.Sprintf("/api/admin/domain/%d", domID),
+	code, _, _ = call(t, srv, "PATCH", fmt.Sprintf("/api/admin/domain/%s", domID),
 		map[string]bool{"active": false})
 	if code != 200 {
 		t.Fatalf("deactivate domain: %d", code)
@@ -232,7 +232,7 @@ func TestQueueEndpoints(t *testing.T) {
 		t.Fatalf("empty list expected: %d %v", code, list)
 	}
 	// retry of a missing item → 404
-	code, _, _ = call(t, srv, "POST", "/api/admin/queue/999/retry", nil)
+	code, _, _ = call(t, srv, "POST", "/api/admin/queue/00000000-0000-0000-0000-000000000999/retry", nil)
 	if code != 404 {
 		t.Fatalf("retry of a missing item should be 404: %d", code)
 	}

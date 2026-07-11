@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/krisamin/mail/internal/store"
@@ -34,7 +35,7 @@ func (s *Store) ResolveAddress(ctx context.Context, address string) (*store.Acco
 // CanSendAs reports whether the account may send as the address — either an
 // owned address, or, when the account owns the domain's wildcard address,
 // any local part of that domain is allowed.
-func (s *Store) CanSendAs(ctx context.Context, accountID int64, address string) (bool, error) {
+func (s *Store) CanSendAs(ctx context.Context, accountID uuid.UUID, address string) (bool, error) {
 	u, err := s.ResolveAddress(ctx, address)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -67,7 +68,7 @@ func scanAddressList(rows pgx.Rows) ([]*store.Address, error) {
 }
 
 // ListAddress lists the addresses of a domain.
-func (s *Store) ListAddress(ctx context.Context, domainID int64) ([]*store.Address, error) {
+func (s *Store) ListAddress(ctx context.Context, domainID uuid.UUID) ([]*store.Address, error) {
 	rows, err := s.pool.Query(ctx, addressSelect+` WHERE ad.domain_id = $1 ORDER BY ad.local_part`, domainID)
 	if err != nil {
 		return nil, fmt.Errorf("address list: %w", err)
@@ -76,7 +77,7 @@ func (s *Store) ListAddress(ctx context.Context, domainID int64) ([]*store.Addre
 }
 
 // ListAccountAddress lists the addresses owned by an account (across domains).
-func (s *Store) ListAccountAddress(ctx context.Context, accountID int64) ([]*store.Address, error) {
+func (s *Store) ListAccountAddress(ctx context.Context, accountID uuid.UUID) ([]*store.Address, error) {
 	rows, err := s.pool.Query(ctx, addressSelect+` WHERE ad.account_id = $1 ORDER BY d.name, ad.local_part`, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("account address list: %w", err)
@@ -95,7 +96,7 @@ func (s *Store) ListAllAddress(ctx context.Context) ([]*store.Address, error) {
 
 // CreateAddress attaches an address to an account. localPart '*' is the catch-all.
 // (domain_id, local_part) is UNIQUE, so an existing address yields a duplicate error.
-func (s *Store) CreateAddress(ctx context.Context, domainID int64, localPart string, accountID int64) (*store.Address, error) {
+func (s *Store) CreateAddress(ctx context.Context, domainID uuid.UUID, localPart string, accountID uuid.UUID) (*store.Address, error) {
 	localPart = strings.ToLower(strings.TrimSpace(localPart))
 	if localPart == "" {
 		return nil, fmt.Errorf("invalid address: empty local part")
@@ -125,7 +126,7 @@ func (s *Store) CreateAddress(ctx context.Context, domainID int64, localPart str
 
 // DeleteAddress deletes an address. The account's last regular (non-wildcard)
 // address cannot be deleted — prevents losing the receive/login mapping.
-func (s *Store) DeleteAddress(ctx context.Context, id int64) error {
+func (s *Store) DeleteAddress(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM address WHERE id = $1
 		  AND (local_part = '*' OR (

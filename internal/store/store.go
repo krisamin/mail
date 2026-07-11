@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ── Errors ──────────────────────────────────────────────────
@@ -26,7 +28,7 @@ var ErrAuthFailed = errors.New("authentication failed")
 
 // Domain is a mail domain (top level of multi-tenancy). E.g. krisam.in
 type Domain struct {
-	ID        int64
+	ID        uuid.UUID
 	Name      string
 	Active    bool
 	CreatedAt time.Time
@@ -37,13 +39,13 @@ type Domain struct {
 	DKIMPrivateKey string // PKCS#8 PEM
 
 	// Outbound relay assignment (0005). nil = use default relay.
-	RelayID *int64
+	RelayID *uuid.UUID
 }
 
 // Relay is an SMTP relay for external delivery (Resend, SES, ...).
 // Resolved in order: per-domain assignment (domain.relay_id) → default → env fallback.
 type Relay struct {
-	ID        int64
+	ID        uuid.UUID
 	Name      string // display name such as 'resend'
 	Host      string
 	Port      int
@@ -65,7 +67,7 @@ const (
 // Humans log in via OIDC (JIT provisioning keyed by sub); mail apps use app passwords.
 // Service accounts (0007) have a synthetic sub 'service:<email>' so web login is impossible.
 type Account struct {
-	ID          int64
+	ID          uuid.UUID
 	OIDCSubject string // OIDC sub claim (unique — the real identity key)
 	OIDCEmail   string // email from the IdP (informational/display, refreshed on login)
 	Kind        string // AccountKindUser | AccountKindService
@@ -76,8 +78,8 @@ type Account struct {
 
 // Mailbox is an IMAP folder (INBOX, Sent, ...).
 type Mailbox struct {
-	ID          int64
-	AccountID   int64
+	ID          uuid.UUID
+	AccountID   uuid.UUID
 	Name        string
 	UIDValidity uint32 // fixed at creation. Changes on recreation → invalidates client caches
 	UIDNext     uint32 // next UID to assign
@@ -87,10 +89,10 @@ type Mailbox struct {
 
 // Message is message metadata within a mailbox. Raw body is referenced via BlobID.
 type Message struct {
-	ID           int64
-	MailboxID    int64
+	ID           uuid.UUID
+	MailboxID    uuid.UUID
 	UID          uint32 // mailbox-scoped. Monotonically increasing, never reused
-	BlobID       int64
+	BlobID       uuid.UUID
 	SizeBytes    int64
 	InternalDate time.Time // IMAP INTERNALDATE
 	Subject      string    // header cache (for SEARCH/sorting)
@@ -101,8 +103,8 @@ type Message struct {
 
 // AppPassword is an app password for mail-app (IMAP/SMTP) authentication. Issued/revoked via OAuth.
 type AppPassword struct {
-	ID        int64
-	AccountID int64
+	ID        uuid.UUID
+	AccountID uuid.UUID
 	Label     string // 'Thunderbird laptop'
 	Hash      string // argon2id
 	ScopeList []string
@@ -114,10 +116,10 @@ type AppPassword struct {
 // Address is a mail address owned by an account. local_part '*' is the domain catch-all.
 // All of a user's receiving/sending addresses live here (0006 — merged former account addresses + aliases).
 type Address struct {
-	ID        int64
-	DomainID  int64
+	ID        uuid.UUID
+	DomainID  uuid.UUID
 	LocalPart string // '*' = wildcard (all otherwise-unassigned addresses of that domain)
-	AccountID int64
+	AccountID uuid.UUID
 	CreatedAt time.Time
 
 	// Convenience fields for lookups (filled via JOIN)
@@ -135,7 +137,7 @@ const (
 // OutboundMessage is one item in the outbound queue. Per-recipient (rcpt) —
 // retries/failures are tracked independently per recipient.
 type OutboundMessage struct {
-	ID            int64
+	ID            uuid.UUID
 	EnvelopeFrom  string
 	EnvelopeRcpt  string
 	Raw           []byte
@@ -194,8 +196,8 @@ const (
 // order on INBOX-bound delivery; the first matching active rule applies.
 // Quarantine decisions (spam screening, DMARC) win over filters.
 type FilterRule struct {
-	ID            int64
-	AccountID     int64
+	ID            uuid.UUID
+	AccountID     uuid.UUID
 	Position      int
 	Name          string
 	Active        bool
@@ -226,7 +228,7 @@ type Store interface {
 	ResolveAddress(ctx context.Context, address string) (*Account, error)
 	// CanSendAs reports whether the account may send as the given address
 	// (owned addresses — including wildcard addresses).
-	CanSendAs(ctx context.Context, accountID int64, address string) (bool, error)
+	CanSendAs(ctx context.Context, accountID uuid.UUID, address string) (bool, error)
 
 	// Domains
 	// FindDomain finds an active domain by name. Used during receiving/submission
@@ -234,23 +236,23 @@ type Store interface {
 	FindDomain(ctx context.Context, name string) (*Domain, error)
 
 	// Mailboxes
-	ListMailbox(ctx context.Context, accountID int64) ([]*Mailbox, error)
-	GetMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error)
-	CreateMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error)
-	DeleteMailbox(ctx context.Context, accountID int64, name string) error
-	RenameMailbox(ctx context.Context, accountID int64, name, newName string) error
-	SetSubscribed(ctx context.Context, mailboxID int64, subscribed bool) error
-	MailboxStatus(ctx context.Context, mailboxID int64) (*MailboxStatus, error)
+	ListMailbox(ctx context.Context, accountID uuid.UUID) ([]*Mailbox, error)
+	GetMailbox(ctx context.Context, accountID uuid.UUID, name string) (*Mailbox, error)
+	CreateMailbox(ctx context.Context, accountID uuid.UUID, name string) (*Mailbox, error)
+	DeleteMailbox(ctx context.Context, accountID uuid.UUID, name string) error
+	RenameMailbox(ctx context.Context, accountID uuid.UUID, name, newName string) error
+	SetSubscribed(ctx context.Context, mailboxID uuid.UUID, subscribed bool) error
+	MailboxStatus(ctx context.Context, mailboxID uuid.UUID) (*MailboxStatus, error)
 
 	// Messages
-	AppendMessage(ctx context.Context, mailboxID int64, raw []byte, flagList []string, internalDate time.Time) (*Message, error)
-	ListMessage(ctx context.Context, mailboxID int64) ([]*Message, error)
-	GetMessageBlob(ctx context.Context, messageID int64) ([]byte, error)
-	SetFlag(ctx context.Context, messageID int64, flagList []string) error
+	AppendMessage(ctx context.Context, mailboxID uuid.UUID, raw []byte, flagList []string, internalDate time.Time) (*Message, error)
+	ListMessage(ctx context.Context, mailboxID uuid.UUID) ([]*Message, error)
+	GetMessageBlob(ctx context.Context, messageID uuid.UUID) ([]byte, error)
+	SetFlag(ctx context.Context, messageID uuid.UUID, flagList []string) error
 	// ExpungeDeleted physically deletes \Deleted messages.
 	// nil uids means all; otherwise only the given UIDs (for IMAP UID EXPUNGE).
-	ExpungeDeleted(ctx context.Context, mailboxID int64, uids []uint32) ([]uint32, error)
-	CopyMessage(ctx context.Context, messageID, destMailboxID int64) (*Message, error)
+	ExpungeDeleted(ctx context.Context, mailboxID uuid.UUID, uids []uint32) ([]uint32, error)
+	CopyMessage(ctx context.Context, messageID, destMailboxID uuid.UUID) (*Message, error)
 
 	// Outbound queue (Phase 2-3)
 	// EnqueueOutbound enqueues an outbound item per recipient.
@@ -259,11 +261,11 @@ type Store interface {
 	// FOR UPDATE SKIP LOCKED semantics — multiple workers never grab the same row.
 	DueOutbound(ctx context.Context, limit int) ([]*OutboundMessage, error)
 	// MarkOutboundSent marks delivery success.
-	MarkOutboundSent(ctx context.Context, id int64) error
+	MarkOutboundSent(ctx context.Context, id uuid.UUID) error
 	// MarkOutboundRetry records the failure + sets the next attempt time. attempts is incremented.
-	MarkOutboundRetry(ctx context.Context, id int64, errMsg string, nextAttempt time.Time) error
+	MarkOutboundRetry(ctx context.Context, id uuid.UUID, errMsg string, nextAttempt time.Time) error
 	// MarkOutboundFailed marks a permanent failure (retries exhausted).
-	MarkOutboundFailed(ctx context.Context, id int64, errMsg string) error
+	MarkOutboundFailed(ctx context.Context, id uuid.UUID, errMsg string) error
 
 	// ResolveRelay finds the relay to use for the given sender domain name.
 	// Domain-assigned relay → default relay → ErrNotFound (caller falls back to env).
@@ -273,7 +275,7 @@ type Store interface {
 	// ListActiveFilterRule returns the account's active filter rules in
 	// position order — the delivery path (SMTP inbound/submission) evaluates
 	// these on INBOX-bound mail.
-	ListActiveFilterRule(ctx context.Context, accountID int64) ([]*FilterRule, error)
+	ListActiveFilterRule(ctx context.Context, accountID uuid.UUID) ([]*FilterRule, error)
 
 	// CheckGreylist records/updates the (sourceNet, from, rcpt) triplet and
 	// reports whether the message may pass (0010). First contact returns
@@ -295,10 +297,10 @@ type AdminStore interface {
 	// BackfillDomainAddress retroactively creates the primary address + INBOX for
 	// existing human accounts whose oidc_email is on this domain (idempotent).
 	// Returns the number created.
-	BackfillDomainAddress(ctx context.Context, domainID int64) (int, error)
-	SetDomainActive(ctx context.Context, id int64, active bool) error
+	BackfillDomainAddress(ctx context.Context, domainID uuid.UUID) (int, error)
+	SetDomainActive(ctx context.Context, id uuid.UUID, active bool) error
 	// SetDomainDKIM sets the DKIM selector/private key (empty strings = unset).
-	SetDomainDKIM(ctx context.Context, id int64, selector, privateKeyPEM string) error
+	SetDomainDKIM(ctx context.Context, id uuid.UUID, selector, privateKeyPEM string) error
 
 	// Accounts (user = OIDC identity. Human accounts are created via JIT provisioning only)
 	ListAccount(ctx context.Context) ([]*Account, error)
@@ -311,36 +313,36 @@ type AdminStore interface {
 	// CreateServiceAccount creates a service account (admin only) —
 	// no login, address + app passwords only. The email address is registered as primary.
 	CreateServiceAccount(ctx context.Context, email string) (*Account, error)
-	SetAccountActive(ctx context.Context, id int64, active bool) error
+	SetAccountActive(ctx context.Context, id uuid.UUID, active bool) error
 
 	// App passwords (DD-02: issued after OAuth login)
-	ListAppPassword(ctx context.Context, accountID int64) ([]*AppPassword, error)
+	ListAppPassword(ctx context.Context, accountID uuid.UUID) ([]*AppPassword, error)
 	// ListAllAppPassword lists every app password (admin overview — avoids per-account fan-out).
 	ListAllAppPassword(ctx context.Context) ([]*AppPassword, error)
 	// CreateAppPassword stores the hash and returns the record.
 	// Generating the plaintext is the caller's (API layer's) responsibility —
 	// shown exactly once at issuance.
-	CreateAppPassword(ctx context.Context, accountID int64, label, hash string) (*AppPassword, error)
-	RevokeAppPassword(ctx context.Context, id int64) error
+	CreateAppPassword(ctx context.Context, accountID uuid.UUID, label, hash string) (*AppPassword, error)
+	RevokeAppPassword(ctx context.Context, id uuid.UUID) error
 
 	// Addresses (account-owned mail addresses + wildcards — admin-only add/delete)
-	ListAddress(ctx context.Context, domainID int64) ([]*Address, error)
-	ListAccountAddress(ctx context.Context, accountID int64) ([]*Address, error)
+	ListAddress(ctx context.Context, domainID uuid.UUID) ([]*Address, error)
+	ListAccountAddress(ctx context.Context, accountID uuid.UUID) ([]*Address, error)
 	// ListAllAddress lists every address (admin overview — avoids per-account fan-out).
 	ListAllAddress(ctx context.Context) ([]*Address, error)
 	// CreateAddress treats localPart '*' as a catch-all.
-	CreateAddress(ctx context.Context, domainID int64, localPart string, accountID int64) (*Address, error)
+	CreateAddress(ctx context.Context, domainID uuid.UUID, localPart string, accountID uuid.UUID) (*Address, error)
 	// DeleteAddress deletes an address. The account's last regular address cannot
 	// be deleted (prevents losing the receive/login mapping).
-	DeleteAddress(ctx context.Context, id int64) error
+	DeleteAddress(ctx context.Context, id uuid.UUID) error
 
 	// Outbound queue management
 	ListOutbound(ctx context.Context, status string, limit int) ([]*OutboundMessage, error)
 	// RetryOutbound flips a failed item back to pending (due immediately).
-	RetryOutbound(ctx context.Context, id int64) error
+	RetryOutbound(ctx context.Context, id uuid.UUID) error
 	// CancelOutbound cancels a pending item (races with an in-flight send lose —
 	// a message already handed to the relay cannot be recalled).
-	CancelOutbound(ctx context.Context, id int64) error
+	CancelOutbound(ctx context.Context, id uuid.UUID) error
 	// OutboundStat returns counts per status.
 	OutboundStat(ctx context.Context) (map[string]int64, error)
 
@@ -349,9 +351,9 @@ type AdminStore interface {
 	CreateRelay(ctx context.Context, r *Relay) (*Relay, error)
 	// UpdateRelay keeps the existing password when the password field is empty.
 	UpdateRelay(ctx context.Context, r *Relay) (*Relay, error)
-	DeleteRelay(ctx context.Context, id int64) error
+	DeleteRelay(ctx context.Context, id uuid.UUID) error
 	// SetDomainRelay assigns the domain's outbound relay (nil = use default).
-	SetDomainRelay(ctx context.Context, domainID int64, relayID *int64) error
+	SetDomainRelay(ctx context.Context, domainID uuid.UUID, relayID *uuid.UUID) error
 
 	// Global settings (0008) — key-value. First use: web display language (key='locale').
 	// GetSetting returns store.ErrNotFound for a missing key.
@@ -360,30 +362,30 @@ type AdminStore interface {
 
 	// Webmail (account-scoped — ownership is enforced inside the queries,
 	// so a guessed message ID of another account is a plain ErrNotFound).
-	ListMailboxSummary(ctx context.Context, accountID int64) ([]*MailboxSummary, error)
+	ListMailboxSummary(ctx context.Context, accountID uuid.UUID) ([]*MailboxSummary, error)
 	// ListMessagePage pages newest-first. beforeUID=0 starts at the top;
 	// otherwise only uid < beforeUID rows return (cursor pagination).
-	ListMessagePage(ctx context.Context, accountID int64, mailboxName string, limit int, beforeUID uint32) ([]*Message, error)
+	ListMessagePage(ctx context.Context, accountID uuid.UUID, mailboxName string, limit int, beforeUID uint32) ([]*Message, error)
 	// GetAccountMessage returns the message and the name of its mailbox.
-	GetAccountMessage(ctx context.Context, accountID, messageID int64) (*Message, string, error)
+	GetAccountMessage(ctx context.Context, accountID, messageID uuid.UUID) (*Message, string, error)
 	// MoveAccountMessage moves to another mailbox of the same account,
 	// creating the destination on demand (Trash/Archive on first use).
-	MoveAccountMessage(ctx context.Context, accountID, messageID int64, destName string) error
+	MoveAccountMessage(ctx context.Context, accountID, messageID uuid.UUID, destName string) error
 	// DeleteAccountMessage physically deletes (webmail uses it for Trash only).
-	DeleteAccountMessage(ctx context.Context, accountID, messageID int64) error
+	DeleteAccountMessage(ctx context.Context, accountID, messageID uuid.UUID) error
 	// SetAccountMessageFlag replaces flags with ownership check + notify.
-	SetAccountMessageFlag(ctx context.Context, accountID, messageID int64, flagList []string) error
+	SetAccountMessageFlag(ctx context.Context, accountID, messageID uuid.UUID, flagList []string) error
 	// EnsureMailbox finds or creates a mailbox by name.
-	EnsureMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error)
+	EnsureMailbox(ctx context.Context, accountID uuid.UUID, name string) (*Mailbox, error)
 
 	// Filter rules (0009) CRUD — backs /api/me/filter. The delivery-path
 	// read (ListActiveFilterRule) lives on Store.
-	ListFilterRule(ctx context.Context, accountID int64) ([]*FilterRule, error)
+	ListFilterRule(ctx context.Context, accountID uuid.UUID) ([]*FilterRule, error)
 	CreateFilterRule(ctx context.Context, r *FilterRule) (*FilterRule, error)
 	// UpdateFilterRule rewrites the rule row (account-scoped by id+account).
 	UpdateFilterRule(ctx context.Context, r *FilterRule) error
-	DeleteFilterRule(ctx context.Context, accountID, id int64) error
+	DeleteFilterRule(ctx context.Context, accountID, id uuid.UUID) error
 	// SwapFilterRule swaps the positions of a rule and its neighbor
 	// (direction -1 = up, +1 = down). No-op at the edges.
-	SwapFilterRule(ctx context.Context, accountID, id int64, direction int) error
+	SwapFilterRule(ctx context.Context, accountID, id uuid.UUID, direction int) error
 }

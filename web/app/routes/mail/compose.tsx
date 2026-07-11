@@ -29,7 +29,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     .map((a) => `${a.localPart}@${a.domainName}`);
 
   let reply: {
-    id: number;
+    id: string;
     to: string;
     subject: string;
     quote: string;
@@ -70,7 +70,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
         ccList: splitAddressList(form.get("cc")),
         subject: String(form.get("subject") ?? ""),
         textBody: String(form.get("body") ?? ""),
-        inReplyTo: Number(form.get("inReplyTo") ?? 0) || 0,
+        inReplyTo: String(form.get("inReplyTo") ?? ""),
       },
       timeoutMs: 30_000, // queue insert + local delivery can take a moment
     });

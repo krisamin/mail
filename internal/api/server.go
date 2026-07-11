@@ -12,8 +12,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -170,8 +171,8 @@ func mapStoreErr(w http.ResponseWriter, err error) {
 	}
 }
 
-func pathID(r *http.Request) (int64, error) {
-	return strconv.ParseInt(r.PathValue("id"), 10, 64)
+func pathID(r *http.Request) (uuid.UUID, error) {
+	return uuid.Parse(r.PathValue("id"))
 }
 
 func decodeBody(r *http.Request, v any) error {
@@ -194,11 +195,11 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 // ── Domains ─────────────────────────────────────────────────
 
 type domainDTO struct {
-	ID           int64  `json:"id"`
-	Name         string `json:"name"`
-	Active       bool   `json:"active"`
-	CreatedAt    string `json:"createdAt"`
-	DKIMSelector string `json:"dkimSelector"`
+	ID           uuid.UUID `json:"id"`
+	Name         string    `json:"name"`
+	Active       bool      `json:"active"`
+	CreatedAt    string    `json:"createdAt"`
+	DKIMSelector string    `json:"dkimSelector"`
 	// DKIMPublicTXT is the TXT value to publish in DNS (the private key never leaves).
 	DKIMPublicTXT string `json:"dkimPublicTxt,omitempty"`
 }
@@ -396,12 +397,12 @@ func dkimPublicTXT(pemText string) (string, error) {
 // ── Accounts ────────────────────────────────────────────────
 
 type accountDTO struct {
-	ID        int64  `json:"id"`
-	Subject   string `json:"subject"`
-	Email     string `json:"email"`
-	Kind      string `json:"kind"` // 'user' | 'service'
-	Active    bool   `json:"active"`
-	CreatedAt string `json:"createdAt"`
+	ID        uuid.UUID `json:"id"`
+	Subject   string    `json:"subject"`
+	Email     string    `json:"email"`
+	Kind      string    `json:"kind"` // 'user' | 'service'
+	Active    bool      `json:"active"`
+	CreatedAt string    `json:"createdAt"`
 }
 
 func toAccountDTO(u *store.Account) accountDTO {
@@ -469,12 +470,12 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 // ── App passwords ───────────────────────────────────────────
 
 type appPasswordDTO struct {
-	ID        int64    `json:"id"`
-	Label     string   `json:"label"`
-	ScopeList []string `json:"scopeList"`
-	LastUsed  *string  `json:"lastUsed"`
-	CreatedAt string   `json:"createdAt"`
-	Revoked   bool     `json:"revoked"`
+	ID        uuid.UUID `json:"id"`
+	Label     string    `json:"label"`
+	ScopeList []string  `json:"scopeList"`
+	LastUsed  *string   `json:"lastUsed"`
+	CreatedAt string    `json:"createdAt"`
+	Revoked   bool      `json:"revoked"`
 }
 
 func toAppPasswordDTO(p *store.AppPassword) appPasswordDTO {
@@ -592,14 +593,14 @@ func generateAppPassword() (string, error) {
 // ── Outbound queue ──────────────────────────────────────────
 
 type queueDTO struct {
-	ID            int64  `json:"id"`
-	From          string `json:"from"`
-	Rcpt          string `json:"rcpt"`
-	Status        string `json:"status"`
-	AttemptCount  int    `json:"attemptCount"`
-	NextAttemptAt string `json:"nextAttemptAt"`
-	LastError     string `json:"lastError"`
-	CreatedAt     string `json:"createdAt"`
+	ID            uuid.UUID `json:"id"`
+	From          string    `json:"from"`
+	Rcpt          string    `json:"rcpt"`
+	Status        string    `json:"status"`
+	AttemptCount  int       `json:"attemptCount"`
+	NextAttemptAt string    `json:"nextAttemptAt"`
+	LastError     string    `json:"lastError"`
+	CreatedAt     string    `json:"createdAt"`
 }
 
 func (s *Server) handleListQueue(w http.ResponseWriter, r *http.Request) {

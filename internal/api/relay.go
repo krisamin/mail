@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -10,15 +12,15 @@ import (
 // ★password is write-only: never included in responses (exposed via hasPassword only).
 
 type relayDTO struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Host      string `json:"host"`
-	Port      int    `json:"port"`
-	Username  string `json:"username"`
-	StartTLS  bool   `json:"starttls"`
-	IsDefault bool   `json:"isDefault"`
-	Active    bool   `json:"active"`
-	CreatedAt string `json:"createdAt"`
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	Host      string    `json:"host"`
+	Port      int       `json:"port"`
+	Username  string    `json:"username"`
+	StartTLS  bool      `json:"starttls"`
+	IsDefault bool      `json:"isDefault"`
+	Active    bool      `json:"active"`
+	CreatedAt string    `json:"createdAt"`
 	// HasPassword only says whether a password is set (the value never leaves).
 	HasPassword bool `json:"hasPassword"`
 }
@@ -132,7 +134,7 @@ func (s *Server) handleSetDomainRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		RelayID *int64 `json:"relayId"`
+		RelayID *uuid.UUID `json:"relayId"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")

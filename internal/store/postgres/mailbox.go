@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/krisamin/mail/internal/store"
@@ -18,7 +19,7 @@ func newUIDValidity() uint32 {
 }
 
 // ListMailbox returns all mailboxes of a user.
-func (s *Store) ListMailbox(ctx context.Context, accountID int64) ([]*store.Mailbox, error) {
+func (s *Store) ListMailbox(ctx context.Context, accountID uuid.UUID) ([]*store.Mailbox, error) {
 	const q = `
 		SELECT id, account_id, name, uid_validity, uid_next, subscribed, created_at
 		FROM mailbox WHERE account_id = $1 ORDER BY name`
@@ -40,7 +41,7 @@ func (s *Store) ListMailbox(ctx context.Context, accountID int64) ([]*store.Mail
 }
 
 // GetMailbox finds a mailbox by name.
-func (s *Store) GetMailbox(ctx context.Context, accountID int64, name string) (*store.Mailbox, error) {
+func (s *Store) GetMailbox(ctx context.Context, accountID uuid.UUID, name string) (*store.Mailbox, error) {
 	const q = `
 		SELECT id, account_id, name, uid_validity, uid_next, subscribed, created_at
 		FROM mailbox WHERE account_id = $1 AND name = $2`
@@ -57,7 +58,7 @@ func (s *Store) GetMailbox(ctx context.Context, accountID int64, name string) (*
 }
 
 // CreateMailbox creates a new mailbox.
-func (s *Store) CreateMailbox(ctx context.Context, accountID int64, name string) (*store.Mailbox, error) {
+func (s *Store) CreateMailbox(ctx context.Context, accountID uuid.UUID, name string) (*store.Mailbox, error) {
 	const q = `
 		INSERT INTO mailbox (account_id, name, uid_validity, uid_next, subscribed)
 		VALUES ($1, $2, $3, 1, true)
@@ -72,7 +73,7 @@ func (s *Store) CreateMailbox(ctx context.Context, accountID int64, name string)
 }
 
 // DeleteMailbox deletes a mailbox (messages CASCADE too).
-func (s *Store) DeleteMailbox(ctx context.Context, accountID int64, name string) error {
+func (s *Store) DeleteMailbox(ctx context.Context, accountID uuid.UUID, name string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM mailbox WHERE account_id = $1 AND name = $2`, accountID, name)
 	if err != nil {
 		return fmt.Errorf("mailbox delete: %w", err)
@@ -84,7 +85,7 @@ func (s *Store) DeleteMailbox(ctx context.Context, accountID int64, name string)
 }
 
 // RenameMailbox renames a mailbox.
-func (s *Store) RenameMailbox(ctx context.Context, accountID int64, name, newName string) error {
+func (s *Store) RenameMailbox(ctx context.Context, accountID uuid.UUID, name, newName string) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE mailbox SET name = $3 WHERE account_id = $1 AND name = $2`, accountID, name, newName)
 	if err != nil {
@@ -97,14 +98,14 @@ func (s *Store) RenameMailbox(ctx context.Context, accountID int64, name, newNam
 }
 
 // SetSubscribed changes the subscription state.
-func (s *Store) SetSubscribed(ctx context.Context, mailboxID int64, subscribed bool) error {
+func (s *Store) SetSubscribed(ctx context.Context, mailboxID uuid.UUID, subscribed bool) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE mailbox SET subscribed = $2 WHERE id = $1`, mailboxID, subscribed)
 	return err
 }
 
 // MailboxStatus computes the aggregates for SELECT/STATUS.
-func (s *Store) MailboxStatus(ctx context.Context, mailboxID int64) (*store.MailboxStatus, error) {
+func (s *Store) MailboxStatus(ctx context.Context, mailboxID uuid.UUID) (*store.MailboxStatus, error) {
 	const q = `
 		SELECT
 			mb.uid_next,

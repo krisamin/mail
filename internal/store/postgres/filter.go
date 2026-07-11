@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/krisamin/mail/internal/store"
@@ -32,7 +33,7 @@ func scanFilterRule(row pgx.Row) (*store.FilterRule, error) {
 	return &r, nil
 }
 
-func (s *Store) listFilterRule(ctx context.Context, accountID int64, activeOnly bool) ([]*store.FilterRule, error) {
+func (s *Store) listFilterRule(ctx context.Context, accountID uuid.UUID, activeOnly bool) ([]*store.FilterRule, error) {
 	q := `SELECT ` + filterRuleColumnList + ` FROM filter_rule WHERE account_id = $1`
 	if activeOnly {
 		q += ` AND active`
@@ -55,12 +56,12 @@ func (s *Store) listFilterRule(ctx context.Context, accountID int64, activeOnly 
 }
 
 // ListActiveFilterRule is the delivery-path read (active only, position order).
-func (s *Store) ListActiveFilterRule(ctx context.Context, accountID int64) ([]*store.FilterRule, error) {
+func (s *Store) ListActiveFilterRule(ctx context.Context, accountID uuid.UUID) ([]*store.FilterRule, error) {
 	return s.listFilterRule(ctx, accountID, true)
 }
 
 // ListFilterRule returns every rule of the account (management UI).
-func (s *Store) ListFilterRule(ctx context.Context, accountID int64) ([]*store.FilterRule, error) {
+func (s *Store) ListFilterRule(ctx context.Context, accountID uuid.UUID) ([]*store.FilterRule, error) {
 	return s.listFilterRule(ctx, accountID, false)
 }
 
@@ -103,7 +104,7 @@ func (s *Store) UpdateFilterRule(ctx context.Context, r *store.FilterRule) error
 }
 
 // DeleteFilterRule removes a rule (account-scoped).
-func (s *Store) DeleteFilterRule(ctx context.Context, accountID, id int64) error {
+func (s *Store) DeleteFilterRule(ctx context.Context, accountID, id uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx,
 		`DELETE FROM filter_rule WHERE account_id = $1 AND id = $2`, accountID, id)
 	if err != nil {
@@ -117,7 +118,7 @@ func (s *Store) DeleteFilterRule(ctx context.Context, accountID, id int64) error
 
 // SwapFilterRule swaps positions with the neighbor above (-1) or below (+1).
 // No-op when the rule is already at the edge.
-func (s *Store) SwapFilterRule(ctx context.Context, accountID, id int64, direction int) error {
+func (s *Store) SwapFilterRule(ctx context.Context, accountID, id uuid.UUID, direction int) error {
 	if direction != -1 && direction != 1 {
 		return fmt.Errorf("invalid direction (must be -1 or 1)")
 	}
@@ -139,7 +140,7 @@ func (s *Store) SwapFilterRule(ctx context.Context, accountID, id int64, directi
 	}
 
 	// neighbor in the requested direction
-	var neighborID int64
+	var neighborID uuid.UUID
 	var neighborPos int
 	order := "ASC"
 	cmp := ">"

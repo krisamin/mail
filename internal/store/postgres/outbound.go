@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -67,7 +68,7 @@ func (s *Store) DueOutbound(ctx context.Context, limit int) ([]*store.OutboundMe
 }
 
 // MarkOutboundSent marks delivery success.
-func (s *Store) MarkOutboundSent(ctx context.Context, id int64) error {
+func (s *Store) MarkOutboundSent(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue SET status = 'sent', updated_at = now() WHERE id = $1`, id)
 	if err != nil {
@@ -80,7 +81,7 @@ func (s *Store) MarkOutboundSent(ctx context.Context, id int64) error {
 }
 
 // MarkOutboundRetry records the failure + sets the next attempt time. attemptCount is incremented.
-func (s *Store) MarkOutboundRetry(ctx context.Context, id int64, errMsg string, nextAttempt time.Time) error {
+func (s *Store) MarkOutboundRetry(ctx context.Context, id uuid.UUID, errMsg string, nextAttempt time.Time) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
 		 SET attempt_count = attempt_count + 1, last_error = $2, next_attempt_at = $3, updated_at = now()
@@ -95,7 +96,7 @@ func (s *Store) MarkOutboundRetry(ctx context.Context, id int64, errMsg string, 
 }
 
 // MarkOutboundFailed marks a permanent failure (retries exhausted or a permanent 5xx error).
-func (s *Store) MarkOutboundFailed(ctx context.Context, id int64, errMsg string) error {
+func (s *Store) MarkOutboundFailed(ctx context.Context, id uuid.UUID, errMsg string) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
 		 SET status = 'failed', attempt_count = attempt_count + 1, last_error = $2, updated_at = now()

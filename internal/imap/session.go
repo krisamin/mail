@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
+
 	goimap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 
@@ -21,7 +23,7 @@ const appendLimit = 50 * 1024 * 1024 // 50MB
 
 // snapEntry is one entry in the SELECT snapshot. seqnum = index + 1.
 type snapEntry struct {
-	msgID int64
+	msgID uuid.UUID
 	uid   goimap.UID
 }
 

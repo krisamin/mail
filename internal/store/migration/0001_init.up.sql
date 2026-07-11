@@ -1,79 +1,190 @@
--- 0001 initial schema: 멀티테넌트 메일 저장 엔진의 뼈대
--- IMAP(go-imap v2 imapserver.Session) 요구사항에서 역산한 스키마.
+-- 0001 initial schema (UUID edition) — the full final schema in one file.
+--
+-- History note: the schema originally grew through migrations 0001~0010 with
+-- BIGSERIAL keys. When switching every entity key to UUID (2026-07) the data
+-- was discarded by decision, so the steps were squashed into this single
+-- fresh-start migration. Old step-by-step files live in git history.
+--
+-- Key conventions:
+--   * every entity PK: uuid DEFAULT gen_random_uuid() (built-in since PG13)
+--   * IMAP message UIDs stay integers on purpose — RFC 3501 mandates 32-bit
+--     mailbox-scoped UIDs (uid, uid_next, uid_validity are protocol values,
+--     not entity keys)
+--   * greylist/message_flag/setting keep natural composite/text keys
 
--- ── 멀티테넌시 최상위: 메일 도메인 ──────────────────────────
+-- ── multi-tenancy top level: mail domain ─────────────────────
 CREATE TABLE domain (
-    id          BIGSERIAL PRIMARY KEY,
-    name        TEXT NOT NULL UNIQUE,         -- 예: krisam.in
-    active      BOOLEAN NOT NULL DEFAULT true,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name             TEXT NOT NULL UNIQUE,        -- e.g. krisam.in
+    active           BOOLEAN NOT NULL DEFAULT true,
+    -- DKIM signing: public key is published at <selector>._domainkey.<name>.
+    -- NULL selector = do not sign.
+    dkim_selector    TEXT,
+    dkim_private_key TEXT,                        -- PKCS#8 PEM (RSA or Ed25519)
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ── 계정: local_part@domain ────────────────────────────────
--- 사람 로그인은 OIDC(oidc_subject), 메일앱은 app_passwords로 인증.
+-- ── account = OIDC identity ──────────────────────────────────
+-- Humans log in via OIDC (JIT provisioning keyed by sub); mail apps use app
+-- passwords. Service accounts use a synthetic sub 'service:<email>' so the
+-- web login path is structurally impossible.
 CREATE TABLE account (
-    id            BIGSERIAL PRIMARY KEY,
-    domain_id     BIGINT NOT NULL REFERENCES domain(id) ON DELETE CASCADE,
-    local_part    TEXT NOT NULL,              -- 'maro' (in maro@krisam.in)
-    oidc_subject  TEXT,                        -- OIDC sub 클레임 (nullable)
-    quota_bytes   BIGINT,                      -- NULL = 무제한
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    oidc_subject  TEXT NOT NULL UNIQUE,           -- OIDC sub claim (identity key)
+    oidc_email    TEXT NOT NULL,                  -- IdP email (display, refreshed on login)
+    kind          TEXT NOT NULL DEFAULT 'user',   -- 'user' | 'service'
+    quota_bytes   BIGINT,                         -- NULL = unlimited
     active        BOOLEAN NOT NULL DEFAULT true,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── address: account-owned mail addresses ────────────────────
+-- local_part '*' is the domain catch-all. Resolution priority:
+-- exact address > wildcard (*@domain).
+CREATE TABLE address (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id   UUID NOT NULL REFERENCES domain(id) ON DELETE CASCADE,
+    local_part  TEXT NOT NULL,                    -- 'krisamin' or '*' (catch-all)
+    account_id  UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (domain_id, local_part)
 );
+CREATE INDEX idx_address_account ON address(account_id);
 
--- ── 앱 비밀번호: IMAP/SMTP 클라이언트 인증 (OAuth로 발급/revoke) ──
+-- ── app passwords: IMAP/SMTP client auth (issued/revoked via web) ──
 CREATE TABLE app_password (
-    id          BIGSERIAL PRIMARY KEY,
-    account_id     BIGINT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    label       TEXT NOT NULL,                -- 'Thunderbird 노트북'
-    hash        TEXT NOT NULL,                -- argon2id
-    scope_list      TEXT[] NOT NULL DEFAULT '{imap,smtp}',
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id  UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    label       TEXT NOT NULL,                    -- 'Thunderbird laptop'
+    hash        TEXT NOT NULL,                    -- argon2id
+    scope_list  TEXT[] NOT NULL DEFAULT '{imap,smtp}',
     last_used   TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     revoked_at  TIMESTAMPTZ
 );
-CREATE INDEX idx_app_passwords_user ON app_password(account_id) WHERE revoked_at IS NULL;
+CREATE INDEX idx_app_password_account ON app_password(account_id) WHERE revoked_at IS NULL;
 
--- ── 원문 본문 (Phase 1: DB 인라인 / Phase 4: 오브젝트 스토어로 이동) ──
+-- ── raw bodies (inline in DB; object store is a future phase) ──
 CREATE TABLE message_blob (
-    id          BIGSERIAL PRIMARY KEY,
-    content     BYTEA NOT NULL,               -- RFC822 raw
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    content     BYTEA NOT NULL,                   -- RFC822 raw
     sha256      BYTEA NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_message_blobs_sha256 ON message_blob(sha256);
+CREATE INDEX idx_message_blob_sha256 ON message_blob(sha256);
 
--- ── 메일박스 = IMAP 폴더 (INBOX, Sent, ...) ─────────────────
+-- ── mailbox = IMAP folder (INBOX, Sent, ...) ─────────────────
 CREATE TABLE mailbox (
-    id            BIGSERIAL PRIMARY KEY,
-    account_id       BIGINT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    name          TEXT NOT NULL,              -- 'INBOX', 'Sent', 'Work/2026'
-    uid_validity  BIGINT NOT NULL,            -- 생성 시 고정. 재생성되면 바뀜
-    uid_next      BIGINT NOT NULL DEFAULT 1,  -- 다음 부여할 UID
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id    UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,                  -- 'INBOX', 'Sent', 'Work/2026'
+    uid_validity  BIGINT NOT NULL,                -- fixed at creation; changes on recreation
+    uid_next      BIGINT NOT NULL DEFAULT 1,      -- next IMAP UID to assign
     subscribed    BOOLEAN NOT NULL DEFAULT true,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (account_id, name)
 );
 
--- ── 메시지 메타데이터 (본문은 blob 참조) ────────────────────
+-- ── message metadata (raw body via blob reference) ───────────
 CREATE TABLE message (
-    id            BIGSERIAL PRIMARY KEY,
-    mailbox_id    BIGINT NOT NULL REFERENCES mailbox(id) ON DELETE CASCADE,
-    uid           BIGINT NOT NULL,            -- 메일박스 스코프 UID
-    blob_id       BIGINT NOT NULL REFERENCES message_blob(id),
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    mailbox_id    UUID NOT NULL REFERENCES mailbox(id) ON DELETE CASCADE,
+    uid           BIGINT NOT NULL,                -- mailbox-scoped IMAP UID (RFC 3501)
+    blob_id       UUID NOT NULL REFERENCES message_blob(id),
     size_bytes    BIGINT NOT NULL,
     internal_date TIMESTAMPTZ NOT NULL DEFAULT now(),  -- IMAP INTERNALDATE
-    subject       TEXT,                        -- 헤더 캐시 (SEARCH/정렬용)
+    subject       TEXT,                           -- header cache (SEARCH/sorting)
     from_addr     TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (mailbox_id, uid)
 );
-CREATE INDEX idx_messages_mailbox ON message(mailbox_id);
+CREATE INDEX idx_message_mailbox ON message(mailbox_id);
 
--- ── 메시지 플래그 (\Seen 등 + 커스텀) ──────────────────────
+-- ── message flags (\Seen etc. + custom) ──────────────────────
 CREATE TABLE message_flag (
-    message_id  BIGINT NOT NULL REFERENCES message(id) ON DELETE CASCADE,
-    flag        TEXT NOT NULL,                -- '\Seen', '\Flagged', ...
+    message_id  UUID NOT NULL REFERENCES message(id) ON DELETE CASCADE,
+    flag        TEXT NOT NULL,                    -- '\Seen', '\Flagged', ...
     PRIMARY KEY (message_id, flag)
 );
+
+-- ── outbound queue: one row per recipient ────────────────────
+-- Retries/failures are tracked independently per rcpt.
+CREATE TABLE outbound_queue (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    envelope_from    TEXT NOT NULL,               -- MAIL FROM (bounce target)
+    envelope_rcpt    TEXT NOT NULL,               -- RCPT TO (this row's destination)
+    raw              BYTEA NOT NULL,              -- RFC822 raw (incl. Received)
+    status           TEXT NOT NULL DEFAULT 'pending', -- pending|sent|failed|canceled
+    attempt_count    INT NOT NULL DEFAULT 0,
+    next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error       TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_outbound_queue_due
+    ON outbound_queue (next_attempt_at)
+    WHERE status = 'pending';
+
+-- ── outbound relay (Resend, SES, ...) ────────────────────────
+-- Resolution: per-domain assignment → default relay → env fallback.
+-- password is plaintext (single-server homelab; write-only via API).
+CREATE TABLE relay (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL UNIQUE,             -- 'resend', 'ses-backup', ...
+    host        TEXT NOT NULL,                    -- smtp.resend.com
+    port        INT NOT NULL DEFAULT 587,
+    username    TEXT NOT NULL DEFAULT '',
+    password    TEXT NOT NULL DEFAULT '',
+    starttls    BOOLEAN NOT NULL DEFAULT true,
+    is_default  BOOLEAN NOT NULL DEFAULT false,
+    active      BOOLEAN NOT NULL DEFAULT true,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_relay_default ON relay (is_default) WHERE is_default;
+
+-- per-domain outbound relay assignment (NULL = default relay)
+ALTER TABLE domain
+    ADD COLUMN relay_id UUID REFERENCES relay(id) ON DELETE SET NULL;
+
+-- ── global settings (key-value) ──────────────────────────────
+-- First use: web display language (key='locale', value='auto|ko|en|ja').
+CREATE TABLE setting (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── per-account mail filter rules ────────────────────────────
+-- Evaluated in position order on INBOX-bound delivery (spam/DMARC quarantine
+-- wins first); the first matching active rule applies its action.
+CREATE TABLE filter_rule (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id     UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    position       INT NOT NULL,
+    name           TEXT NOT NULL,
+    active         BOOLEAN NOT NULL DEFAULT true,
+    -- condition: field(+header_name) match_type pattern (case-insensitive)
+    field          TEXT NOT NULL,                 -- 'from'|'to'|'subject'|'header'
+    header_name    TEXT NOT NULL DEFAULT '',      -- when field='header'
+    match_type     TEXT NOT NULL,                 -- 'contains'|'equals'|'prefix'|'suffix'
+    pattern        TEXT NOT NULL,
+    -- action
+    action         TEXT NOT NULL,                 -- 'move'|'markSeen'|'flag'|'discard'
+    action_mailbox TEXT NOT NULL DEFAULT '',      -- when action='move'
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_filter_rule_account ON filter_rule (account_id, position);
+
+-- ── greylisting triplets (natural composite key) ─────────────
+-- First contact gets 451; a retry after the delay passes and the triplet is
+-- then trusted (last_seen keeps refreshing). Stale rows are pruned inline.
+CREATE TABLE greylist (
+    source_net    TEXT NOT NULL,  -- /24 (IPv4) or /64 (IPv6) of the client
+    envelope_from TEXT NOT NULL,  -- lowercased ('' = bounce sender <>)
+    envelope_rcpt TEXT NOT NULL,  -- lowercased
+    first_seen    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    pass_count    BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (source_net, envelope_from, envelope_rcpt)
+);
+CREATE INDEX idx_greylist_last_seen ON greylist (last_seen);

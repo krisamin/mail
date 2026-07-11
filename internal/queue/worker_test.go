@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/emersion/go-sasl"
 	gosmtp "github.com/emersion/go-smtp"
 
@@ -63,7 +65,7 @@ func (m *mockSender) callCount() int {
 	return len(m.calls)
 }
 
-func queueStatus(t *testing.T, st *postgres.Store, id int64) (status string, attemptCount int, lastError string) {
+func queueStatus(t *testing.T, st *postgres.Store, id uuid.UUID) (status string, attemptCount int, lastError string) {
 	t.Helper()
 	err := st.Pool().QueryRow(context.Background(),
 		`SELECT status, attempt_count, COALESCE(last_error, '') FROM outbound_queue WHERE id = $1`, id).
@@ -72,6 +74,26 @@ func queueStatus(t *testing.T, st *postgres.Store, id int64) (status string, att
 		t.Fatalf("queue status lookup: %v", err)
 	}
 	return
+}
+
+// queueIDList returns every outbound_queue id (creation order).
+func queueIDList(t *testing.T, st *postgres.Store) []uuid.UUID {
+	t.Helper()
+	rows, err := st.Pool().Query(context.Background(),
+		`SELECT id FROM outbound_queue ORDER BY created_at`)
+	if err != nil {
+		t.Fatalf("queue id list: %v", err)
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("queue id scan: %v", err)
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 const rawMsg = "From: maro@krisam.in\r\nTo: friend@example.com\r\nSubject: queued\r\n\r\nhello\r\n"
@@ -95,10 +117,10 @@ func TestQueueSuccess(t *testing.T) {
 	if sender.callCount() != 2 {
 		t.Fatalf("sender should be called twice: %d", sender.callCount())
 	}
-	for _, id := range []int64{1, 2} {
+	for _, id := range queueIDList(t, st) {
 		status, attemptCount, _ := queueStatus(t, st, id)
 		if status != store.OutboundSent || attemptCount != 0 {
-			t.Fatalf("id=%d should be sent: %s attemptCount=%d", id, status, attemptCount)
+			t.Fatalf("id=%s should be sent: %s attemptCount=%d", id, status, attemptCount)
 		}
 	}
 	// no due entries on rerun
@@ -125,7 +147,7 @@ func TestQueueRetryBackoff(t *testing.T) {
 	if n, _ := w.ProcessOnce(ctx); n != 1 {
 		t.Fatal("should process 1 entry")
 	}
-	status, attemptCount, lastErr := queueStatus(t, st, 1)
+	status, attemptCount, lastErr := queueStatus(t, st, queueIDList(t, st)[0])
 	if status != store.OutboundPending || attemptCount != 1 || !strings.Contains(lastErr, "connection refused") {
 		t.Fatalf("should be awaiting retry: %s attemptCount=%d err=%q", status, attemptCount, lastErr)
 	}
@@ -137,13 +159,13 @@ func TestQueueRetryBackoff(t *testing.T) {
 
 	// rewind the time to the past to make it due, reprocess → success
 	if _, err := st.Pool().Exec(ctx,
-		`UPDATE outbound_queue SET next_attempt_at = now() - interval '1 second' WHERE id = 1`); err != nil {
+		`UPDATE outbound_queue SET next_attempt_at = now() - interval '1 second' WHERE status = 'pending'`); err != nil {
 		t.Fatalf("time manipulation: %v", err)
 	}
 	if n, _ := w.ProcessOnce(ctx); n != 1 {
 		t.Fatal("should process 1 entry after becoming due again")
 	}
-	status, _, _ = queueStatus(t, st, 1)
+	status, _, _ = queueStatus(t, st, queueIDList(t, st)[0])
 	if status != store.OutboundSent {
 		t.Fatalf("should be sent after retry: %s", status)
 	}
@@ -165,7 +187,7 @@ func TestQueuePermanentError(t *testing.T) {
 	if n, _ := w.ProcessOnce(ctx); n != 1 {
 		t.Fatal("should process 1 entry")
 	}
-	status, _, lastErr := queueStatus(t, st, 1)
+	status, _, lastErr := queueStatus(t, st, queueIDList(t, st)[0])
 	if status != store.OutboundFailed || !strings.Contains(lastErr, "550") {
 		t.Fatalf("should be failed immediately: %s err=%q", status, lastErr)
 	}
@@ -190,10 +212,10 @@ func TestQueueMaxAttempts(t *testing.T) {
 	// 1st: transient error → awaiting retry
 	_, _ = w.ProcessOnce(ctx)
 	// make it due again, 2nd: MaxAttemptCount reached → failed
-	_, _ = st.Pool().Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = 1`)
+	_, _ = st.Pool().Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE status = 'pending'`)
 	_, _ = w.ProcessOnce(ctx)
 
-	status, attemptCount, _ := queueStatus(t, st, 1)
+	status, attemptCount, _ := queueStatus(t, st, queueIDList(t, st)[0])
 	if status != store.OutboundFailed || attemptCount != 2 {
 		t.Fatalf("should be failed after exhaustion: %s attemptCount=%d", status, attemptCount)
 	}
@@ -296,7 +318,7 @@ func TestSubmissionToQueueToRelay(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("relay did not receive the mail")
 	}
-	status, _, _ := queueStatus(t, st, 1)
+	status, _, _ := queueStatus(t, st, queueIDList(t, st)[0])
 	if status != store.OutboundSent {
 		t.Fatalf("should be sent: %s", status)
 	}
@@ -337,14 +359,14 @@ func seedAccount(t *testing.T, st *postgres.Store, address, password string) {
 	local := address[:strings.LastIndex(address, "@")]
 	domain := address[strings.LastIndex(address, "@")+1:]
 
-	var domainID int64
+	var domainID uuid.UUID
 	if err := st.Pool().QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ($1)
 		 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
 		domain).Scan(&domainID); err != nil {
 		t.Fatalf("domain seed: %v", err)
 	}
-	var accountID int64
+	var accountID uuid.UUID
 	if err := st.Pool().QueryRow(ctx,
 		`INSERT INTO account (oidc_subject, oidc_email) VALUES ('test:' || $1::text, $1)
 		 ON CONFLICT (oidc_subject) DO UPDATE SET oidc_email = EXCLUDED.oidc_email

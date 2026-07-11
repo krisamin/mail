@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -17,7 +18,7 @@ func TestRelay(t *testing.T) {
 	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	// seed: two domains
-	var krisamID, kirbyID int64
+	var krisamID, kirbyID uuid.UUID
 	if err := s.pool.QueryRow(ctx,
 		`INSERT INTO domain (name) VALUES ('krisam.in') RETURNING id`).Scan(&krisamID); err != nil {
 		t.Fatalf("domain seed: %v", err)
@@ -117,7 +118,7 @@ func TestRelay(t *testing.T) {
 	if err := s.DeleteRelay(ctx, ses.ID); err != nil {
 		t.Fatalf("relay delete: %v", err)
 	}
-	var relayID *int64
+	var relayID *uuid.UUID
 	if err := s.pool.QueryRow(ctx,
 		`SELECT relay_id FROM domain WHERE id = $1`, kirbyID).Scan(&relayID); err != nil {
 		t.Fatalf("domain lookup: %v", err)

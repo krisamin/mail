@@ -79,7 +79,7 @@ func TestWebmail(t *testing.T) {
 	if row["subject"] != "hello from webmail" || row["seen"] != false {
 		t.Fatalf("row: %v", row)
 	}
-	msgID := int64(row["id"].(float64))
+	msgID := row["id"].(string)
 	t.Log("✔ message list row — subject cached, unseen")
 
 	code, _, guestBoxList := callAs(t, srv, "guest@krisam.in", "", "GET", "/api/me/mailbox", nil)
@@ -98,7 +98,7 @@ func TestWebmail(t *testing.T) {
 	t.Log("✔ Sent copy for the sender")
 
 	// 4) detail — body parsed, auto-marked seen
-	code, detail, _ := callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%d", msgID), nil)
+	code, detail, _ := callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%s", msgID), nil)
 	if code != 200 {
 		t.Fatalf("detail: %d %v", code, detail)
 	}
@@ -114,54 +114,54 @@ func TestWebmail(t *testing.T) {
 	t.Log("✔ detail — MIME parsed, auto \\Seen")
 
 	// 5) cross-account isolation — guest cannot read maro's message
-	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%d", msgID), nil)
+	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%s", msgID), nil)
 	if code != 404 {
 		t.Fatalf("cross-account read should be 404: %d", code)
 	}
-	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "DELETE", fmt.Sprintf("/api/me/message/%d", msgID), nil)
+	code, _, _ = callAs(t, srv, "guest@krisam.in", "", "DELETE", fmt.Sprintf("/api/me/message/%s", msgID), nil)
 	if code != 404 {
 		t.Fatalf("cross-account delete should be 404: %d", code)
 	}
 	t.Log("✔ cross-account isolation 404")
 
 	// 6) flag patch — flagged on, seen off
-	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "PATCH", fmt.Sprintf("/api/me/message/%d", msgID),
+	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "PATCH", fmt.Sprintf("/api/me/message/%s", msgID),
 		map[string]any{"flagged": true, "seen": false})
 	if code != 204 {
 		t.Fatalf("patch: %d", code)
 	}
-	code, detail, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%d", msgID), nil)
+	code, detail, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%s", msgID), nil)
 	if code != 200 || detail["flagged"] != true {
 		t.Fatalf("flag applied: %d %v", code, detail["flagged"])
 	}
 	t.Log("✔ flag patch")
 
 	// 7) move to Archive (created on demand)
-	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "POST", fmt.Sprintf("/api/me/message/%d/move", msgID),
+	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "POST", fmt.Sprintf("/api/me/message/%s/move", msgID),
 		map[string]string{"mailbox": "Archive"})
 	if code != 204 {
 		t.Fatalf("move: %d", code)
 	}
-	code, detail, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%d", msgID), nil)
+	code, detail, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%s", msgID), nil)
 	if code != 200 || detail["mailbox"] != "Archive" {
 		t.Fatalf("moved mailbox: %d %v", code, detail["mailbox"])
 	}
 	t.Log("✔ move — Archive created on demand")
 
 	// 8) two-step delete: Archive → Trash (move), Trash → physical
-	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "DELETE", fmt.Sprintf("/api/me/message/%d", msgID), nil)
+	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "DELETE", fmt.Sprintf("/api/me/message/%s", msgID), nil)
 	if code != 204 {
 		t.Fatalf("delete step 1: %d", code)
 	}
-	code, detail, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%d", msgID), nil)
+	code, detail, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%s", msgID), nil)
 	if code != 200 || detail["mailbox"] != "Trash" {
 		t.Fatalf("should be in Trash: %d %v", code, detail["mailbox"])
 	}
-	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "DELETE", fmt.Sprintf("/api/me/message/%d", msgID), nil)
+	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "DELETE", fmt.Sprintf("/api/me/message/%s", msgID), nil)
 	if code != 204 {
 		t.Fatalf("delete step 2: %d", code)
 	}
-	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%d", msgID), nil)
+	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%s", msgID), nil)
 	if code != 404 {
 		t.Fatalf("physically deleted should be 404: %d", code)
 	}
@@ -179,7 +179,7 @@ func TestWebmail(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("list: %d", code)
 	}
-	rootID := int64(page["messageList"].([]any)[0].(map[string]any)["id"].(float64))
+	rootID := page["messageList"].([]any)[0].(map[string]any)["id"].(string)
 	code, _, _ = callAs(t, srv, "maro@krisam.in", "", "POST", "/api/me/send", map[string]any{
 		"from": "maro@krisam.in", "toList": []string{"guest@krisam.in"},
 		"subject": "Re: thread start", "textBody": "reply", "inReplyTo": rootID,
@@ -188,7 +188,7 @@ func TestWebmail(t *testing.T) {
 		t.Fatalf("reply send: %d", code)
 	}
 	// original marked \Answered
-	code, detail, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%d", rootID), nil)
+	code, detail, _ = callAs(t, srv, "maro@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%s", rootID), nil)
 	if code != 200 || detail["answered"] != true {
 		t.Fatalf("original should be answered: %d %v", code, detail["answered"])
 	}
@@ -197,8 +197,8 @@ func TestWebmail(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("guest list: %d", code)
 	}
-	replyID := int64(page["messageList"].([]any)[0].(map[string]any)["id"].(float64))
-	code, detail, _ = callAs(t, srv, "guest@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%d", replyID), nil)
+	replyID := page["messageList"].([]any)[0].(map[string]any)["id"].(string)
+	code, detail, _ = callAs(t, srv, "guest@krisam.in", "", "GET", fmt.Sprintf("/api/me/message/%s", replyID), nil)
 	if code != 200 || detail["messageId"] == "" {
 		t.Fatalf("reply detail: %d %v", code, detail)
 	}
