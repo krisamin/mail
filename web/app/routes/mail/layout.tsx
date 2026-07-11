@@ -1,4 +1,4 @@
-import { Link, NavLink, Outlet, useParams } from "react-router";
+import { Link, NavLink, Outlet } from "react-router";
 import type { Route } from "./+types/layout";
 import { apiFetch, type MailboxSummary } from "~/lib/api.server";
 import { useT, type TFunc } from "~/lib/i18n";
@@ -8,10 +8,27 @@ import { ButtonLink } from "~/components";
 // Webmail shell — mailbox sidebar + content outlet.
 // Any signed-in user (self-service surface, no admin group).
 
+// Well-known folders pin to the top in mail-client order; custom folders
+// follow alphabetically. (The API sorts INBOX-first/alphabetical, which put
+// Sent between Junk and Trash — jarring next to every other mail client.)
+const folderOrderMap: Record<string, number> = {
+  INBOX: 0,
+  Drafts: 1,
+  Sent: 2,
+  Archive: 3,
+  Junk: 4,
+  Trash: 5,
+};
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = await requireUser(request);
-  const mailboxList = await apiFetch<MailboxSummary[]>(user.idToken, "/api/me/mailbox");
-  return { name: user.name, email: user.email, mailboxList: mailboxList ?? [] };
+  const mailboxList = (await apiFetch<MailboxSummary[]>(user.idToken, "/api/me/mailbox")) ?? [];
+  mailboxList.sort((a, b) => {
+    const oa = folderOrderMap[a.name] ?? 100;
+    const ob = folderOrderMap[b.name] ?? 100;
+    return oa !== ob ? oa - ob : a.name.localeCompare(b.name);
+  });
+  return { name: user.name, email: user.email, mailboxList };
 };
 
 /** Well-known folders get localized labels; custom ones show as-is. */
@@ -34,11 +51,15 @@ export const folderLabel = (t: TFunc, name: string): string => {
   }
 };
 
+/** Sidebar item style — shared by folder links and the filter link. */
+const navItemClass = (isActive: boolean): string =>
+  `flex items-center justify-between rounded-md px-3 py-1.5 text-sm transition-colors duration-100 ${
+    isActive ? "bg-bg-3 text-text-0" : "text-text-2 hover:bg-bg-2 hover:text-text-1"
+  }`;
+
 export default function WebmailLayout({ loaderData }: Route.ComponentProps) {
   const { name, mailboxList } = loaderData;
   const t = useT();
-  const params = useParams();
-  const currentMailbox = params.mailbox ?? "INBOX";
 
   return (
     <div className="min-h-dvh">
@@ -67,37 +88,29 @@ export default function WebmailLayout({ loaderData }: Route.ComponentProps) {
             {t("webmail.compose")}
           </ButtonLink>
           <nav className="flex flex-col gap-0.5">
+            {/* NavLink's own isActive does segment-prefix matching, so the
+                folder stays lit on its detail pages (/mail/INBOX/5) and
+                nothing lights up on /mail/compose or /mail/filter. */}
             {mailboxList.map((m) => (
               <NavLink
                 key={m.name}
                 to={`/mail/${encodeURIComponent(m.name)}`}
-                className={() =>
-                  `flex items-center justify-between rounded-md px-3 py-1.5 text-sm transition-colors duration-100 ${
-                    currentMailbox === m.name
-                      ? "bg-bg-3 text-text-0"
-                      : "text-text-2 hover:bg-bg-2 hover:text-text-1"
-                  }`
-                }
+                className={({ isActive }) => navItemClass(isActive)}
               >
                 <span className="truncate">{folderLabel(t, m.name)}</span>
                 {m.unseenCount > 0 && (
-                  <span className="ml-2 rounded-full bg-accent/20 px-1.5 text-xs text-accent">
-                    {m.unseenCount}
+                  <span className="ml-2 shrink-0 rounded-full bg-accent/20 px-1.5 text-xs text-accent">
+                    {m.unseenCount > 99 ? "99+" : m.unseenCount}
                   </span>
                 )}
               </NavLink>
             ))}
           </nav>
-          <NavLink
-            to="/mail/filter"
-            className={({ isActive }) =>
-              `rounded-md px-3 py-1.5 text-sm transition-colors duration-100 ${
-                isActive ? "bg-bg-3 text-text-0" : "text-text-2 hover:bg-bg-2 hover:text-text-1"
-              }`
-            }
-          >
-            {t("filter.title")}
-          </NavLink>
+          <div className="border-t border-line pt-2">
+            <NavLink to="/mail/filter" className={({ isActive }) => navItemClass(isActive)}>
+              <span className="truncate">{t("filter.title")}</span>
+            </NavLink>
+          </div>
         </aside>
         <main className="min-w-0 flex-1">
           <Outlet />

@@ -108,11 +108,21 @@ func (s *Server) handleMeMailbox(w http.ResponseWriter, r *http.Request) {
 		mapStoreErr(w, err)
 		return
 	}
-	out := make([]mailboxSummaryDTO, 0, len(summaryList))
+	out := make([]mailboxSummaryDTO, 0, len(summaryList)+1)
+	hasInbox := false
 	for _, m := range summaryList {
+		if m.Name == "INBOX" {
+			hasInbox = true
+		}
 		out = append(out, mailboxSummaryDTO{
 			Name: m.Name, MessageCount: m.MessageCount, UnseenCount: m.UnseenCount,
 		})
+	}
+	// INBOX always exists in the response — a fresh account that has never
+	// received mail would otherwise render an empty sidebar (the row is
+	// created on first delivery/selection, but the UI must not wait for it).
+	if !hasInbox {
+		out = append([]mailboxSummaryDTO{{Name: "INBOX"}}, out...)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
