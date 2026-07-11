@@ -108,6 +108,12 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	me.HandleFunc("GET /api/me/message/{id}/raw", s.handleMeMessageRaw)
 	me.HandleFunc("GET /api/me/message/{id}/attachment/{index}", s.handleMeAttachment)
 	me.HandleFunc("POST /api/me/send", s.handleMeSendMessage)
+	// filter rules — per-account delivery rules
+	me.HandleFunc("GET /api/me/filter", s.handleMeListFilter)
+	me.HandleFunc("POST /api/me/filter", s.handleMeCreateFilter)
+	me.HandleFunc("PUT /api/me/filter/{id}", s.handleMeUpdateFilter)
+	me.HandleFunc("DELETE /api/me/filter/{id}", s.handleMeDeleteFilter)
+	me.HandleFunc("POST /api/me/filter/{id}/move", s.handleMeMoveFilter)
 	s.mux.Handle("/api/me/", auth.RequireUser(me))
 	return s
 }

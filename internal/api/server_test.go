@@ -31,7 +31,7 @@ func testServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(st.Close)
 	_, _ = st.Pool().Exec(context.Background(),
-		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay, setting RESTART IDENTITY CASCADE`)
+		`TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay, setting, filter_rule RESTART IDENTITY CASCADE`)
 
 	auth, err := NewAuthenticator(context.Background(), AuthConfig{
 		AdminGroup: "mail-admin", InsecureSkipVerify: true,

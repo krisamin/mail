@@ -19,6 +19,7 @@ import (
 	gosmtp "github.com/emersion/go-smtp"
 
 	"github.com/krisamin/mail/internal/auth"
+	"github.com/krisamin/mail/internal/filter"
 	"github.com/krisamin/mail/internal/spam"
 	"github.com/krisamin/mail/internal/store"
 )
@@ -244,9 +245,25 @@ func (s *Session) Data(r io.Reader) error {
 }
 
 // deliver stores the message in the recipient's given folder. Creates the folder if missing.
+// INBOX-bound mail runs the recipient's filter rules first (quarantine
+// verdicts — Junk — skip filters so a user rule can't rescue spam).
 func (s *Session) deliver(rc rcpt, folder string, raw []byte, now time.Time) error {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
+
+	var flagList []string
+	if folder == "INBOX" {
+		v := filter.Evaluate(ctx, s.backend.store, rc.user.ID, raw)
+		if v.Discard {
+			log.Printf("smtp: filter discard rule=%q to=%s from=%s", v.RuleName, rc.address, s.from)
+			return nil // dropped silently — the transaction still succeeds
+		}
+		if v.Mailbox != "" {
+			folder = v.Mailbox
+			log.Printf("smtp: filter move rule=%q to=%s folder=%s", v.RuleName, rc.address, folder)
+		}
+		flagList = v.FlagList
+	}
 
 	box, err := s.backend.store.GetMailbox(ctx, rc.user.ID, folder)
 	if errors.Is(err, store.ErrNotFound) {
@@ -256,8 +273,8 @@ func (s *Session) deliver(rc rcpt, folder string, raw []byte, now time.Time) err
 		return fmt.Errorf("ensure %s: %w", folder, err)
 	}
 
-	// new mail has no flags (= unseen)
-	_, err = s.backend.store.AppendMessage(ctx, box.ID, raw, nil, now)
+	// new mail has no flags (= unseen) unless a filter adds them
+	_, err = s.backend.store.AppendMessage(ctx, box.ID, raw, flagList, now)
 	if err != nil {
 		return fmt.Errorf("append: %w", err)
 	}

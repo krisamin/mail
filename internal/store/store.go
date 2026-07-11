@@ -166,6 +166,48 @@ type MailboxSummary struct {
 	UnseenCount  uint32
 }
 
+// FilterRule field values.
+const (
+	FilterFieldFrom    = "from"
+	FilterFieldTo      = "to" // To + Cc
+	FilterFieldSubject = "subject"
+	FilterFieldHeader  = "header" // arbitrary header via HeaderName
+)
+
+// FilterRule match types (all case-insensitive).
+const (
+	FilterMatchContains = "contains"
+	FilterMatchEquals   = "equals"
+	FilterMatchPrefix   = "prefix"
+	FilterMatchSuffix   = "suffix"
+)
+
+// FilterRule actions.
+const (
+	FilterActionMove     = "move"     // deliver to ActionMailbox instead of INBOX
+	FilterActionMarkSeen = "markSeen" // deliver with \Seen
+	FilterActionFlag     = "flag"     // deliver with \Flagged
+	FilterActionDiscard  = "discard"  // drop silently (no DSN — the sender sees 250)
+)
+
+// FilterRule is one per-account delivery rule (0009). Rules run in position
+// order on INBOX-bound delivery; the first matching active rule applies.
+// Quarantine decisions (spam screening, DMARC) win over filters.
+type FilterRule struct {
+	ID            int64
+	AccountID     int64
+	Position      int
+	Name          string
+	Active        bool
+	Field         string // FilterField*
+	HeaderName    string // when Field == 'header'
+	MatchType     string // FilterMatch*
+	Pattern       string
+	Action        string // FilterAction*
+	ActionMailbox string // when Action == 'move'
+	CreatedAt     time.Time
+}
+
 // ── Interfaces ──────────────────────────────────────────────
 
 // Store is the top-level interface of the mail storage engine.
@@ -227,6 +269,11 @@ type Store interface {
 	// Domain-assigned relay → default relay → ErrNotFound (caller falls back to env).
 	// Inactive relays are ignored.
 	ResolveRelay(ctx context.Context, senderDomain string) (*Relay, error)
+
+	// ListActiveFilterRule returns the account's active filter rules in
+	// position order — the delivery path (SMTP inbound/submission) evaluates
+	// these on INBOX-bound mail.
+	ListActiveFilterRule(ctx context.Context, accountID int64) ([]*FilterRule, error)
 }
 
 // AdminStore is the extended interface used by the management plane (Admin API) (Phase 3).
@@ -320,4 +367,15 @@ type AdminStore interface {
 	SetAccountMessageFlag(ctx context.Context, accountID, messageID int64, flagList []string) error
 	// EnsureMailbox finds or creates a mailbox by name.
 	EnsureMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error)
+
+	// Filter rules (0009) CRUD — backs /api/me/filter. The delivery-path
+	// read (ListActiveFilterRule) lives on Store.
+	ListFilterRule(ctx context.Context, accountID int64) ([]*FilterRule, error)
+	CreateFilterRule(ctx context.Context, r *FilterRule) (*FilterRule, error)
+	// UpdateFilterRule rewrites the rule row (account-scoped by id+account).
+	UpdateFilterRule(ctx context.Context, r *FilterRule) error
+	DeleteFilterRule(ctx context.Context, accountID, id int64) error
+	// SwapFilterRule swaps the positions of a rule and its neighbor
+	// (direction -1 = up, +1 = down). No-op at the edges.
+	SwapFilterRule(ctx context.Context, accountID, id int64, direction int) error
 }

@@ -12,6 +12,7 @@ export default [
     layout("routes/mail/layout.tsx", [
       index("routes/mail/index.tsx"),
       route("compose", "routes/mail/compose.tsx"),
+      route("filter", "routes/mail/filter.tsx"),
       route(":mailbox", "routes/mail/list.tsx"),
       route(":mailbox/:id", "routes/mail/detail.tsx"),
     ]),

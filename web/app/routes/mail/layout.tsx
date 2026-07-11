@@ -88,6 +88,16 @@ export default function WebmailLayout({ loaderData }: Route.ComponentProps) {
               </NavLink>
             ))}
           </nav>
+          <NavLink
+            to="/mail/filter"
+            className={({ isActive }) =>
+              `rounded-md px-3 py-1.5 text-sm transition-colors duration-100 ${
+                isActive ? "bg-bg-3 text-text-0" : "text-text-2 hover:bg-bg-2 hover:text-text-1"
+              }`
+            }
+          >
+            {t("filter.title")}
+          </NavLink>
         </aside>
         <main className="min-w-0 flex-1">
           <Outlet />

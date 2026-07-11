@@ -184,3 +184,17 @@ export type MessageDetail = MessageRow & {
 };
 
 export type SendResult = { delivered: number; queued: number };
+
+export type FilterRule = {
+  id: number;
+  position: number;
+  name: string;
+  active: boolean;
+  field: "from" | "to" | "subject" | "header";
+  headerName: string;
+  matchType: "contains" | "equals" | "prefix" | "suffix";
+  pattern: string;
+  action: "move" | "markSeen" | "flag" | "discard";
+  actionMailbox: string;
+  createdAt: string;
+};
