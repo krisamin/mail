@@ -98,6 +98,16 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	me.HandleFunc("GET /api/me/app-password", s.handleMeListAppPassword)
 	me.HandleFunc("POST /api/me/app-password", s.handleMeCreateAppPassword)
 	me.HandleFunc("DELETE /api/me/app-password/{id}", s.handleMeRevokeAppPassword)
+	// webmail — read/organize/send the caller's own mail
+	me.HandleFunc("GET /api/me/mailbox", s.handleMeMailbox)
+	me.HandleFunc("GET /api/me/message", s.handleMeMessageList)
+	me.HandleFunc("GET /api/me/message/{id}", s.handleMeMessageDetail)
+	me.HandleFunc("PATCH /api/me/message/{id}", s.handleMePatchMessage)
+	me.HandleFunc("DELETE /api/me/message/{id}", s.handleMeDeleteMessage)
+	me.HandleFunc("POST /api/me/message/{id}/move", s.handleMeMoveMessage)
+	me.HandleFunc("GET /api/me/message/{id}/raw", s.handleMeMessageRaw)
+	me.HandleFunc("GET /api/me/message/{id}/attachment/{index}", s.handleMeAttachment)
+	me.HandleFunc("POST /api/me/send", s.handleMeSendMessage)
 	s.mux.Handle("/api/me/", auth.RequireUser(me))
 	return s
 }

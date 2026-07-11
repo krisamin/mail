@@ -100,6 +100,9 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             mail <span className="text-accent">account</span>
           </Link>
           <div className="flex items-center gap-3">
+            <Link to="/mail" className="text-xs text-text-2 hover:text-text-1">
+              {t("webmail.nav")}
+            </Link>
             {admin && (
               <Link to="/admin" className="text-xs text-text-2 hover:text-text-1">
                 {t("nav.adminConsole")}

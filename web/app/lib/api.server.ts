@@ -136,3 +136,51 @@ export type DnsVerify = {
   srvSubmission: DnsCheck;
   autoconfig: DnsCheck;
 };
+
+// ── Webmail ─────────────────────────────────────────────────
+
+export type MailboxSummary = {
+  name: string;
+  messageCount: number;
+  unseenCount: number;
+};
+
+export type MessageRow = {
+  id: number;
+  uid: number;
+  subject: string;
+  fromAddr: string;
+  internalDate: string;
+  sizeBytes: number;
+  seen: boolean;
+  flagged: boolean;
+  answered: boolean;
+};
+
+export type MessagePage = {
+  messageList: MessageRow[];
+  /** UID cursor for the next page — 0 means no more pages. */
+  nextBefore: number;
+};
+
+export type Attachment = {
+  index: number;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+};
+
+export type MessageDetail = MessageRow & {
+  mailbox: string;
+  toList: string[] | null;
+  ccList: string[] | null;
+  replyTo?: string;
+  messageId?: string;
+  date?: string;
+  textBody: string;
+  htmlBody: string;
+  attachmentList: Attachment[];
+  parseWarn?: string;
+};
+
+export type SendResult = { delivered: number; queued: number };

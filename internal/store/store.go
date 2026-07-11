@@ -159,6 +159,13 @@ type MailboxStatus struct {
 	UIDValidity uint32
 }
 
+// MailboxSummary is the webmail sidebar row (name + counts).
+type MailboxSummary struct {
+	Name         string
+	MessageCount uint32
+	UnseenCount  uint32
+}
+
 // ── Interfaces ──────────────────────────────────────────────
 
 // Store is the top-level interface of the mail storage engine.
@@ -295,4 +302,22 @@ type AdminStore interface {
 	// GetSetting returns store.ErrNotFound for a missing key.
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
+
+	// Webmail (account-scoped — ownership is enforced inside the queries,
+	// so a guessed message ID of another account is a plain ErrNotFound).
+	ListMailboxSummary(ctx context.Context, accountID int64) ([]*MailboxSummary, error)
+	// ListMessagePage pages newest-first. beforeUID=0 starts at the top;
+	// otherwise only uid < beforeUID rows return (cursor pagination).
+	ListMessagePage(ctx context.Context, accountID int64, mailboxName string, limit int, beforeUID uint32) ([]*Message, error)
+	// GetAccountMessage returns the message and the name of its mailbox.
+	GetAccountMessage(ctx context.Context, accountID, messageID int64) (*Message, string, error)
+	// MoveAccountMessage moves to another mailbox of the same account,
+	// creating the destination on demand (Trash/Archive on first use).
+	MoveAccountMessage(ctx context.Context, accountID, messageID int64, destName string) error
+	// DeleteAccountMessage physically deletes (webmail uses it for Trash only).
+	DeleteAccountMessage(ctx context.Context, accountID, messageID int64) error
+	// SetAccountMessageFlag replaces flags with ownership check + notify.
+	SetAccountMessageFlag(ctx context.Context, accountID, messageID int64, flagList []string) error
+	// EnsureMailbox finds or creates a mailbox by name.
+	EnsureMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error)
 }

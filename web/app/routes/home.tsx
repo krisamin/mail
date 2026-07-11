@@ -24,7 +24,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             <p className="text-sm text-text-1">{user.name}</p>
             <p className="text-xs text-text-2">{user.email}</p>
           </Card>
-          <ButtonLink to="/account">{t("nav.myAccount")}</ButtonLink>
+          <ButtonLink to="/mail">{t("webmail.nav")}</ButtonLink>
+          <ButtonLink to="/account" variant="outline">
+            {t("nav.myAccount")}
+          </ButtonLink>
           {admin && (
             <ButtonLink to="/admin" variant="outline">
               {t("nav.adminConsole")}
