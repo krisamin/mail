@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/krisamin/mail/internal/delivery"
 	"github.com/krisamin/mail/internal/store"
 	"github.com/krisamin/mail/internal/store/postgres"
 )
@@ -155,6 +156,9 @@ func mapStoreErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, delivery.ErrQuotaExceeded):
+		// 507 Insufficient Storage — the recipient mailbox is full
+		writeError(w, http.StatusInsufficientStorage, "recipient mailbox is full")
 	// judged by pg error code (string matching breaks when driver messages change)
 	case errors.As(err, &pgErr) && pgErr.Code == "23505": // unique_violation
 		writeError(w, http.StatusConflict, "already exists")
@@ -397,18 +401,23 @@ func dkimPublicTXT(pemText string) (string, error) {
 // ── Accounts ────────────────────────────────────────────────
 
 type accountDTO struct {
-	ID        uuid.UUID `json:"id"`
-	Subject   string    `json:"subject"`
-	Email     string    `json:"email"`
-	Kind      string    `json:"kind"` // 'user' | 'service'
-	Active    bool      `json:"active"`
-	CreatedAt string    `json:"createdAt"`
+	ID      uuid.UUID `json:"id"`
+	Subject string    `json:"subject"`
+	Email   string    `json:"email"`
+	Kind    string    `json:"kind"` // 'user' | 'service'
+	Active  bool      `json:"active"`
+	// QuotaBytes is the storage quota (null = unlimited).
+	QuotaBytes *int64 `json:"quotaBytes"`
+	// UsageBytes is the logical usage (filled by the overview endpoint only).
+	UsageBytes int64  `json:"usageBytes"`
+	CreatedAt  string `json:"createdAt"`
 }
 
 func toAccountDTO(u *store.Account) accountDTO {
 	return accountDTO{
 		ID: u.ID, Subject: u.OIDCSubject, Email: u.OIDCEmail, Kind: u.Kind, Active: u.Active,
-		CreatedAt: u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		QuotaBytes: u.QuotaBytes,
+		CreatedAt:  u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 
@@ -455,16 +464,32 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Active *bool `json:"active"`
+		// QuotaBytes: set = update (0 → unlimited/NULL). Distinguished from
+		// "field absent" via the double pointer decode below.
+		QuotaBytes *int64 `json:"quotaBytes"`
+		QuotaSet   bool   `json:"quotaSet"`
 	}
-	if err := decodeBody(r, &req); err != nil || req.Active == nil {
-		writeError(w, http.StatusBadRequest, "invalid body (active required)")
+	if err := decodeBody(r, &req); err != nil || (req.Active == nil && !req.QuotaSet) {
+		writeError(w, http.StatusBadRequest, "invalid body (active or quotaSet required)")
 		return
 	}
-	if err := s.store.SetAccountActive(r.Context(), id, *req.Active); err != nil {
-		mapStoreErr(w, err)
-		return
+	if req.Active != nil {
+		if err := s.store.SetAccountActive(r.Context(), id, *req.Active); err != nil {
+			mapStoreErr(w, err)
+			return
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"active": *req.Active})
+	if req.QuotaSet {
+		q := req.QuotaBytes
+		if q != nil && *q <= 0 {
+			q = nil // 0 or negative = unlimited
+		}
+		if err := s.store.SetAccountQuota(r.Context(), id, q); err != nil {
+			mapStoreErr(w, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // ── App passwords ───────────────────────────────────────────

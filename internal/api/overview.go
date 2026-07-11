@@ -34,6 +34,11 @@ func (s *Server) handleAccountOverview(w http.ResponseWriter, r *http.Request) {
 		mapStoreErr(w, err)
 		return
 	}
+	usageMap, err := s.store.ListAccountUsage(ctx)
+	if err != nil {
+		mapStoreErr(w, err)
+		return
+	}
 
 	addressMap := map[uuid.UUID][]addressDTO{}
 	for _, a := range addressList {
@@ -51,6 +56,7 @@ func (s *Server) handleAccountOverview(w http.ResponseWriter, r *http.Request) {
 			AddressList:     addressMap[u.ID],
 			AppPasswordList: passwordMap[u.ID],
 		}
+		entry.Account.UsageBytes = usageMap[u.ID]
 		if entry.AddressList == nil {
 			entry.AddressList = []addressDTO{}
 		}

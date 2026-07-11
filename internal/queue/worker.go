@@ -17,6 +17,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/krisamin/mail/internal/metric"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -127,6 +128,13 @@ func (w *Worker) ProcessOnce(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("due lookup: %w", err)
 	}
+	if statStore, ok := w.store.(interface {
+		OutboundStat(ctx context.Context) (map[string]int64, error)
+	}); ok {
+		if stat, serr := statStore.OutboundStat(ctx); serr == nil {
+			metric.QueuePendingGauge.Set(float64(stat[store.OutboundPending]))
+		}
+	}
 
 	for _, m := range due {
 		w.processMessage(ctx, m)
@@ -151,11 +159,14 @@ func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
 		}
 	}
 
+	sendStart := time.Now()
 	err := w.sender.Send(ctx, m.EnvelopeFrom, m.EnvelopeRcpt, raw)
+	metric.SendDuration.Observe(time.Since(sendStart).Seconds())
 	if err == nil {
 		if err := w.store.MarkOutboundSent(ctx, m.ID); err != nil {
 			log.Printf("queue: marking sent failed id=%s: %v", m.ID, err)
 		}
+		metric.QueueSendTotal.WithLabelValues("sent").Inc()
 		log.Printf("queue: sent id=%s to=%s (attempt %d)", m.ID, m.EnvelopeRcpt, m.AttemptCount+1)
 		return
 	}
@@ -166,6 +177,7 @@ func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
 		if merr := w.store.MarkOutboundFailed(ctx, m.ID, err.Error()); merr != nil {
 			log.Printf("queue: marking failed failed id=%s: %v", m.ID, merr)
 		}
+		metric.QueueSendTotal.WithLabelValues("failed").Inc()
 		log.Printf("queue: permanent failure id=%s to=%s: %v (attempt %d/%d)",
 			m.ID, m.EnvelopeRcpt, err, m.AttemptCount+1, w.cfg.MaxAttemptCount)
 		// bounce DSN to the sender (RFC 3464) — the sender is a local user, so straight to INBOX
@@ -190,6 +202,7 @@ func (w *Worker) processMessage(ctx context.Context, m *store.OutboundMessage) {
 	if merr := w.store.MarkOutboundRetry(ctx, m.ID, err.Error(), next); merr != nil {
 		log.Printf("queue: marking retry failed id=%s: %v", m.ID, merr)
 	}
+	metric.QueueSendTotal.WithLabelValues("retry").Inc()
 	log.Printf("queue: retry scheduled id=%s to=%s in %s: %v (attempt %d/%d)",
 		m.ID, m.EnvelopeRcpt, backoff, err, m.AttemptCount+1, w.cfg.MaxAttemptCount)
 }

@@ -19,7 +19,8 @@ import (
 	gosmtp "github.com/emersion/go-smtp"
 
 	"github.com/krisamin/mail/internal/auth"
-	"github.com/krisamin/mail/internal/filter"
+	"github.com/krisamin/mail/internal/delivery"
+	"github.com/krisamin/mail/internal/metric"
 	"github.com/krisamin/mail/internal/spam"
 	"github.com/krisamin/mail/internal/store"
 )
@@ -143,6 +144,7 @@ func (s *Session) Mail(from string, opts *gosmtp.MailOptions) error {
 		ip := remoteIP(s.remoteAddr)
 
 		if v := s.backend.checker.CheckDNSBL(ctx, ip); v.Listed {
+			metric.InboundRejectTotal.WithLabelValues("dnsbl").Inc()
 			log.Printf("smtp: DNSBL reject ip=%s zone=%s code=%s from=%s", ip, v.Zone, v.Code, from)
 			return &gosmtp.SMTPError{
 				Code:         554,
@@ -175,6 +177,7 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	u, err := s.backend.store.ResolveAddress(ctx, to)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			metric.InboundRejectTotal.WithLabelValues("unknown_user").Inc()
 			return &gosmtp.SMTPError{
 				Code:         550,
 				EnhancedCode: gosmtp.EnhancedCode{5, 1, 1},
@@ -197,6 +200,7 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 				// fail-open: an internal error must never bounce mail
 				log.Printf("smtp: greylist check failed (fail-open) from=%s to=%s: %v", s.from, to, gerr)
 			} else if !pass {
+				metric.InboundRejectTotal.WithLabelValues("greylist").Inc()
 				log.Printf("smtp: greylisted from=%s to=%s ip=%s", s.from, to, ip)
 				return &gosmtp.SMTPError{
 					Code:         451,
@@ -264,6 +268,7 @@ func (s *Session) Data(r io.Reader) error {
 		} else {
 			switch result.Action {
 			case spam.ScanReject:
+				metric.InboundRejectTotal.WithLabelValues("rspamd").Inc()
 				log.Printf("smtp: rspamd reject from=%s score=%.1f/%.1f action=%q",
 					s.from, result.Score, result.RequiredScore, result.RawAction)
 				return &gosmtp.SMTPError{
@@ -273,6 +278,7 @@ func (s *Session) Data(r io.Reader) error {
 				}
 			case spam.ScanJunk:
 				folder = "Junk"
+				metric.QuarantineTotal.WithLabelValues("rspamd").Inc()
 				log.Printf("smtp: rspamd quarantine → Junk from=%s score=%.1f/%.1f action=%q",
 					s.from, result.Score, result.RequiredScore, result.RawAction)
 			}
@@ -281,6 +287,7 @@ func (s *Session) Data(r io.Reader) error {
 	if s.suspicious {
 		// connection screening (no FCrDNS + implausible HELO) → quarantine
 		folder = "Junk"
+		metric.QuarantineTotal.WithLabelValues("screening").Inc()
 	}
 	if s.backend.verifyInbound {
 		ip := remoteIP(s.remoteAddr)
@@ -298,6 +305,7 @@ func (s *Session) Data(r io.Reader) error {
 		if s.backend.enforceDMARC && vr.DMARCEvaluated && !vr.DMARCPass {
 			switch vr.DMARCPolicy {
 			case "reject":
+				metric.InboundRejectTotal.WithLabelValues("dmarc").Inc()
 				log.Printf("smtp: DMARC reject from=%s ip=%s", s.from, ip)
 				return &gosmtp.SMTPError{
 					Code:         550,
@@ -306,6 +314,7 @@ func (s *Session) Data(r io.Reader) error {
 				}
 			case "quarantine":
 				folder = "Junk"
+				metric.QuarantineTotal.WithLabelValues("dmarc").Inc()
 				log.Printf("smtp: DMARC quarantine → Junk from=%s ip=%s", s.from, ip)
 			}
 		}
@@ -328,6 +337,17 @@ func (s *Session) Data(r io.Reader) error {
 		stamped = append(stamped, raw...)
 
 		if err := s.deliver(rc, folder, stamped, now); err != nil {
+			// quota is a per-recipient condition: 452 4.2.2 tells the sender
+			// this mailbox is full (transient — retry after cleanup) without
+			// implying a server fault.
+			if errors.Is(err, delivery.ErrQuotaExceeded) {
+				log.Printf("smtp: quota reject to=%s from=%s", rc.address, s.from)
+				return &gosmtp.SMTPError{
+					Code:         452,
+					EnhancedCode: gosmtp.EnhancedCode{4, 2, 2},
+					Message:      "recipient mailbox is full",
+				}
+			}
 			// Swallowing a partial delivery failure with 250 means the sending
 			// server won't retry and the remaining recipients' mail is silently
 			// lost — reject the whole transaction with 451 to induce a resend
@@ -347,41 +367,22 @@ func (s *Session) Data(r io.Reader) error {
 	return nil
 }
 
-// deliver stores the message in the recipient's given folder. Creates the folder if missing.
-// INBOX-bound mail runs the recipient's filter rules first (quarantine
-// verdicts — Junk — skip filters so a user rule can't rescue spam).
+// deliver stores the message in the recipient's given folder via the shared
+// local delivery pipeline (filters on INBOX-bound mail, folder creation,
+// append + IDLE notification).
 func (s *Session) deliver(rc rcpt, folder string, raw []byte, now time.Time) error {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
-	var flagList []string
-	if folder == "INBOX" {
-		v := filter.Evaluate(ctx, s.backend.store, rc.user.ID, raw)
-		if v.Discard {
-			log.Printf("smtp: filter discard rule=%q to=%s from=%s", v.RuleName, rc.address, s.from)
-			return nil // dropped silently — the transaction still succeeds
-		}
-		if v.Mailbox != "" {
-			folder = v.Mailbox
-			log.Printf("smtp: filter move rule=%q to=%s folder=%s", v.RuleName, rc.address, folder)
-		}
-		flagList = v.FlagList
-	}
-
-	box, err := s.backend.store.GetMailbox(ctx, rc.user.ID, folder)
-	if errors.Is(err, store.ErrNotFound) {
-		box, err = s.backend.store.CreateMailbox(ctx, rc.user.ID, folder)
-	}
-	if err != nil {
-		return fmt.Errorf("ensure %s: %w", folder, err)
-	}
-
-	// new mail has no flags (= unseen) unless a filter adds them
-	_, err = s.backend.store.AppendMessage(ctx, box.ID, raw, flagList, now)
-	if err != nil {
-		return fmt.Errorf("append: %w", err)
-	}
-	return nil
+	_, err := delivery.Deliver(ctx, s.backend.store, delivery.Request{
+		AccountID: rc.user.ID,
+		Address:   rc.address,
+		Origin:    "smtp",
+		Folder:    folder,
+		Raw:       raw,
+		Date:      now,
+	})
+	return err
 }
 
 // receivedHeader builds an RFC 5321-style Received header.

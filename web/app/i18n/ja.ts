@@ -94,6 +94,9 @@ export const ja: Record<keyof typeof ko, string> = {
   "adminAccount.empty":
     "アカウントはまだありません — ユーザーがログインするか、サービスアカウントを作成すると表示されます。",
   "adminAccount.service": "サービス",
+  "adminAccount.storage": "ストレージ",
+  "adminAccount.quotaUnlimited": "無制限",
+  "adminAccount.quotaPlaceholder": "GB（空欄=無制限）",
   "adminAccount.address": "アドレス",
   "adminAccount.addressPlaceholder": "hello または *",
   "adminAccount.appPassword": "アプリパスワード",

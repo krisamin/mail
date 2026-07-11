@@ -284,6 +284,12 @@ type Store interface {
 	// are treated as new. Errors must fail-open at the caller (an internal
 	// error must never bounce mail).
 	CheckGreylist(ctx context.Context, sourceNet, from, rcpt string, minDelay, staleAfter time.Duration) (bool, error)
+
+	// QuotaExceeded reports whether appending addBytes to the account would
+	// exceed its quota (single-roundtrip check). Accounts with NULL quota
+	// never exceed. Callers should fail-open on error — quota is a
+	// protective limit, not a correctness gate.
+	QuotaExceeded(ctx context.Context, accountID uuid.UUID, addBytes int64) (bool, error)
 }
 
 // AdminStore is the extended interface used by the management plane (Admin API) (Phase 3).
@@ -314,6 +320,11 @@ type AdminStore interface {
 	// no login, address + app passwords only. The email address is registered as primary.
 	CreateServiceAccount(ctx context.Context, email string) (*Account, error)
 	SetAccountActive(ctx context.Context, id uuid.UUID, active bool) error
+	// SetAccountQuota sets the account's storage quota (nil = unlimited).
+	SetAccountQuota(ctx context.Context, id uuid.UUID, quotaBytes *int64) error
+	// ListAccountUsage returns per-account logical usage (sum of message
+	// sizes; blob dedup means physical usage can be lower). Admin overview.
+	ListAccountUsage(ctx context.Context) (map[uuid.UUID]int64, error)
 
 	// App passwords (DD-02: issued after OAuth login)
 	ListAppPassword(ctx context.Context, accountID uuid.UUID) ([]*AppPassword, error)

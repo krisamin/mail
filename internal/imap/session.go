@@ -12,6 +12,7 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver"
 
 	"github.com/krisamin/mail/internal/guard"
+	"github.com/krisamin/mail/internal/metric"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -84,6 +85,7 @@ func (s *Session) Login(username, password string) error {
 	ipKey := "ip:" + guard.KeyForIP(s.remoteIP)
 	acctKey := "acct:" + strings.ToLower(username)
 	if !s.backend.limiter.Allow(ipKey) || !s.backend.limiter.Allow(acctKey) {
+		metric.AuthTotal.WithLabelValues("imap", "blocked").Inc()
 		return &goimap.Error{
 			Type: goimap.StatusResponseTypeNo,
 			Text: "too many failed attempts, try again later",
@@ -96,12 +98,14 @@ func (s *Session) Login(username, password string) error {
 	u, err := s.backend.store.AuthenticateAppPassword(ctx, username, password)
 	if err != nil {
 		if errors.Is(err, store.ErrAuthFailed) || errors.Is(err, store.ErrNotFound) {
+			metric.AuthTotal.WithLabelValues("imap", "fail").Inc()
 			s.backend.limiter.Fail(ipKey)
 			s.backend.limiter.Fail(acctKey)
 			return imapserver.ErrAuthFailed
 		}
 		return err
 	}
+	metric.AuthTotal.WithLabelValues("imap", "ok").Inc()
 	s.backend.limiter.Success(ipKey)
 	s.backend.limiter.Success(acctKey)
 	s.user = u
@@ -335,6 +339,15 @@ func (s *Session) Append(mailbox string, r goimap.LiteralReader, options *goimap
 			Type: goimap.StatusResponseTypeNo,
 			Code: goimap.ResponseCodeTooBig,
 			Text: "message exceeds append limit",
+		}
+	}
+
+	// quota gate (fail-open on check errors — protective, not correctness)
+	if over, qerr := s.backend.store.QuotaExceeded(ctx, s.user.ID, r.Size()); qerr == nil && over {
+		return nil, &goimap.Error{
+			Type: goimap.StatusResponseTypeNo,
+			Code: goimap.ResponseCodeOverQuota,
+			Text: "account storage quota exceeded",
 		}
 	}
 

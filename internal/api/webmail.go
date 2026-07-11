@@ -20,7 +20,7 @@ import (
 	_ "github.com/emersion/go-message/charset"
 	gomail "github.com/emersion/go-message/mail"
 
-	"github.com/krisamin/mail/internal/filter"
+	"github.com/krisamin/mail/internal/delivery"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -597,25 +597,13 @@ func (s *Server) handleMeSendMessage(w http.ResponseWriter, r *http.Request) {
 			mapStoreErr(w, err)
 			return
 		}
-		// recipient filter rules apply to webmail-delivered mail too —
-		// same semantics as the SMTP delivery path
-		folder := "INBOX"
-		var flagList []string
-		if v := filter.Evaluate(r.Context(), s.store, acct.ID, raw); v.Discard {
-			log.Printf("api: filter discard rule=%q to=%s from=%s", v.RuleName, rcptAddr, from)
-			continue
-		} else {
-			if v.Mailbox != "" {
-				folder = v.Mailbox
-			}
-			flagList = v.FlagList
-		}
-		box, err := s.store.EnsureMailbox(r.Context(), acct.ID, folder)
-		if err != nil {
-			mapStoreErr(w, err)
-			return
-		}
-		if _, err := s.store.AppendMessage(r.Context(), box.ID, raw, flagList, time.Now()); err != nil {
+		// same pipeline as the SMTP delivery path — filters, folder, notify
+		if _, err := delivery.Deliver(r.Context(), s.store, delivery.Request{
+			AccountID: acct.ID,
+			Address:   rcptAddr,
+			Origin:    "webmail",
+			Raw:       raw,
+		}); err != nil {
 			mapStoreErr(w, err)
 			return
 		}

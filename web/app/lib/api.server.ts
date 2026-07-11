@@ -63,6 +63,10 @@ export type Account = {
   email: string;
   kind: "user" | "service";
   active: boolean;
+  /** Storage quota in bytes (null = unlimited). */
+  quotaBytes: number | null;
+  /** Logical usage in bytes (overview endpoint only). */
+  usageBytes: number;
   createdAt: string;
 };
 

@@ -72,7 +72,8 @@ func (s *Store) CreateMailbox(ctx context.Context, accountID uuid.UUID, name str
 	return &m, nil
 }
 
-// DeleteMailbox deletes a mailbox (messages CASCADE too).
+// DeleteMailbox deletes a mailbox (messages CASCADE too). Blobs orphaned by
+// the cascade are swept afterwards (candidates are unavailable post-cascade).
 func (s *Store) DeleteMailbox(ctx context.Context, accountID uuid.UUID, name string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM mailbox WHERE account_id = $1 AND name = $2`, accountID, name)
 	if err != nil {
@@ -81,6 +82,7 @@ func (s *Store) DeleteMailbox(ctx context.Context, accountID uuid.UUID, name str
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
+	s.gcMailboxBlob(ctx)
 	return nil
 }
 

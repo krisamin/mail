@@ -34,11 +34,16 @@ func (s *Store) AppendMessage(ctx context.Context, mailboxID uuid.UUID, raw []by
 		return nil, fmt.Errorf("UID issue: %w", err)
 	}
 
-	// 2) store the blob
+	// 2) store the blob — content-addressed by sha256 (0002). The no-op
+	// DO UPDATE makes RETURNING fire on the conflict path too, so a duplicate
+	// body (multi-recipient fan-out, Sent copies) reuses the existing row and
+	// the row lock it takes keeps concurrent GC away until we commit.
 	sum := sha256.Sum256(raw)
 	var blobID uuid.UUID
 	err = tx.QueryRow(ctx,
-		`INSERT INTO message_blob (content, sha256) VALUES ($1, $2) RETURNING id`,
+		`INSERT INTO message_blob (content, sha256) VALUES ($1, $2)
+		 ON CONFLICT (sha256) DO UPDATE SET sha256 = EXCLUDED.sha256
+		 RETURNING id`,
 		raw, sum[:]).Scan(&blobID)
 	if err != nil {
 		return nil, fmt.Errorf("blob store: %w", err)
@@ -175,6 +180,7 @@ func (s *Store) SetFlag(ctx context.Context, messageID uuid.UUID, flagList []str
 
 // ExpungeDeleted physically deletes messages flagged \Deleted and returns the deleted UIDs.
 // nil uids means the whole mailbox; otherwise only the given UIDs (IMAP UID EXPUNGE).
+// Blobs that lost their last reference are garbage-collected afterwards.
 func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID uuid.UUID, uidSet []uint32) ([]uint32, error) {
 	const q = `
 		DELETE FROM message m
@@ -182,7 +188,7 @@ func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID uuid.UUID, uidSet 
 		  AND ($2::bigint[] IS NULL OR m.uid = ANY($2))
 		  AND EXISTS (SELECT 1 FROM message_flag f
 		              WHERE f.message_id = m.id AND f.flag = '\Deleted')
-		RETURNING m.uid`
+		RETURNING m.uid, m.blob_id`
 	var uidFilter []int64
 	if uidSet != nil {
 		uidFilter = make([]int64, len(uidSet))
@@ -196,16 +202,20 @@ func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID uuid.UUID, uidSet 
 	}
 	defer rows.Close()
 	var out []uint32
+	var blobList []uuid.UUID
 	for rows.Next() {
 		var uid int64
-		if err := rows.Scan(&uid); err != nil {
+		var blobID uuid.UUID
+		if err := rows.Scan(&uid, &blobID); err != nil {
 			return nil, err
 		}
 		out = append(out, uint32(uid))
+		blobList = append(blobList, blobID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	s.gcBlob(ctx, blobList)
 	// change notification only when something was actually deleted (reflects EXPUNGE to IDLE sessions)
 	if len(out) > 0 {
 		if _, err := s.pool.Exec(ctx,

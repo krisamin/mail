@@ -13,12 +13,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/emersion/go-imap/v2/imapserver"
 	gosmtp "github.com/emersion/go-smtp"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/krisamin/mail/internal/api"
 	imapbackend "github.com/krisamin/mail/internal/imap"
@@ -36,6 +36,13 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+// metricMux serves Prometheus metrics (and nothing else).
+func metricMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	return mux
+}
+
 // loadTLS builds a TLS config when MAIL_TLS_CERT/MAIL_TLS_KEY are set.
 // Unset returns nil (plaintext — behind a proxy/tunnel, or dev).
 func loadTLS() *tls.Config {
@@ -51,18 +58,15 @@ func loadTLS() *tls.Config {
 }
 
 func main() {
-	dsn := os.Getenv("MAIL_DSN")
-	if dsn == "" {
-		log.Fatal("MAIL_DSN unset (e.g. postgres://mail:maildev@localhost:55432/mail)")
-	}
 	// dev defaults: 143/25/587 are privileged ports → 1143/2525/2587. Mapped by a Service on k8s.
-	imapAddr := env("MAIL_IMAP_ADDR", ":1143")
-	smtpAddr := env("MAIL_SMTP_ADDR", ":2525")
-	submissionAddr := env("MAIL_SUBMISSION_ADDR", ":2587")
-	hostname := env("MAIL_HOSTNAME", "mail.example.com")
+	cfg := loadConfig()
+	imapAddr := cfg.IMAPAddr
+	smtpAddr := cfg.SMTPAddr
+	submissionAddr := cfg.SubmissionAddr
+	hostname := cfg.Hostname
 	tlsConfig := loadTLS()
 
-	st, err := postgres.New(context.Background(), dsn)
+	st, err := postgres.New(context.Background(), cfg.DSN)
 	if err != nil {
 		log.Fatalf("store connect failed: %v", err)
 	}
@@ -101,40 +105,27 @@ func main() {
 
 	// inbound (MX) SMTP server — SPF/DKIM/DMARC verification + optional policy enforcement
 	mxBackend := smtpbackend.NewBackend(st, hostname)
-	if os.Getenv("MAIL_DMARC_ENFORCE") == "true" {
+	if cfg.DMARCEnforce {
 		mxBackend.WithDMARCEnforcement()
 		log.Printf("maild: DMARC enforcement active (reject→550, quarantine→Junk)")
 	} else {
 		mxBackend.WithInboundVerification()
 	}
 	// connection screening: DNSBL(reject) + FCrDNS/HELO(quarantine).
-	// MAIL_DNSBL_ZONE: comma-separated zones ("off" disables everything,
-	// empty = rDNS/HELO screening only with the default zone list empty).
-	dnsblEnv := env("MAIL_DNSBL_ZONE", "zen.spamhaus.org")
-	if dnsblEnv != "off" {
-		var zoneList []string
-		for _, z := range strings.Split(dnsblEnv, ",") {
-			if z = strings.TrimSpace(z); z != "" {
-				zoneList = append(zoneList, z)
-			}
-		}
-		mxBackend.WithSpamChecker(spam.NewChecker(zoneList))
-		log.Printf("maild: connection screening active (dnsbl=%v, rDNS/HELO quarantine)", zoneList)
+	if len(cfg.DNSBLZoneList) > 0 {
+		mxBackend.WithSpamChecker(spam.NewChecker(cfg.DNSBLZoneList))
+		log.Printf("maild: connection screening active (dnsbl=%v, rDNS/HELO quarantine)", cfg.DNSBLZoneList)
 	}
 	// greylisting: first-contact triplets get 451, retries pass.
 	// FCrDNS-verified senders skip it (requires the spam checker above).
-	if os.Getenv("MAIL_GREYLIST") == "true" {
-		delay := time.Minute
-		if d, err := time.ParseDuration(env("MAIL_GREYLIST_DELAY", "1m")); err == nil && d > 0 {
-			delay = d
-		}
-		mxBackend.WithGreylist(delay)
-		log.Printf("maild: greylisting active (delay=%s, FCrDNS-verified senders exempt)", delay)
+	if cfg.Greylist {
+		mxBackend.WithGreylist(cfg.GreylistDelay)
+		log.Printf("maild: greylisting active (delay=%s, FCrDNS-verified senders exempt)", cfg.GreylistDelay)
 	}
 	// rspamd content scanning (reject → 554, add-header/greylist → Junk)
-	if rspamdURL := os.Getenv("MAIL_RSPAMD_URL"); rspamdURL != "" {
-		mxBackend.WithScanner(spam.NewScanner(rspamdURL, os.Getenv("MAIL_RSPAMD_PASSWORD")))
-		log.Printf("maild: rspamd scanning active (url=%s)", rspamdURL)
+	if cfg.RspamdURL != "" {
+		mxBackend.WithScanner(spam.NewScanner(cfg.RspamdURL, cfg.RspamdPass))
+		log.Printf("maild: rspamd scanning active (url=%s)", cfg.RspamdURL)
 	}
 	smtpSrv := gosmtp.NewServer(mxBackend)
 	smtpSrv.Addr = smtpAddr
@@ -171,7 +162,7 @@ func main() {
 	// SMTPS submission server (implicit TLS — RFC 8314 recommended, exposed as 465).
 	// Shares the same backend (identical auth/queue logic). Skipped without a TLS cert.
 	var smtpsSrv *gosmtp.Server
-	smtpsAddr := env("MAIL_SMTPS_ADDR", ":2465")
+	smtpsAddr := cfg.SMTPSAddr
 	if tlsConfig != nil {
 		smtpsSrv = gosmtp.NewServer(submissionBackend)
 		smtpsSrv.Addr = smtpsAddr
@@ -200,23 +191,15 @@ func main() {
 	}()
 
 	// Admin REST API — requires an OIDC Bearer token + the admin group
-	apiAddr := env("MAIL_API_ADDR", ":8080")
-	issuerURL := os.Getenv("MAIL_OIDC_ISSUER")
-	devInsecure := os.Getenv("MAIL_DEV_INSECURE") == "true"
-	// fail-closed: refuse to start without an issuer. Prevents one missing env
-	// from silently opening the admin API unauthenticated — the no-verification
-	// dev mode requires an explicit MAIL_DEV_INSECURE=true opt-in.
-	if issuerURL == "" && !devInsecure {
-		log.Fatal("MAIL_OIDC_ISSUER unset — to run without verification set MAIL_DEV_INSECURE=true explicitly (never in production)")
-	}
-	if devInsecure {
+	apiAddr := cfg.APIAddr
+	if cfg.DevInsecure {
 		log.Printf("★★★ MAIL_DEV_INSECURE=true — API token verification OFF, every request treated as admin (never in production) ★★★")
 	}
 	authCfg := api.AuthConfig{
-		IssuerURL:          issuerURL,
-		ClientID:           os.Getenv("MAIL_OIDC_CLIENT_ID"),
-		AdminGroup:         env("MAIL_ADMIN_GROUP", "mail-admin"),
-		InsecureSkipVerify: devInsecure,
+		IssuerURL:          cfg.OIDCIssuer,
+		ClientID:           cfg.OIDCClientID,
+		AdminGroup:         cfg.AdminGroup,
+		InsecureSkipVerify: cfg.DevInsecure,
 	}
 	authn, err := api.NewAuthenticator(context.Background(), authCfg)
 	if err != nil {
@@ -251,6 +234,24 @@ func main() {
 		errCh <- apiSrv.ListenAndServe()
 	}()
 
+	// ── metrics (Prometheus) ─────────────────────────────────
+	// Separate listener from the Admin API: cluster-internal only, never
+	// routed through the gateway, so /metrics needs no auth story.
+	metricAddr := cfg.MetricAddr
+	metricSrv := &http.Server{
+		Addr:              metricAddr,
+		Handler:           metricMux(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		log.Printf("maild: metrics listening %s (/metrics)", metricAddr)
+		// metrics are observability, not service — a dead metrics listener
+		// must not take down mail (unlike errCh servers).
+		if err := metricSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("maild: metrics server stopped: %v", err)
+		}
+	}()
+
 	// ── graceful shutdown ────────────────────────────────────
 	// On SIGTERM (k8s)/SIGINT: stop accepting new connections → stop the worker
 	// → clean up within the grace period. Any single server dying exits the whole
@@ -271,6 +272,7 @@ func main() {
 	workerCancel() // queue worker: finish the current batch, then stop
 	notifyCancel() // stop the LISTEN loop
 	_ = apiSrv.Shutdown(shutdownCtx)
+	_ = metricSrv.Shutdown(shutdownCtx)
 	_ = smtpSrv.Shutdown(shutdownCtx)
 	_ = subSrv.Shutdown(shutdownCtx)
 	if smtpsSrv != nil {

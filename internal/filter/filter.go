@@ -35,10 +35,16 @@ type Verdict struct {
 	RuleName string
 }
 
+// RuleSource is the slice of the store the evaluator needs (consumer-side
+// interface — store.Store and the delivery pipeline's narrow view both fit).
+type RuleSource interface {
+	ListActiveFilterRule(ctx context.Context, accountID uuid.UUID) ([]*store.FilterRule, error)
+}
+
 // Evaluate runs the account's active rules against the raw message and
 // returns the first match's verdict. No match (or any error) returns the
 // zero Verdict — fail-open, delivery proceeds as INBOX.
-func Evaluate(ctx context.Context, st store.Store, accountID uuid.UUID, raw []byte) Verdict {
+func Evaluate(ctx context.Context, st RuleSource, accountID uuid.UUID, raw []byte) Verdict {
 	ctx, cancel := context.WithTimeout(ctx, evalTimeout)
 	defer cancel()
 

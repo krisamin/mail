@@ -11,6 +11,7 @@ import { translate } from "~/i18n";
 import { useT } from "~/lib/i18n";
 import { getLocale } from "~/lib/locale.server";
 import { requireAdmin } from "~/lib/session.server";
+import { formatBytes } from "~/lib/format";
 import {
   ActiveToggle,
   AddressChipList,
@@ -73,6 +74,17 @@ export const action = async ({ request }: Route.ActionArgs) => {
       case "delete-address": {
         await apiFetch(user.idToken, `/api/admin/address/${form.get("id")}`, {
           method: "DELETE",
+        });
+        return { ok: true as const };
+      }
+      case "set-quota": {
+        const gb = Number(form.get("quotaGb") ?? 0);
+        await apiFetch(user.idToken, `/api/admin/account/${form.get("id")}`, {
+          method: "PATCH",
+          body: {
+            quotaSet: true,
+            quotaBytes: gb > 0 ? Math.round(gb * 1024 * 1024 * 1024) : null,
+          },
         });
         return { ok: true as const };
       }
@@ -177,6 +189,32 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                   <input type="hidden" name="id" value={u.id} />
                   <input type="hidden" name="active" value={String(!u.active)} />
                   <ActiveToggle active={u.active} disabled={busy} />
+                </Form>
+              </div>
+
+              {/* Storage: usage + quota */}
+              <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+                <p className="text-xs text-text-2">{t("adminAccount.storage")}</p>
+                <p className="text-xs">
+                  {formatBytes(u.usageBytes)}
+                  <span className="text-text-2">
+                    {" / "}
+                    {u.quotaBytes ? formatBytes(u.quotaBytes) : t("adminAccount.quotaUnlimited")}
+                  </span>
+                </p>
+                <Form method="post" className="ml-auto flex items-center gap-1.5">
+                  <input type="hidden" name="intent" value="set-quota" />
+                  <input type="hidden" name="id" value={u.id} />
+                  <TextInput
+                    name="quotaGb"
+                    fieldSize="sm"
+                    className="w-20"
+                    placeholder={t("adminAccount.quotaPlaceholder")}
+                    defaultValue={u.quotaBytes ? String(u.quotaBytes / 1024 ** 3) : ""}
+                  />
+                  <Button variant="link" disabled={busy} pending={pending("set-quota", "id", u.id)}>
+                    {t("common.save")}
+                  </Button>
                 </Form>
               </div>
 

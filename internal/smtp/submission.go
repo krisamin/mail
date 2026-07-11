@@ -12,7 +12,9 @@ import (
 	"github.com/emersion/go-sasl"
 	gosmtp "github.com/emersion/go-smtp"
 
+	"github.com/krisamin/mail/internal/delivery"
 	"github.com/krisamin/mail/internal/guard"
+	"github.com/krisamin/mail/internal/metric"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -96,6 +98,7 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 		}
 		acctKey := "acct:" + strings.ToLower(username)
 		if !s.backend.limiter.Allow(ipKey) || !s.backend.limiter.Allow(acctKey) {
+			metric.AuthTotal.WithLabelValues("submission", "blocked").Inc()
 			return &gosmtp.SMTPError{
 				Code:         421,
 				EnhancedCode: gosmtp.EnhancedCode{4, 7, 0},
@@ -109,6 +112,7 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 		u, err := s.backend.store.AuthenticateAppPassword(ctx, username, password)
 		if err != nil {
 			if errors.Is(err, store.ErrAuthFailed) || errors.Is(err, store.ErrNotFound) {
+				metric.AuthTotal.WithLabelValues("submission", "fail").Inc()
 				s.backend.limiter.Fail(ipKey)
 				s.backend.limiter.Fail(acctKey)
 				return &gosmtp.SMTPError{
@@ -119,6 +123,7 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 			}
 			return err
 		}
+		metric.AuthTotal.WithLabelValues("submission", "ok").Inc()
 		s.backend.limiter.Success(ipKey)
 		s.backend.limiter.Success(acctKey)
 		s.user = u
@@ -256,6 +261,14 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 		stamped := inbound.receivedHeader(rc.address, now)
 		stamped = append(stamped, raw...)
 		if err := inbound.deliver(rc, "INBOX", stamped, now); err != nil {
+			if errors.Is(err, delivery.ErrQuotaExceeded) {
+				log.Printf("submission: quota reject to=%s from=%s", rc.address, s.from)
+				return &gosmtp.SMTPError{
+					Code:         452,
+					EnhancedCode: gosmtp.EnhancedCode{4, 2, 2},
+					Message:      "recipient mailbox is full",
+				}
+			}
 			log.Printf("submission: delivery failed to=%s from=%s: %v", rc.address, s.from, err)
 			return &gosmtp.SMTPError{
 				Code:         451,

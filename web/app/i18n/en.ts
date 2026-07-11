@@ -93,6 +93,9 @@ export const en: Record<keyof typeof ko, string> = {
   "adminAccount.empty":
     "No accounts yet — they appear when a user signs in or you create a service account.",
   "adminAccount.service": "Service",
+  "adminAccount.storage": "Storage",
+  "adminAccount.quotaUnlimited": "unlimited",
+  "adminAccount.quotaPlaceholder": "GB (empty = unlimited)",
   "adminAccount.address": "Addresses",
   "adminAccount.addressPlaceholder": "hello or *",
   "adminAccount.appPassword": "App passwords",

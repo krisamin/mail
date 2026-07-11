@@ -5,6 +5,7 @@ import { useT } from "~/lib/i18n";
 import { requireUser } from "~/lib/session.server";
 import { Badge, Button, ButtonLink, Card, ErrorBanner, TimeText } from "~/components";
 import { folderLabel } from "./layout";
+import { formatBytes } from "~/lib/format";
 
 // Message detail — text body (HTML mail shows its text alternative or a
 // notice; raw HTML is never rendered in the app origin), attachment
@@ -175,7 +176,7 @@ export default function MessageDetailPage({ loaderData, actionData }: Route.Comp
                   {a.filename || `attachment-${a.index}`}
                 </a>
                 <Badge tone="muted">{a.contentType}</Badge>
-                <span className="text-xs text-muted">{formatSize(a.sizeBytes)}</span>
+                <span className="text-xs text-muted">{formatBytes(a.sizeBytes)}</span>
               </li>
             ))}
           </ul>
@@ -195,8 +196,4 @@ export default function MessageDetailPage({ loaderData, actionData }: Route.Comp
   );
 }
 
-const formatSize = (n: number): string => {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-};
+

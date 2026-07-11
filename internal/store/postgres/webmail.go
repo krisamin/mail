@@ -186,18 +186,19 @@ func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID uui
 // The webmail layer uses this only for messages already in Trash — everything
 // else is moved to Trash first (two-step delete like every mail client).
 func (s *Store) DeleteAccountMessage(ctx context.Context, accountID, messageID uuid.UUID) error {
-	var mailboxID uuid.UUID
+	var mailboxID, blobID uuid.UUID
 	err := s.pool.QueryRow(ctx, `
 		DELETE FROM message m
 		USING mailbox mb
 		WHERE mb.id = m.mailbox_id AND mb.account_id = $1 AND m.id = $2
-		RETURNING m.mailbox_id`, accountID, messageID).Scan(&mailboxID)
+		RETURNING m.mailbox_id, m.blob_id`, accountID, messageID).Scan(&mailboxID, &blobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("message delete: %w", err)
 	}
+	s.gcBlob(ctx, []uuid.UUID{blobID})
 	if _, err := s.pool.Exec(ctx, `SELECT pg_notify('mailbox_change', $1)`,
 		mailboxID.String()); err != nil {
 		// notification failure is not fatal — fallback polling absorbs it
