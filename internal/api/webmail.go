@@ -51,11 +51,16 @@ type messageRowDTO struct {
 	UID          uint32    `json:"uid"`
 	Subject      string    `json:"subject"`
 	FromAddr     string    `json:"fromAddr"`
+	ToAddr       string    `json:"toAddr"`
+	Preview      string    `json:"preview"`
 	InternalDate string    `json:"internalDate"`
 	SizeBytes    int64     `json:"sizeBytes"`
 	Seen         bool      `json:"seen"`
 	Flagged      bool      `json:"flagged"`
 	Answered     bool      `json:"answered"`
+	Draft        bool      `json:"draft"`
+	// Mailbox is only set on search results, where rows cross mailboxes.
+	Mailbox string `json:"mailbox,omitempty"`
 }
 
 type attachmentDTO struct {
@@ -85,6 +90,12 @@ func toMessageRowDTO(m *store.Message) messageRowDTO {
 		InternalDate: m.InternalDate.UTC().Format(time.RFC3339),
 		SizeBytes:    m.SizeBytes,
 	}
+	if m.Preview != nil {
+		dto.Preview = *m.Preview
+	}
+	if m.ToAddr != nil {
+		dto.ToAddr = *m.ToAddr
+	}
 	for _, f := range m.Flags {
 		switch f {
 		case "\\Seen":
@@ -93,6 +104,8 @@ func toMessageRowDTO(m *store.Message) messageRowDTO {
 			dto.Flagged = true
 		case "\\Answered":
 			dto.Answered = true
+		case "\\Draft":
+			dto.Draft = true
 		}
 	}
 	return dto
@@ -148,12 +161,47 @@ func (s *Server) handleMeMessageList(w http.ResponseWriter, r *http.Request) {
 		limit = 50
 	}
 	before, _ := strconv.ParseUint(r.URL.Query().Get("before"), 10, 32)
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+
+	// A query switches the endpoint into search mode: same row shape, but the
+	// scope is the whole account unless a mailbox is named, and paging stops
+	// at one page (search is a lookup, not a browse).
+	if query != "" {
+		scope := mailbox
+		if r.URL.Query().Get("scope") == "all" {
+			scope = ""
+		}
+		hitList, err := s.store.SearchMessage(r.Context(), u.ID, query, scope, limit)
+		if err != nil {
+			mapStoreErr(w, err)
+			return
+		}
+		plainList := make([]*store.Message, 0, len(hitList))
+		for _, hit := range hitList {
+			plainList = append(plainList, hit.Message)
+		}
+		s.fillCache(r, u.ID, plainList)
+		rowList := make([]messageRowDTO, 0, len(hitList))
+		for _, hit := range hitList {
+			row := toMessageRowDTO(hit.Message)
+			row.Mailbox = hit.MailboxName
+			rowList = append(rowList, row)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"messageList": rowList,
+			"nextBefore":  uint32(0),
+			"searched":    true,
+		})
+		return
+	}
 
 	messageList, err := s.store.ListMessagePage(r.Context(), u.ID, mailbox, limit, uint32(before))
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
+	// preview/recipient caches are computed once, on first listing
+	s.fillCache(r, u.ID, messageList)
 	rowList := make([]messageRowDTO, 0, len(messageList))
 	for _, m := range messageList {
 		rowList = append(rowList, toMessageRowDTO(m))
@@ -192,6 +240,9 @@ func (s *Server) handleMeMessageDetail(w http.ResponseWriter, r *http.Request) {
 
 	detail := messageDetailDTO{messageRowDTO: toMessageRowDTO(m), Mailbox: mailboxName}
 	parseMessageBody(raw, &detail)
+	// HTML mail is rendered by the client inside a sandboxed frame; sanitising
+	// here is the inner wall (scripts/handlers/objects never leave the server).
+	detail.HTMLBody = sanitizeHTML(detail.HTMLBody)
 
 	// opening a message marks it read (like every mail client). Non-fatal.
 	if !detail.Seen {
@@ -230,7 +281,10 @@ func parseMessageBody(raw []byte, out *messageDetailDTO) {
 	if id, err := h.MessageID(); err == nil {
 		out.MessageID = id
 	}
-	if d, err := h.Date(); err == nil {
+	// a missing/garbled Date header parses into the zero time, which would
+	// render as "Jan 1, year 1" — leave it empty and let the client fall back
+	// to the delivery timestamp
+	if d, err := h.Date(); err == nil && !d.IsZero() {
 		out.Date = d.UTC().Format(time.RFC3339)
 	}
 
@@ -467,10 +521,10 @@ func (s *Server) handleMeDeleteMessage(w http.ResponseWriter, r *http.Request) {
 		mapStoreErr(w, err)
 		return
 	}
-	if mailboxName == "Trash" {
+	if mailboxName == mailboxTrash {
 		err = s.store.DeleteAccountMessage(r.Context(), u.ID, id)
 	} else {
-		err = s.store.MoveAccountMessage(r.Context(), u.ID, id, "Trash")
+		err = s.store.MoveAccountMessage(r.Context(), u.ID, id, mailboxTrash)
 	}
 	if err != nil {
 		mapStoreErr(w, err)
@@ -611,7 +665,7 @@ func (s *Server) handleMeSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Sent copy (\Seen — you already read what you wrote). Failure is warned,
 	// not fatal: the mail is out, a missing Sent copy must not error the send.
-	if box, err := s.store.EnsureMailbox(r.Context(), u.ID, "Sent"); err == nil {
+	if box, err := s.store.EnsureMailbox(r.Context(), u.ID, mailboxSent); err == nil {
 		if _, err := s.store.AppendMessage(r.Context(), box.ID, raw, []string{"\\Seen"}, time.Now()); err != nil {
 			log.Printf("api: Sent copy failed account=%s: %v", u.ID, err)
 		}

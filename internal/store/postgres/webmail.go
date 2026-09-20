@@ -58,7 +58,8 @@ func (s *Store) ListMessagePage(ctx context.Context, accountID uuid.UUID, mailbo
 	}
 	const q = `
 		SELECT m.id, m.mailbox_id, m.uid, m.blob_id, m.size_bytes, m.internal_date,
-		       COALESCE(m.subject, ''), COALESCE(m.from_addr, ''), m.created_at
+		       COALESCE(m.subject, ''), COALESCE(m.from_addr, ''), m.created_at,
+		       m.preview, m.to_addr
 		FROM message m
 		JOIN mailbox mb ON mb.id = m.mailbox_id
 		WHERE mb.account_id = $1 AND mb.name = $2
@@ -76,7 +77,8 @@ func (s *Store) ListMessagePage(ctx context.Context, accountID uuid.UUID, mailbo
 	for rows.Next() {
 		var m store.Message
 		if err := rows.Scan(&m.ID, &m.MailboxID, &m.UID, &m.BlobID, &m.SizeBytes,
-			&m.InternalDate, &m.Subject, &m.FromAddr, &m.CreatedAt); err != nil {
+			&m.InternalDate, &m.Subject, &m.FromAddr, &m.CreatedAt,
+			&m.Preview, &m.ToAddr); err != nil {
 			return nil, err
 		}
 		messageList = append(messageList, &m)
@@ -96,7 +98,8 @@ func (s *Store) ListMessagePage(ctx context.Context, accountID uuid.UUID, mailbo
 func (s *Store) GetAccountMessage(ctx context.Context, accountID, messageID uuid.UUID) (*store.Message, string, error) {
 	const q = `
 		SELECT m.id, m.mailbox_id, m.uid, m.blob_id, m.size_bytes, m.internal_date,
-		       COALESCE(m.subject, ''), COALESCE(m.from_addr, ''), m.created_at, mb.name
+		       COALESCE(m.subject, ''), COALESCE(m.from_addr, ''), m.created_at,
+		       m.preview, m.to_addr, mb.name
 		FROM message m
 		JOIN mailbox mb ON mb.id = m.mailbox_id
 		WHERE mb.account_id = $1 AND m.id = $2`
@@ -104,7 +107,8 @@ func (s *Store) GetAccountMessage(ctx context.Context, accountID, messageID uuid
 	var mailboxName string
 	err := s.pool.QueryRow(ctx, q, accountID, messageID).Scan(
 		&m.ID, &m.MailboxID, &m.UID, &m.BlobID, &m.SizeBytes,
-		&m.InternalDate, &m.Subject, &m.FromAddr, &m.CreatedAt, &mailboxName)
+		&m.InternalDate, &m.Subject, &m.FromAddr, &m.CreatedAt,
+		&m.Preview, &m.ToAddr, &mailboxName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", ErrNotFound
 	}
@@ -256,4 +260,100 @@ func (s *Store) loadFlag(ctx context.Context, byID map[uuid.UUID]*store.Message)
 		}
 	}
 	return rows.Err()
+}
+
+// SearchMessage matches a query against subject, sender and the cached body
+// preview. An empty mailboxName searches every mailbox of the account.
+//
+// ILIKE is deliberate: a personal server holds thousands of rows, not
+// millions, so a trigram/tsvector index would cost more (write amplification,
+// an extension to install) than the scan it saves.
+func (s *Store) SearchMessage(ctx context.Context, accountID uuid.UUID, query, mailboxName string, limit int) ([]*store.MessageHit, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	const q = `
+		SELECT m.id, m.mailbox_id, m.uid, m.blob_id, m.size_bytes, m.internal_date,
+		       COALESCE(m.subject, ''), COALESCE(m.from_addr, ''), m.created_at,
+		       m.preview, m.to_addr, mb.name
+		FROM message m
+		JOIN mailbox mb ON mb.id = m.mailbox_id
+		WHERE mb.account_id = $1
+		  AND ($2 = '' OR mb.name = $2)
+		  AND (m.subject ILIKE $3 OR m.from_addr ILIKE $3
+		       OR m.to_addr ILIKE $3 OR m.preview ILIKE $3)
+		ORDER BY m.internal_date DESC
+		LIMIT $4`
+	rows, err := s.pool.Query(ctx, q, accountID, mailboxName, "%"+query+"%", limit)
+	if err != nil {
+		return nil, fmt.Errorf("message search: %w", err)
+	}
+	defer rows.Close()
+
+	var hitList []*store.MessageHit
+	byID := map[uuid.UUID]*store.Message{}
+	for rows.Next() {
+		var m store.Message
+		var mailbox string
+		if err := rows.Scan(&m.ID, &m.MailboxID, &m.UID, &m.BlobID, &m.SizeBytes,
+			&m.InternalDate, &m.Subject, &m.FromAddr, &m.CreatedAt,
+			&m.Preview, &m.ToAddr, &mailbox); err != nil {
+			return nil, err
+		}
+		hit := &store.MessageHit{Message: &m, MailboxName: mailbox}
+		hitList = append(hitList, hit)
+		byID[m.ID] = hit.Message
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.loadFlag(ctx, byID); err != nil {
+		return nil, err
+	}
+	return hitList, nil
+}
+
+// SetMessageCache stores the preview/recipient caches computed by the webmail
+// layer. Ownership is part of the statement, so a foreign message ID is a
+// silent no-op rather than a cross-account write.
+func (s *Store) SetMessageCache(ctx context.Context, accountID, messageID uuid.UUID, preview, toAddr string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE message m
+		SET preview = $3, to_addr = $4
+		FROM mailbox mb
+		WHERE mb.id = m.mailbox_id AND mb.account_id = $1 AND m.id = $2`,
+		accountID, messageID, preview, toAddr)
+	if err != nil {
+		return fmt.Errorf("message cache: %w", err)
+	}
+	return nil
+}
+
+// GetPreference returns the account's UI preference.
+func (s *Store) GetPreference(ctx context.Context, accountID uuid.UUID) (*store.Preference, error) {
+	var p store.Preference
+	err := s.pool.QueryRow(ctx,
+		`SELECT pref_theme, pref_locale FROM account WHERE id = $1`, accountID).
+		Scan(&p.Theme, &p.Locale)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("preference lookup: %w", err)
+	}
+	return &p, nil
+}
+
+// SetPreference stores the account's UI preference.
+func (s *Store) SetPreference(ctx context.Context, accountID uuid.UUID, p *store.Preference) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE account SET pref_theme = $2, pref_locale = $3 WHERE id = $1`,
+		accountID, p.Theme, p.Locale)
+	if err != nil {
+		return fmt.Errorf("preference update: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

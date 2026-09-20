@@ -102,6 +102,9 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	me.HandleFunc("DELETE /api/me/app-password/{id}", s.handleMeRevokeAppPassword)
 	// webmail — read/organize/send the caller's own mail
 	me.HandleFunc("GET /api/me/mailbox", s.handleMeMailbox)
+	me.HandleFunc("POST /api/me/mailbox", s.handleMeCreateMailbox)
+	me.HandleFunc("PATCH /api/me/mailbox/{name}", s.handleMeRenameMailbox)
+	me.HandleFunc("DELETE /api/me/mailbox/{name}", s.handleMeDeleteMailbox)
 	me.HandleFunc("GET /api/me/message", s.handleMeMessageList)
 	me.HandleFunc("GET /api/me/message/{id}", s.handleMeMessageDetail)
 	me.HandleFunc("PATCH /api/me/message/{id}", s.handleMePatchMessage)
@@ -109,7 +112,11 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	me.HandleFunc("POST /api/me/message/{id}/move", s.handleMeMoveMessage)
 	me.HandleFunc("GET /api/me/message/{id}/raw", s.handleMeMessageRaw)
 	me.HandleFunc("GET /api/me/message/{id}/attachment/{index}", s.handleMeAttachment)
+	me.HandleFunc("POST /api/me/message/batch", s.handleMeBatch)
 	me.HandleFunc("POST /api/me/send", s.handleMeSendMessage)
+	me.HandleFunc("POST /api/me/draft", s.handleMeSaveDraft)
+	me.HandleFunc("GET /api/me/preference", s.handleMeGetPreference)
+	me.HandleFunc("PUT /api/me/preference", s.handleMeSetPreference)
 	// filter rules — per-account delivery rules
 	me.HandleFunc("GET /api/me/filter", s.handleMeListFilter)
 	me.HandleFunc("POST /api/me/filter", s.handleMeCreateFilter)

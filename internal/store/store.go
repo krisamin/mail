@@ -99,6 +99,25 @@ type Message struct {
 	FromAddr     string
 	Flags        []string // '\Seen', '\Flagged', ...
 	CreatedAt    time.Time
+
+	// Webmail caches (0003). nil means "never computed" — the webmail API
+	// fills them from the raw body the first time it lists the message.
+	Preview *string
+	ToAddr  *string
+}
+
+// MessageHit is a search result: the message plus the mailbox it sits in
+// (a search can cross mailboxes, so the name cannot be implied).
+type MessageHit struct {
+	Message     *Message
+	MailboxName string
+}
+
+// Preference is the account's UI preference (0003).
+// Theme: 'system' | 'dark' | 'light'. Locale: 'auto' | 'ko' | 'en' | 'ja'.
+type Preference struct {
+	Theme  string
+	Locale string
 }
 
 // AppPassword is an app password for mail-app (IMAP/SMTP) authentication. Issued/revoked via OAuth.
@@ -388,6 +407,15 @@ type AdminStore interface {
 	SetAccountMessageFlag(ctx context.Context, accountID, messageID uuid.UUID, flagList []string) error
 	// EnsureMailbox finds or creates a mailbox by name.
 	EnsureMailbox(ctx context.Context, accountID uuid.UUID, name string) (*Mailbox, error)
+	// SearchMessage matches the query against subject, sender and the cached
+	// preview, newest first. An empty mailboxName searches every mailbox.
+	SearchMessage(ctx context.Context, accountID uuid.UUID, query, mailboxName string, limit int) ([]*MessageHit, error)
+	// SetMessageCache stores the lazily computed preview/recipient caches.
+	SetMessageCache(ctx context.Context, accountID, messageID uuid.UUID, preview, toAddr string) error
+	// GetPreference returns the account's UI preference (defaults when unset).
+	GetPreference(ctx context.Context, accountID uuid.UUID) (*Preference, error)
+	// SetPreference stores the account's UI preference.
+	SetPreference(ctx context.Context, accountID uuid.UUID, p *Preference) error
 
 	// Filter rules (0009) CRUD — backs /api/me/filter. The delivery-path
 	// read (ListActiveFilterRule) lives on Store.
