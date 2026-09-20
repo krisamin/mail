@@ -16,4 +16,4 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/build ./build
 USER node
 EXPOSE 3000
-CMD ["node", "node_modules/@react-router/serve/bin.js", "./build/server/index.js"]
+CMD ["node", "node_modules/@react-router/serve/bin.cjs", "./build/server/index.js"]
