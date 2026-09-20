@@ -1,68 +1,70 @@
-import { Link, NavLink, Outlet } from "react-router";
+import { Outlet } from "react-router";
 import type { Route } from "./+types/layout";
 import { translate } from "~/i18n";
 import { useT } from "~/lib/i18n";
 import { getLocale } from "~/lib/locale.server";
+import { readPreference, themeFromCookie } from "~/lib/preference.server";
 import { isAdmin, requireUser } from "~/lib/session.server";
+import { AppShell } from "~/shell/app-shell";
+import { SideNav, SideNavGroup, SideNavItem } from "~/shell/side-nav";
+import {
+  ActivityIcon,
+  AddressIcon,
+  DashboardIcon,
+  DomainIcon,
+  QueueIcon,
+  RelayIcon,
+  UserIcon,
+} from "~/kit";
 
-// Shared /admin/* guard: not signed in / expired token → /login, no group → 403.
-// (The real defense is the Go API's JWT check — this layer is just UX.)
+// Admin area. The sections used to be six flat tabs; they are grouped now by
+// what the operator is actually doing — who gets mail, how mail leaves, how
+// the server is doing.
+//
+// The real authorisation is the Go API's JWT + group check; this guard is UX
+// (and RR runs parent/child loaders in parallel, so every child guards too).
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const user = await requireUser(request);
   if (!isAdmin(user)) {
-    const locale = await getLocale(request);
-    throw new Response(translate(locale, "auth.adminRequired"), { status: 403 });
+    throw new Response(translate(await getLocale(request), "auth.adminRequired"), { status: 403 });
   }
-  return { name: user.name, email: user.email };
+  const preference = await readPreference(user);
+  return {
+    user: {
+      name: user.name,
+      email: user.email,
+      admin: true,
+      theme: preference.theme === "system" ? themeFromCookie(request) : preference.theme,
+    },
+  };
 };
-
-const navItemList = [
-  { to: "/admin", key: "nav.dashboard", end: true },
-  { to: "/admin/domain", key: "nav.domain" },
-  { to: "/admin/account", key: "nav.account" },
-  { to: "/admin/relay", key: "nav.relay" },
-  { to: "/admin/queue", key: "nav.queue" },
-  { to: "/admin/system", key: "nav.system" },
-] as const;
 
 export default function AdminLayout({ loaderData }: Route.ComponentProps) {
   const t = useT();
-  return (
-    <div className="min-h-dvh">
-      <header className="border-b border-line bg-bg-1">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-6">
-            <Link to="/" className="text-sm font-bold tracking-tight">
-              mail <span className="text-accent">admin</span>
-            </Link>
-            <nav className="flex gap-1">
-              {navItemList.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={"end" in item ? item.end : undefined}
-                  className={({ isActive }) =>
-                    `rounded-md px-3 py-1.5 text-sm ${
-                      isActive ? "bg-bg-3 text-text-0" : "text-text-2 hover:bg-bg-2 hover:text-text-1"
-                    }`
-                  }
-                >
-                  {t(item.key)}
-                </NavLink>
-              ))}
-            </nav>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-text-2">{loaderData.name}</span>
-            <Link to="/logout" className="text-xs text-text-2 hover:text-text-1">
-              {t("common.logout")}
-            </Link>
-          </div>
-        </div>
-      </header>
-      <main className="mx-auto max-w-5xl px-4 py-6">
-        <Outlet />
-      </main>
+  const sidebar = (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="px-4 pt-4 pb-1">
+        <p className="text-sm font-semibold text-ink">{t("admin.title")}</p>
+      </div>
+      <SideNav>
+        <SideNavItem to="/admin" end icon={<DashboardIcon className="size-4" />} label={t("admin.dashboard")} />
+        <SideNavGroup title={t("admin.groupMail")}>
+          <SideNavItem to="/admin/domain" icon={<DomainIcon className="size-4" />} label={t("admin.domain")} />
+          <SideNavItem to="/admin/account" icon={<UserIcon className="size-4" />} label={t("admin.account")} />
+        </SideNavGroup>
+        <SideNavGroup title={t("admin.groupDelivery")}>
+          <SideNavItem to="/admin/relay" icon={<RelayIcon className="size-4" />} label={t("admin.relay")} />
+          <SideNavItem to="/admin/queue" icon={<QueueIcon className="size-4" />} label={t("admin.queue")} />
+        </SideNavGroup>
+        <SideNavGroup title={t("admin.groupServer")}>
+          <SideNavItem to="/admin/system" icon={<ActivityIcon className="size-4" />} label={t("admin.system")} />
+        </SideNavGroup>
+      </SideNav>
     </div>
+  );
+  return (
+    <AppShell user={loaderData.user} sidebar={sidebar}>
+      <Outlet />
+    </AppShell>
   );
 }

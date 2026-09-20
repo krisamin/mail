@@ -1,4 +1,4 @@
 import { redirect } from "react-router";
 
-// /mail → the inbox.
+// /mail is the inbox.
 export const loader = () => redirect("/mail/INBOX");

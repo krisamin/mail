@@ -3,8 +3,9 @@ import { Form, useNavigation, useRevalidator, useSearchParams } from "react-rout
 import type { Route } from "./+types/queue";
 import { ApiError, apiFetch, type QueueItem } from "~/lib/api.server";
 import { useT } from "~/lib/i18n";
+import { ShellContent, ShellHeader } from "~/shell/app-shell";
 import { requireAdmin } from "~/lib/session.server";
-import { Badge, Button, Card, EmptyText, ErrorBanner, PageTitle, TimeText, type BadgeTone } from "~/components";
+import { Badge, Button, Panel, EmptyText, ErrorBanner, TimeText, type BadgeTone } from "~/kit";
 
 // Outbound queue — filter by status, retry failed entries.
 
@@ -75,19 +76,9 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
   }, [revalidator]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageTitle
-        title={t("queue.title")}
-        aside={
-          <p className="text-xs text-text-2">
-            {t("queue.stat", {
-              pending: statMap.pending ?? 0,
-              sent: statMap.sent ?? 0,
-              failed: statMap.failed ?? 0,
-            })}
-          </p>
-        }
-      />
+    <>
+      <ShellHeader title={t("queue.title")} />
+      <ShellContent>
 
       <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
@@ -99,7 +90,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
             aria-pressed={status === f.value}
             onClick={() => setSearchParams(f.value ? { status: f.value } : {})}
             className={`rounded-md px-3 py-1.5 text-xs transition-colors duration-100 ${
-              status === f.value ? "bg-bg-3 text-text-0" : "text-text-2 hover:bg-bg-2"
+              status === f.value ? "bg-raised text-ink" : "text-ink-3 hover:bg-raised"
             }`}
           >
             {t(f.key)}
@@ -107,7 +98,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
         ))}
       </div>
 
-      <Card>
+      <Panel>
         {itemList.length === 0 ? (
           <EmptyText>{t("queue.empty")}</EmptyText>
         ) : (
@@ -116,9 +107,9 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
               <li key={m.id} className="flex flex-col gap-1 px-4 py-2.5">
                 <div className="flex items-center justify-between">
                   <p className="truncate text-sm">
-                    <span className="text-text-2">{m.from}</span>
-                    <span className="mx-1.5 text-muted">→</span>
-                    <span className="text-text-0">{m.rcpt}</span>
+                    <span className="text-ink-3">{m.from}</span>
+                    <span className="mx-1.5 text-ink-faint">→</span>
+                    <span className="text-ink">{m.rcpt}</span>
                   </p>
                   <div className="flex shrink-0 items-center gap-2">
                     <Badge tone={statusTone[m.status] ?? "muted"}>{m.status}</Badge>
@@ -126,7 +117,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
                       <Form method="post">
                         <input type="hidden" name="intent" value="retry" />
                         <input type="hidden" name="id" value={m.id} />
-                        <Button variant="link" disabled={busy}>
+                        <Button variant="ghost" size="sm" disabled={busy}>
                           {t("common.retry")}
                         </Button>
                       </Form>
@@ -136,7 +127,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
                         <input type="hidden" name="intent" value="cancel" />
                         <input type="hidden" name="id" value={m.id} />
                         <Button
-                          variant="linkDanger"
+                          variant="danger" size="sm"
                           disabled={busy}
                           confirmMessage={t("common.confirmCancelQueue")}
                         >
@@ -146,7 +137,7 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
                     )}
                   </div>
                 </div>
-                <div className="flex items-center gap-3 text-[11px] text-text-2">
+                <div className="flex items-center gap-3 text-[11px] text-ink-3">
                   <span>{t("queue.attemptCount", { count: m.attemptCount })}</span>
                   <TimeText value={m.createdAt} />
                   {m.lastError && (
@@ -159,7 +150,8 @@ export default function Queue({ loaderData, actionData }: Route.ComponentProps) 
             ))}
           </ul>
         )}
-      </Card>
-    </div>
+      </Panel>
+      </ShellContent>
+    </>
   );
 }

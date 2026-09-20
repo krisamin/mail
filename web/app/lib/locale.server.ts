@@ -50,3 +50,13 @@ export const getLocale = async (request: Request): Promise<Locale> => {
   if (setting !== "auto") return setting;
   return detectLocale(request);
 };
+
+/** Language for one visitor: their own choice wins over the global setting,
+ *  which in turn wins over browser detection. */
+export const resolveLocale = async (
+  request: Request,
+  personal: LocaleSetting | undefined,
+): Promise<Locale> => {
+  if (personal && personal !== "auto") return personal;
+  return getLocale(request);
+};

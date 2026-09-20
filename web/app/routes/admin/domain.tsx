@@ -10,6 +10,7 @@ import {
 } from "~/lib/api.server";
 import { translate } from "~/i18n";
 import { useT } from "~/lib/i18n";
+import { ShellContent, ShellHeader } from "~/shell/app-shell";
 import { getLocale } from "~/lib/locale.server";
 import { requireAdmin } from "~/lib/session.server";
 import {
@@ -17,14 +18,13 @@ import {
   Badge,
   Banner,
   Button,
-  Card,
+  Panel,
   CopyButton,
   EmptyText,
   ErrorBanner,
-  PageTitle,
   SelectInput,
   TextInput,
-} from "~/components";
+} from "~/kit";
 
 // Domain management — create/toggle domains, DKIM keys, DNS verification.
 // Address ↔ account wiring lives on /admin/account.
@@ -125,7 +125,7 @@ const dnsBadge = (status: string): { tone: "ok" | "warn" | "bad" | "muted"; mark
 function DnsResultPanel({ dns }: { dns: DnsVerify }) {
   const t = useT();
   return (
-    <ul className="mt-1 flex flex-col gap-1.5 rounded-md bg-bg-0/50 p-2.5">
+    <ul className="mt-1 flex flex-col gap-1.5 rounded-md bg-canvas/50 p-2.5">
       {dnsCheckList(dns).map(([label, check]) => {
         const badge = dnsBadge(check.status);
         return (
@@ -136,18 +136,18 @@ function DnsResultPanel({ dns }: { dns: DnsVerify }) {
               </Badge>
               {check.found && (
                 <span
-                  className="max-w-lg truncate font-mono text-[10px] text-text-2"
+                  className="max-w-lg truncate font-mono text-[10px] text-ink-3"
                   title={check.found}
                 >
                   {check.found}
                 </span>
               )}
             </div>
-            {check.note && <p className="pl-1 text-[11px] text-text-2">{check.note}</p>}
+            {check.note && <p className="pl-1 text-[11px] text-ink-3">{check.note}</p>}
             {check.expected && check.status !== "ok" && (
               <div className="flex items-start gap-1.5">
                 <p
-                  className="flex-1 break-all rounded bg-bg-0 p-1.5 pl-1 font-mono text-[10px] text-text-1"
+                  className="flex-1 break-all rounded bg-canvas p-1.5 pl-1 font-mono text-[10px] text-ink-2"
                   title={t("domain.expectedValue")}
                 >
                   {check.expected}
@@ -177,18 +177,20 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
   }, [actionData]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageTitle title={t("domain.title")} description={t("domain.description")} />
+    <>
+      <ShellHeader title={t("domain.title")} />
+      <ShellContent>
 
       <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
       {actionData?.ok && "dkim" in actionData && actionData.dkim && (
-        <Banner title={t("domain.dkimIssued")}>
+        <Banner>
+            {t("domain.dkimIssued")}
           <div className="mt-2 flex items-center justify-between">
-            <p className="font-mono text-xs text-text-1">{actionData.dkim.dnsName} IN TXT</p>
+            <p className="font-mono text-xs text-ink-2">{actionData.dkim.dnsName} IN TXT</p>
             <CopyButton value={actionData.dkim.dnsTxt} />
           </div>
-          <p className="mt-1 break-all rounded bg-bg-0 p-2 font-mono text-xs text-text-1">
+          <p className="mt-1 break-all rounded bg-canvas p-2 font-mono text-xs text-ink-2">
             {actionData.dkim.dnsTxt}
           </p>
         </Banner>
@@ -208,7 +210,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
         </Button>
       </Form>
 
-      <Card>
+      <Panel>
         {domainList.length === 0 ? (
           <EmptyText>{t("domain.none")}</EmptyText>
         ) : (
@@ -222,7 +224,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                       <input type="hidden" name="intent" value="dns-verify" />
                       <input type="hidden" name="id" value={d.id} />
                       <Button
-                        variant="chip"
+                        variant="subtle" size="sm"
                         disabled={busy}
                         pending={
                           pendingIntent === "dns-verify" &&
@@ -244,11 +246,11 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                 <div className="flex items-center gap-2">
                   {d.dkimSelector ? (
                     <>
-                      <Badge tone="accent">DKIM: {d.dkimSelector}</Badge>
+                      <Badge tone="brand">DKIM: {d.dkimSelector}</Badge>
                       {d.dkimPublicTxt && (
                         <>
                           <span
-                            className="max-w-md truncate font-mono text-[10px] text-text-2"
+                            className="max-w-md truncate font-mono text-[10px] text-ink-3"
                             title={d.dkimPublicTxt}
                           >
                             {d.dkimPublicTxt}
@@ -260,7 +262,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                         <input type="hidden" name="intent" value="dkim-clear" />
                         <input type="hidden" name="id" value={d.id} />
                         <Button
-                          variant="linkDanger"
+                          variant="danger" size="sm"
                           disabled={busy}
                           confirmMessage={t("common.confirmDkimClear")}
                           className="text-[10px]"
@@ -284,7 +286,7 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                         <option value="rsa2048">{t("domain.rsaCompat")}</option>
                         <option value="ed25519">Ed25519</option>
                       </SelectInput>
-                      <Button variant="link" disabled={busy} pending={pendingIntent === "dkim"}>
+                      <Button variant="ghost" size="sm" disabled={busy} pending={pendingIntent === "dkim"}>
                         {t("domain.dkimCreate")}
                       </Button>
                     </Form>
@@ -299,7 +301,8 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
             ))}
           </ul>
         )}
-      </Card>
-    </div>
+      </Panel>
+      </ShellContent>
+    </>
   );
 }

@@ -1,16 +1,33 @@
-import { Link, NavLink, Outlet } from "react-router";
+import { Outlet, useFetcher, useParams } from "react-router";
 import type { Route } from "./+types/layout";
 import { apiFetch, type MailboxSummary } from "~/lib/api.server";
 import { useT, type TFunc } from "~/lib/i18n";
+import { readPreference } from "~/lib/preference.server";
 import { requireUser } from "~/lib/session.server";
-import { ButtonLink } from "~/components";
+import { themeFromCookie } from "~/lib/preference.server";
+import { AppShell } from "~/shell/app-shell";
+import { SideNav, SideNavItem } from "~/shell/side-nav";
+import {
+  ArchiveIcon,
+  Button,
+  ComposeIcon,
+  CountBadge,
+  DraftIcon,
+  FolderIcon,
+  InboxIcon,
+  JunkIcon,
+  PlusIcon,
+  SendIcon,
+  TrashIcon,
+} from "~/kit";
+import { isAdmin } from "~/lib/session.server";
+import { useState } from "react";
 
-// Webmail shell — mailbox sidebar + content outlet.
-// Any signed-in user (self-service surface, no admin group).
+// Mail area: folder column in the shell sidebar, list + reading pane inside.
 
 // Well-known folders pin to the top in mail-client order; custom folders
-// follow alphabetically. (The API sorts INBOX-first/alphabetical, which put
-// Sent between Junk and Trash — jarring next to every other mail client.)
+// follow alphabetically (the API sorts INBOX-first/alphabetical, which drops
+// Sent between Junk and Trash — jarring next to every other client).
 const folderOrderMap: Record<string, number> = {
   INBOX: 0,
   Drafts: 1,
@@ -20,102 +37,122 @@ const folderOrderMap: Record<string, number> = {
   Trash: 5,
 };
 
-export const loader = async ({ request }: Route.LoaderArgs) => {
-  const user = await requireUser(request);
-  const mailboxList = (await apiFetch<MailboxSummary[]>(user.idToken, "/api/me/mailbox")) ?? [];
-  mailboxList.sort((a, b) => {
-    const oa = folderOrderMap[a.name] ?? 100;
-    const ob = folderOrderMap[b.name] ?? 100;
-    return oa !== ob ? oa - ob : a.name.localeCompare(b.name);
-  });
-  return { name: user.name, email: user.email, mailboxList };
+const folderIconMap: Record<string, typeof InboxIcon> = {
+  INBOX: InboxIcon,
+  Drafts: DraftIcon,
+  Sent: SendIcon,
+  Archive: ArchiveIcon,
+  Junk: JunkIcon,
+  Trash: TrashIcon,
 };
 
 /** Well-known folders get localized labels; custom ones show as-is. */
 export const folderLabel = (t: TFunc, name: string): string => {
   switch (name) {
     case "INBOX":
-      return t("webmail.folderINBOX");
+      return t("folder.inbox");
     case "Sent":
-      return t("webmail.folderSent");
-    case "Trash":
-      return t("webmail.folderTrash");
-    case "Junk":
-      return t("webmail.folderJunk");
-    case "Archive":
-      return t("webmail.folderArchive");
+      return t("folder.sent");
     case "Drafts":
-      return t("webmail.folderDrafts");
+      return t("folder.draft");
+    case "Trash":
+      return t("folder.trash");
+    case "Junk":
+      return t("folder.junk");
+    case "Archive":
+      return t("folder.archive");
     default:
       return name;
   }
 };
 
-/** Sidebar item style — shared by folder links and the filter link. */
-const navItemClass = (isActive: boolean): string =>
-  `flex items-center justify-between rounded-md px-3 py-1.5 text-sm transition-colors duration-100 ${
-    isActive ? "bg-bg-3 text-text-0" : "text-text-2 hover:bg-bg-2 hover:text-text-1"
-  }`;
+export const loader = async ({ request }: Route.LoaderArgs) => {
+  const user = await requireUser(request);
+  const [mailboxList, preference] = await Promise.all([
+    apiFetch<MailboxSummary[]>(user.idToken, "/api/me/mailbox").then((r) => r ?? []),
+    readPreference(user),
+  ]);
+  mailboxList.sort((a, b) => {
+    const oa = folderOrderMap[a.name] ?? 100;
+    const ob = folderOrderMap[b.name] ?? 100;
+    return oa !== ob ? oa - ob : a.name.localeCompare(b.name);
+  });
+  return {
+    mailboxList,
+    user: {
+      name: user.name,
+      email: user.email,
+      admin: isAdmin(user),
+      theme: preference.theme === "system" ? themeFromCookie(request) : preference.theme,
+    },
+  };
+};
 
-export default function WebmailLayout({ loaderData }: Route.ComponentProps) {
-  const { name, mailboxList } = loaderData;
+export default function MailLayout({ loaderData }: Route.ComponentProps) {
+  const { mailboxList, user } = loaderData;
   const t = useT();
+  const params = useParams();
+  const fetcher = useFetcher();
+  const [adding, setAdding] = useState(false);
+  const current = params.mailbox ?? "INBOX";
 
-  return (
-    <div className="min-h-dvh">
-      <header className="border-b border-line bg-bg-1">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-6">
-            <Link to="/" className="text-sm font-bold tracking-tight">
-              mail <span className="text-accent">box</span>
-            </Link>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link to="/account" className="text-xs text-text-2 hover:text-text-1">
-              {t("nav.myAccount")}
-            </Link>
-            <span className="text-xs text-text-2">{name}</span>
-            <Link to="/logout" className="text-xs text-text-2 hover:text-text-1">
-              {t("common.logout")}
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      <div className="mx-auto flex max-w-6xl gap-6 px-4 py-6">
-        <aside className="flex w-44 shrink-0 flex-col gap-3">
-          <ButtonLink to="/mail/compose" className="w-full">
-            {t("webmail.compose")}
-          </ButtonLink>
-          <nav className="flex flex-col gap-0.5">
-            {/* NavLink's own isActive does segment-prefix matching, so the
-                folder stays lit on its detail pages (/mail/INBOX/5) and
-                nothing lights up on /mail/compose or /mail/filter. */}
-            {mailboxList.map((m) => (
-              <NavLink
-                key={m.name}
-                to={`/mail/${encodeURIComponent(m.name)}`}
-                className={({ isActive }) => navItemClass(isActive)}
-              >
-                <span className="truncate">{folderLabel(t, m.name)}</span>
-                {m.unseenCount > 0 && (
-                  <span className="ml-2 shrink-0 rounded-full bg-accent/20 px-1.5 text-xs text-accent">
-                    {m.unseenCount > 99 ? "99+" : m.unseenCount}
-                  </span>
-                )}
-              </NavLink>
-            ))}
-          </nav>
-          <div className="border-t border-line pt-2">
-            <NavLink to="/mail/filter" className={({ isActive }) => navItemClass(isActive)}>
-              <span className="truncate">{t("filter.title")}</span>
-            </NavLink>
-          </div>
-        </aside>
-        <main className="min-w-0 flex-1">
-          <Outlet />
-        </main>
+  const sidebar = (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="p-2">
+        <fetcher.Form method="get" action={`/mail/${encodeURIComponent(current)}/compose`}>
+          <Button type="submit" className="w-full">
+            <ComposeIcon className="size-4" />
+            {t("mail.compose")}
+          </Button>
+        </fetcher.Form>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto scroll-thin">
+        <SideNav>
+          {mailboxList.map((box) => {
+            const Icon = folderIconMap[box.name] ?? FolderIcon;
+            return (
+              <SideNavItem
+                key={box.name}
+                to={`/mail/${encodeURIComponent(box.name)}`}
+                icon={<Icon className="size-4" />}
+                label={folderLabel(t, box.name)}
+                trailing={<CountBadge value={box.unseenCount} />}
+              />
+            );
+          })}
+        </SideNav>
+      </div>
+      <div className="border-t border-line p-2">
+        {adding ? (
+          <fetcher.Form
+            method="post"
+            action="/mail/folder"
+            className="flex gap-1.5"
+            onSubmit={() => setAdding(false)}
+          >
+            <input
+              name="name"
+              autoFocus
+              placeholder={t("mail.folderName")}
+              className="h-8 w-full min-w-0 rounded-md border border-line bg-canvas px-2 text-xs text-ink placeholder:text-ink-faint focus:border-brand focus:outline-none"
+              onBlur={(e) => {
+                if (!e.currentTarget.value) setAdding(false);
+              }}
+            />
+          </fetcher.Form>
+        ) : (
+          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => setAdding(true)} type="button">
+            <PlusIcon className="size-4" />
+            {t("mail.newFolder")}
+          </Button>
+        )}
       </div>
     </div>
+  );
+
+  return (
+    <AppShell user={user} sidebar={sidebar}>
+      <Outlet />
+    </AppShell>
   );
 }

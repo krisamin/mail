@@ -9,23 +9,23 @@ import {
 } from "~/lib/api.server";
 import { translate } from "~/i18n";
 import { useT } from "~/lib/i18n";
+import { ShellContent, ShellHeader } from "~/shell/app-shell";
 import { getLocale } from "~/lib/locale.server";
 import { requireAdmin } from "~/lib/session.server";
 import { formatBytes } from "~/lib/format";
 import {
   ActiveToggle,
   AddressChipList,
-  AppPasswordRows,
+  AppPasswordRow,
   Badge,
   Button,
-  Card,
+  Panel,
   EmptyText,
   ErrorBanner,
-  PageTitle,
   SecretReveal,
   SelectInput,
   TextInput,
-} from "~/components";
+} from "~/kit";
 
 // Account management — every account with its addresses and app passwords.
 // Human accounts appear via JIT provisioning (first OIDC login); service
@@ -133,8 +133,9 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
     (idField === undefined || nav.formData?.get(idField) === String(idValue));
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageTitle title={t("adminAccount.title")} description={t("adminAccount.description")} />
+    <>
+      <ShellHeader title={t("adminAccount.title")} />
+      <ShellContent>
 
       <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
@@ -145,14 +146,14 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
       {/* Service account creation */}
       <Form method="post" className="flex gap-2">
         <input type="hidden" name="intent" value="create-service" />
-        <div className="flex flex-1 items-center gap-1 rounded-md border border-line bg-bg-1 px-3">
+        <div className="flex flex-1 items-center gap-1 rounded-md border border-line bg-surface px-3">
           <input
             name="localPart"
             required
             placeholder="bot"
             className="flex-1 bg-transparent py-2 text-sm outline-none"
           />
-          <span className="text-sm text-text-2">@</span>
+          <span className="text-sm text-ink-3">@</span>
           <SelectInput name="domainName" required fieldSize="sm" className="py-1">
             {domainList.map((d) => (
               <option key={d.id} value={d.name}>
@@ -168,21 +169,21 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
 
       <div className="flex flex-col gap-3">
         {overviewList.length === 0 ? (
-          <Card>
+          <Panel>
             <EmptyText>{t("adminAccount.empty")}</EmptyText>
-          </Card>
+          </Panel>
         ) : (
           overviewList.map(({ account: u, addressList, appPasswordList }) => (
-            <Card key={u.id}>
+            <Panel key={u.id}>
               <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
                 <div className="flex items-center gap-2">
                   <div>
                     <p className="text-sm font-medium">{u.email}</p>
                     {u.kind === "user" && (
-                      <p className="font-mono text-[10px] text-text-2">sub: {u.subject}</p>
+                      <p className="font-mono text-[10px] text-ink-3">sub: {u.subject}</p>
                     )}
                   </div>
-                  {u.kind === "service" && <Badge tone="accent">{t("adminAccount.service")}</Badge>}
+                  {u.kind === "service" && <Badge tone="brand">{t("adminAccount.service")}</Badge>}
                 </div>
                 <Form method="post">
                   <input type="hidden" name="intent" value="toggle-account" />
@@ -194,10 +195,10 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
 
               {/* Storage: usage + quota */}
               <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
-                <p className="text-xs text-text-2">{t("adminAccount.storage")}</p>
+                <p className="text-xs text-ink-3">{t("adminAccount.storage")}</p>
                 <p className="text-xs">
                   {formatBytes(u.usageBytes)}
-                  <span className="text-text-2">
+                  <span className="text-ink-3">
                     {" / "}
                     {u.quotaBytes ? formatBytes(u.quotaBytes) : t("adminAccount.quotaUnlimited")}
                   </span>
@@ -212,7 +213,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                     placeholder={t("adminAccount.quotaPlaceholder")}
                     defaultValue={u.quotaBytes ? String(u.quotaBytes / 1024 ** 3) : ""}
                   />
-                  <Button variant="link" disabled={busy} pending={pending("set-quota", "id", u.id)}>
+                  <Button variant="ghost" size="sm" disabled={busy} pending={pending("set-quota", "id", u.id)}>
                     {t("common.save")}
                   </Button>
                 </Form>
@@ -220,7 +221,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
 
               {/* Addresses: chips + inline [local]@[domain] add */}
               <div className="flex flex-col gap-2 px-4 py-3">
-                <p className="text-xs text-text-2">{t("adminAccount.address")}</p>
+                <p className="text-xs text-ink-3">{t("adminAccount.address")}</p>
                 <AddressChipList list={addressList} busy={busy} deletable />
                 <Form method="post" className="flex items-center gap-1.5">
                   <input type="hidden" name="intent" value="create-address" />
@@ -232,7 +233,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                     fieldSize="sm"
                     className="w-32"
                   />
-                  <span className="text-xs text-text-2">@</span>
+                  <span className="text-xs text-ink-3">@</span>
                   <SelectInput name="domainId" required fieldSize="sm">
                     {domainList.map((d) => (
                       <option key={d.id} value={d.id}>
@@ -241,7 +242,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                     ))}
                   </SelectInput>
                   <Button
-                    variant="link"
+                    variant="ghost" size="sm"
                     disabled={busy}
                     pending={pending("create-address", "accountId", u.id)}
                   >
@@ -253,7 +254,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
               {/* App passwords */}
               <div className="flex flex-col gap-2 border-t border-line px-4 py-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs text-text-2">{t("adminAccount.appPassword")}</p>
+                  <p className="text-xs text-ink-3">{t("adminAccount.appPassword")}</p>
                   <Form method="post" className="flex items-center gap-1.5">
                     <input type="hidden" name="intent" value="create-pw" />
                     <input type="hidden" name="accountId" value={u.id} />
@@ -264,7 +265,7 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                       className="w-40"
                     />
                     <Button
-                      variant="link"
+                      variant="ghost" size="sm"
                       disabled={busy}
                       pending={pending("create-pw", "accountId", u.id)}
                     >
@@ -272,12 +273,13 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                     </Button>
                   </Form>
                 </div>
-                <AppPasswordRows list={appPasswordList} busy={busy} />
+                <AppPasswordRow list={appPasswordList} busy={busy} />
               </div>
-            </Card>
+            </Panel>
           ))
         )}
       </div>
-    </div>
+      </ShellContent>
+    </>
   );
 }

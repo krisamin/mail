@@ -154,17 +154,26 @@ export type MessageRow = {
   uid: number;
   subject: string;
   fromAddr: string;
+  /** Recipients, cached for the Sent/Drafts listing. */
+  toAddr: string;
+  /** First line of the body, cached on first listing. */
+  preview: string;
   internalDate: string;
   sizeBytes: number;
   seen: boolean;
   flagged: boolean;
   answered: boolean;
+  draft: boolean;
+  /** Only set on search results, which cross mailboxes. */
+  mailbox?: string;
 };
 
 export type MessagePage = {
   messageList: MessageRow[];
   /** UID cursor for the next page — 0 means no more pages. */
   nextBefore: number;
+  /** True when the rows came from a search rather than a folder listing. */
+  searched?: boolean;
 };
 
 export type Attachment = {

@@ -1,15 +1,29 @@
-import { Form, redirect, useNavigation } from "react-router";
+import { Form, Link, redirect, useNavigation } from "react-router";
 import type { Route } from "./+types/detail";
 import { ApiError, apiFetch, type MessageDetail } from "~/lib/api.server";
 import { useT } from "~/lib/i18n";
 import { requireUser } from "~/lib/session.server";
-import { Badge, Button, ButtonLink, Card, ErrorBanner, TimeText } from "~/components";
-import { folderLabel } from "./layout";
 import { formatBytes } from "~/lib/format";
+import {
+  ArchiveIcon,
+  AttachmentIcon,
+  Avatar,
+  Badge,
+  BackIcon,
+  Button,
+  DownloadIcon,
+  ErrorBanner,
+  IconButton,
+  MailOpenIcon,
+  ReplyIcon,
+  StarIcon,
+  TimeText,
+  TrashIcon,
+} from "~/kit";
+import { HtmlBody } from "./html-body";
 
-// Message detail — text body (HTML mail shows its text alternative or a
-// notice; raw HTML is never rendered in the app origin), attachment
-// downloads, reply/archive/delete/flag actions.
+// Reading pane — headers, body (HTML behind a sandbox, text otherwise),
+// attachments, and the actions a mail client is expected to have.
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const user = await requireUser(request);
@@ -20,37 +34,34 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const user = await requireUser(request);
   const form = await request.formData();
-  const intent = form.get("intent");
+  const intent = String(form.get("intent") ?? "");
   const id = params.id;
   const mailbox = params.mailbox ?? "INBOX";
+  const back = `/mail/${encodeURIComponent(mailbox)}`;
 
   try {
     switch (intent) {
-      case "delete": {
+      case "delete":
         await apiFetch(user.idToken, `/api/me/message/${id}`, { method: "DELETE" });
-        return redirect(`/mail/${encodeURIComponent(mailbox)}`);
-      }
-      case "archive": {
+        return redirect(back);
+      case "archive":
         await apiFetch(user.idToken, `/api/me/message/${id}/move`, {
           method: "POST",
           body: { mailbox: "Archive" },
         });
-        return redirect(`/mail/${encodeURIComponent(mailbox)}`);
-      }
-      case "unread": {
+        return redirect(back);
+      case "unread":
         await apiFetch(user.idToken, `/api/me/message/${id}`, {
           method: "PATCH",
           body: { seen: false },
         });
-        return redirect(`/mail/${encodeURIComponent(mailbox)}`);
-      }
-      case "flag": {
+        return redirect(back);
+      case "flag":
         await apiFetch(user.idToken, `/api/me/message/${id}`, {
           method: "PATCH",
           body: { flagged: form.get("flagged") === "true" },
         });
         return { ok: true as const };
-      }
       default:
         return { ok: false as const, error: "unknown intent" };
     }
@@ -66,134 +77,151 @@ export default function MessageDetailPage({ loaderData, actionData }: Route.Comp
   const nav = useNavigation();
   const busy = nav.state !== "idle";
   const inTrash = detail.mailbox === "Trash";
-  // no text alternative in an HTML-only mail → show the notice
-  const bodyText = detail.textBody || "";
+  const sender = detail.fromAddr || t("mail.unknownSender");
+  const back = `/mail/${encodeURIComponent(mailbox)}`;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <ButtonLink to={`/mail/${encodeURIComponent(mailbox)}`} variant="chip">
-          ← {t("webmail.backToList")}
-        </ButtonLink>
-        <div className="flex items-center gap-2">
-          <ButtonLink
-            to={`/mail/compose?replyTo=${detail.id}`}
-            variant="outline"
-            className="!px-3 !py-1.5 text-xs"
-          >
-            {t("webmail.reply")}
-          </ButtonLink>
+    <article className="flex min-h-0 w-full flex-col">
+      <header className="flex h-13 shrink-0 items-center gap-1 border-b border-line px-3">
+        <Link
+          to={back}
+          className="mr-1 flex size-8 items-center justify-center rounded-md text-ink-3 hover:bg-raised hover:text-ink md:hidden"
+          aria-label={t("common.back")}
+        >
+          <BackIcon className="size-4" />
+        </Link>
+        <Button
+          variant="subtle"
+          size="sm"
+          onClick={() => {
+            window.location.href = `${back}/compose?reply=${detail.id}`;
+          }}
+          type="button"
+        >
+          <ReplyIcon className="size-3.5" />
+          {t("mail.reply")}
+        </Button>
+        <div className="ml-auto flex items-center gap-0.5">
           <Form method="post">
             <input type="hidden" name="intent" value="flag" />
             <input type="hidden" name="flagged" value={detail.flagged ? "false" : "true"} />
-            <Button variant="chip" pending={busy}>
-              {detail.flagged ? t("webmail.unflag") : `★ ${t("webmail.flag")}`}
-            </Button>
+            <IconButton
+              label={detail.flagged ? t("mail.unflag") : t("mail.flag")}
+              size="iconSm"
+              disabled={busy}
+            >
+              <StarIcon
+                className={`size-4 ${detail.flagged ? "fill-warn text-warn" : ""}`}
+              />
+            </IconButton>
           </Form>
           <Form method="post">
             <input type="hidden" name="intent" value="unread" />
-            <Button variant="chip" pending={busy}>
-              {t("webmail.markUnread")}
-            </Button>
+            <IconButton label={t("mail.markUnread")} size="iconSm" disabled={busy}>
+              <MailOpenIcon className="size-4" />
+            </IconButton>
           </Form>
           {detail.mailbox !== "Archive" && (
             <Form method="post">
               <input type="hidden" name="intent" value="archive" />
-              <Button variant="chip" pending={busy}>
-                {t("webmail.archive")}
-              </Button>
+              <IconButton label={t("mail.archive")} size="iconSm" disabled={busy}>
+                <ArchiveIcon className="size-4" />
+              </IconButton>
             </Form>
           )}
           <Form method="post">
             <input type="hidden" name="intent" value="delete" />
-            <Button
-              variant="linkDanger"
-              pending={busy}
-              confirmMessage={inTrash ? t("webmail.confirmDeleteForever") : undefined}
+            <IconButton
+              label={inTrash ? t("mail.deleteForever") : t("mail.delete")}
+              size="iconSm"
+              variant="danger"
+              disabled={busy}
+              confirmMessage={inTrash ? t("mail.confirmDeleteForever") : undefined}
             >
-              {inTrash ? t("webmail.deleteForever") : t("webmail.delete")}
-            </Button>
+              <TrashIcon className="size-4" />
+            </IconButton>
           </Form>
         </div>
-      </div>
+      </header>
 
-      <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
+      <div className="min-h-0 flex-1 overflow-y-auto scroll-thin">
+        <div className="mx-auto flex max-w-3xl flex-col gap-4 px-5 py-5">
+          <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
-      <Card className="p-4">
-        <div className="flex items-start justify-between gap-3">
-          <h1 className="text-lg font-bold">
-            {detail.flagged && <span className="mr-1 text-warn">★</span>}
-            {detail.subject || t("webmail.noSubject")}
-          </h1>
-          <TimeText
-            value={detail.date ?? detail.internalDate}
-            className="shrink-0 text-xs text-text-2"
-          />
-        </div>
-        <dl className="mt-3 flex flex-col gap-1 text-xs">
-          <div className="flex gap-2">
-            <dt className="w-16 shrink-0 text-text-2">{t("webmail.from")}</dt>
-            <dd className="font-mono text-text-1">{detail.fromAddr}</dd>
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight text-ink">
+              {detail.subject || t("mail.noSubject")}
+            </h1>
+            <div className="mt-3 flex items-start gap-3">
+              <Avatar label={sender} seed={sender} size={36} />
+              <div className="min-w-0 flex-1 text-xs">
+                <p className="truncate font-medium text-ink">{sender}</p>
+                <p className="truncate text-ink-3">
+                  {t("mail.to")} {(detail.toList ?? []).join(", ") || "—"}
+                </p>
+                {detail.ccList && detail.ccList.length > 0 && (
+                  <p className="truncate text-ink-3">
+                    {t("mail.cc")} {detail.ccList.join(", ")}
+                  </p>
+                )}
+              </div>
+              <TimeText
+                value={detail.date ?? detail.internalDate}
+                mode="full"
+                className="shrink-0 text-xs text-ink-faint"
+              />
+            </div>
           </div>
-          {detail.toList && detail.toList.length > 0 && (
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-text-2">{t("webmail.to")}</dt>
-              <dd className="font-mono text-text-1">{detail.toList.join(", ")}</dd>
+
+          {detail.parseWarn && <ErrorBanner message={t("mail.parseWarn")} />}
+
+          <div className="border-t border-line pt-4">
+            {detail.htmlBody ? (
+              <HtmlBody html={detail.htmlBody} />
+            ) : (
+              <pre className="font-sans text-sm leading-6 whitespace-pre-wrap text-ink">
+                {detail.textBody}
+              </pre>
+            )}
+          </div>
+
+          {detail.attachmentList.length > 0 && (
+            <div className="flex flex-col gap-2 border-t border-line pt-4">
+              <p className="flex items-center gap-1.5 text-xs font-medium text-ink-2">
+                <AttachmentIcon className="size-3.5" />
+                {t("mail.attachment", { count: detail.attachmentList.length })}
+              </p>
+              <ul className="flex flex-wrap gap-2">
+                {detail.attachmentList.map((a) => (
+                  <li key={a.index}>
+                    <a
+                      href={`/mail-file/${detail.id}/attachment/${a.index}`}
+                      download
+                      className="flex items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-xs text-ink-2 hover:border-line-strong hover:text-ink"
+                    >
+                      <DownloadIcon className="size-3.5 text-ink-3" />
+                      <span className="max-w-48 truncate">
+                        {a.filename || `attachment-${a.index}`}
+                      </span>
+                      <Badge tone="muted">{formatBytes(a.sizeBytes)}</Badge>
+                    </a>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
-          {detail.ccList && detail.ccList.length > 0 && (
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-text-2">{t("webmail.cc")}</dt>
-              <dd className="font-mono text-text-1">{detail.ccList.join(", ")}</dd>
-            </div>
-          )}
-        </dl>
-      </Card>
 
-      {detail.parseWarn && <ErrorBanner message={t("webmail.parseWarn")} />}
-
-      <Card className="p-4">
-        {bodyText ? (
-          <pre className="whitespace-pre-wrap break-words font-sans text-sm text-text-0">
-            {bodyText}
-          </pre>
-        ) : (
-          <p className="text-sm text-text-2">{detail.htmlBody ? t("webmail.htmlNotice") : ""}</p>
-        )}
-      </Card>
-
-      {detail.attachmentList.length > 0 && (
-        <Card className="p-4">
-          <h2 className="text-sm font-medium text-text-1">{t("webmail.attachment")}</h2>
-          <ul className="mt-2 flex flex-col gap-1.5">
-            {detail.attachmentList.map((a) => (
-              <li key={a.index} className="flex items-center gap-2 text-sm">
-                <a
-                  href={`/mail-file/${detail.id}/attachment/${a.index}`}
-                  className="text-accent hover:underline"
-                  download
-                >
-                  {a.filename || `attachment-${a.index}`}
-                </a>
-                <Badge tone="muted">{a.contentType}</Badge>
-                <span className="text-xs text-muted">{formatBytes(a.sizeBytes)}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      <div>
-        <a
-          href={`/mail-file/${detail.id}/raw`}
-          className="text-xs text-text-2 hover:text-text-1 hover:underline"
-          download
-        >
-          {t("webmail.raw")}
-        </a>
+          <div className="pt-2">
+            <a
+              href={`/mail-file/${detail.id}/raw`}
+              download
+              className="text-xs text-ink-faint hover:text-ink-2 hover:underline"
+            >
+              {t("mail.raw")}
+            </a>
+          </div>
+        </div>
       </div>
-    </div>
+    </article>
   );
 }
-
-

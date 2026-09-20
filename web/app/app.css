@@ -1,14 +1,132 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
-:root {
+/* Design tokens.
+   Every surface, line and ink colour resolves through a --tone-* variable so
+   the whole palette can be swapped per theme without touching a utility. */
+@theme inline {
+  --color-canvas: var(--tone-canvas);
+  --color-surface: var(--tone-surface);
+  --color-raised: var(--tone-raised);
+  --color-sunken: var(--tone-sunken);
+
+  --color-line: var(--tone-line);
+  --color-line-strong: var(--tone-line-strong);
+
+  --color-ink: var(--tone-ink);
+  --color-ink-2: var(--tone-ink-2);
+  --color-ink-3: var(--tone-ink-3);
+  --color-ink-faint: var(--tone-ink-faint);
+
+  --color-brand: var(--tone-brand);
+  --color-brand-hover: var(--tone-brand-hover);
+  --color-brand-ink: var(--tone-brand-ink);
+  --color-brand-soft: var(--tone-brand-soft);
+
+  --color-ok: var(--tone-ok);
+  --color-ok-soft: var(--tone-ok-soft);
+  --color-warn: var(--tone-warn);
+  --color-warn-soft: var(--tone-warn-soft);
+  --color-bad: var(--tone-bad);
+  --color-bad-soft: var(--tone-bad-soft);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Pretendard, "Apple SD Gothic Neo",
+    "Noto Sans KR", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+}
+
+/* Dark is the default tone; .light flips the same variable names. */
+:root,
+.dark {
+  --tone-canvas: #0b0c0e;
+  --tone-surface: #131519;
+  --tone-raised: #1b1e24;
+  --tone-sunken: #08090a;
+
+  --tone-line: #23262c;
+  --tone-line-strong: #333840;
+
+  --tone-ink: #edeff2;
+  --tone-ink-2: #b4bac3;
+  --tone-ink-3: #7d838d;
+  --tone-ink-faint: #575c65;
+
+  --tone-brand: #6aa6ff;
+  --tone-brand-hover: #8dbcff;
+  --tone-brand-ink: #071019;
+  --tone-brand-soft: #6aa6ff26;
+
+  --tone-ok: #57c08d;
+  --tone-ok-soft: #57c08d26;
+  --tone-warn: #e3b25a;
+  --tone-warn-soft: #e3b25a26;
+  --tone-bad: #f0655f;
+  --tone-bad-soft: #f0655f26;
+
   color-scheme: dark;
 }
 
-body {
-  @apply bg-bg-0 text-text-0 antialiased;
-  overflow-x: hidden;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
+.light {
+  --tone-canvas: #f6f7f9;
+  --tone-surface: #ffffff;
+  --tone-raised: #eef0f4;
+  --tone-sunken: #e9ebf0;
+
+  --tone-line: #e1e4ea;
+  --tone-line-strong: #c9ced8;
+
+  --tone-ink: #14161a;
+  --tone-ink-2: #454b55;
+  --tone-ink-3: #6c727d;
+  --tone-ink-faint: #979da7;
+
+  --tone-brand: #2f6fe4;
+  --tone-brand-hover: #2660cd;
+  --tone-brand-ink: #ffffff;
+  --tone-brand-soft: #2f6fe41f;
+
+  --tone-ok: #1f9d63;
+  --tone-ok-soft: #1f9d631f;
+  --tone-warn: #b7801c;
+  --tone-warn-soft: #b7801c1f;
+  --tone-bad: #d24b45;
+  --tone-bad-soft: #d24b451f;
+
+  color-scheme: light;
+}
+
+@layer base {
+  html {
+    background-color: var(--tone-canvas);
+  }
+
+  body {
+    @apply bg-canvas text-ink antialiased;
+    font-family: var(--font-sans);
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  /* Focus ring: one rule for every interactive element. */
+  :focus-visible {
+    outline: 2px solid var(--tone-brand);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--tone-brand-soft);
+  }
+}
+
+@layer utilities {
+  /* Thin scrollbars inside app panes (mail list, sidebars). */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--tone-line-strong) transparent;
+  }
 }

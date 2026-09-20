@@ -3,19 +3,19 @@ import type { Route } from "./+types/relay";
 import { ApiError, apiFetch, type Domain, type Relay } from "~/lib/api.server";
 import { translate } from "~/i18n";
 import { useT } from "~/lib/i18n";
+import { ShellContent, ShellHeader } from "~/shell/app-shell";
 import { getLocale } from "~/lib/locale.server";
 import { requireAdmin } from "~/lib/session.server";
 import {
   Badge,
   Button,
-  Card,
+  Panel,
   CheckboxLabel,
   EmptyText,
   ErrorBanner,
-  PageTitle,
   SelectInput,
   TextInput,
-} from "~/components";
+} from "~/kit";
 
 // Outbound relay management — relays live in the DB (no env restarts).
 // Passwords are write-only: the server never returns them (hasPassword flag only).
@@ -101,14 +101,15 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
   const busy = nav.state !== "idle";
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageTitle title={t("relay.title")} description={t("relay.description")} />
+    <>
+      <ShellHeader title={t("relay.title")} />
+      <ShellContent>
 
       <ErrorBanner message={actionData && !actionData.ok ? actionData.error : null} />
 
       {/* New relay */}
       <Form method="post">
-        <Card className="flex flex-col gap-2 p-4">
+        <Panel className="flex flex-col gap-2 p-4">
           <input type="hidden" name="intent" value="create" />
           <p className="text-sm font-medium">{t("relay.new")}</p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -123,17 +124,17 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
               autoComplete="new-password"
               className="col-span-2"
             />
-            <CheckboxLabel name="starttls" defaultChecked label="STARTTLS" />
-            <CheckboxLabel name="isDefault" label={t("relay.defaultRelay")} />
+            <CheckboxLabel name="starttls" defaultChecked >STARTTLS</CheckboxLabel>
+            <CheckboxLabel name="isDefault">{t("relay.defaultRelay")}</CheckboxLabel>
           </div>
           <Button disabled={busy} className="self-start">
             {t("common.add")}
           </Button>
-        </Card>
+        </Panel>
       </Form>
 
       {/* Relay list */}
-      <Card>
+      <Panel>
         {relayList.length === 0 ? (
           <EmptyText>{t("relay.empty")}</EmptyText>
         ) : (
@@ -145,9 +146,9 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                   <input type="hidden" name="id" value={r.id} />
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{r.name}</span>
-                    {r.isDefault && <Badge tone="accent">{t("relay.default")}</Badge>}
+                    {r.isDefault && <Badge tone="brand">{t("relay.default")}</Badge>}
                     {!r.active && <Badge>{t("common.inactive")}</Badge>}
-                    <span className="text-xs text-text-2">
+                    <span className="text-xs text-ink-3">
                       {r.host}:{r.port}
                     </span>
                   </div>
@@ -163,12 +164,12 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                       autoComplete="new-password"
                       className="col-span-2"
                     />
-                    <CheckboxLabel name="starttls" defaultChecked={r.starttls} label="STARTTLS" />
-                    <CheckboxLabel name="isDefault" defaultChecked={r.isDefault} label={t("relay.default")} />
-                    <CheckboxLabel name="active" defaultChecked={r.active} label={t("common.active")} />
+                    <CheckboxLabel name="starttls" defaultChecked={r.starttls} >STARTTLS</CheckboxLabel>
+                    <CheckboxLabel name="isDefault" defaultChecked={r.isDefault} >{t("relay.default")}</CheckboxLabel>
+                    <CheckboxLabel name="active" defaultChecked={r.active} >{t("common.active")}</CheckboxLabel>
                   </div>
                   <div className="flex gap-3">
-                    <Button variant="link" disabled={busy}>
+                    <Button variant="ghost" size="sm" disabled={busy}>
                       {t("common.save")}
                     </Button>
                   </div>
@@ -177,7 +178,7 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                   <input type="hidden" name="intent" value="delete" />
                   <input type="hidden" name="id" value={r.id} />
                   <Button
-                    variant="linkDanger"
+                    variant="danger" size="sm"
                     disabled={busy}
                     confirmMessage={t("common.confirmDelete")}
                   >
@@ -188,10 +189,10 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
             ))}
           </ul>
         )}
-      </Card>
+      </Panel>
 
       {/* Per-domain relay assignment */}
-      <Card className="p-4">
+      <Panel className="p-4">
         <p className="mb-3 text-sm font-medium">{t("relay.perDomain")}</p>
         <ul className="flex flex-col gap-2">
           {domainList.map((d) => (
@@ -208,14 +209,15 @@ export default function RelayList({ loaderData, actionData }: Route.ComponentPro
                     </option>
                   ))}
                 </SelectInput>
-                <Button variant="link" disabled={busy}>
+                <Button variant="ghost" size="sm" disabled={busy}>
                   {t("common.assign")}
                 </Button>
               </Form>
             </li>
           ))}
         </ul>
-      </Card>
-    </div>
+      </Panel>
+      </ShellContent>
+    </>
   );
 }
