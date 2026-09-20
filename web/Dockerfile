@@ -1,4 +1,4 @@
-# mail-web — RR7 관리/셀프서비스 UI
+# mail-web — React Router 웹 UI (메일·설정·관리)
 # 빌드는 bun (빠름), 런타임은 node (react-router-serve가 node 스트림 기반 —
 # bun의 react-dom/server.bun엔 renderToPipeableStream이 없어 기동 실패).
 FROM oven/bun:1.3-alpine AS build
@@ -8,7 +8,7 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build && bun install --frozen-lockfile --production
 
-FROM node:22-alpine
+FROM node:24-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build --chown=node:node --chmod=644 /app/package.json ./
