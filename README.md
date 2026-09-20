@@ -37,9 +37,15 @@ routing, multi-tenancy, and the management plane are implemented here.
   optional TLS on protocol ports, timing-safe argon2id app passwords.
 - **DNS self-check** — one click queries public DNS (1.1.1.1) for
   MX/SPF/DKIM/DMARC and diffs against expected values.
-- **Admin UI + self-service** — React Router v7 management console (domains,
-  accounts, addresses, relays, queue) plus a self-service page where users
-  manage their own app passwords.
+- **Webmail that reads like a mail client** — folder rail, message list and
+  reading pane side by side; HTML mail rendered inside a sandboxed frame with
+  remote images blocked until asked for; search, multi-select batch actions,
+  keyboard navigation (j/k/enter/e/#), autosaving drafts.
+- **One shell for everything** — mail, personal settings and server admin are
+  three areas of a single app (one rail, one account menu), not three
+  separately built pages.
+- **Per-account appearance** — theme (system/dark/light) and display language
+  live on the account, so they follow the person to any browser.
 - **Embedded migrations** — the daemon converges any database (empty or
   existing) to the current schema on boot. Single binary, k8s-friendly.
 
@@ -60,7 +66,7 @@ routing, multi-tenancy, and the management plane are implemented here.
                │
         PostgreSQL (metadata + message blobs)
 
-web/ — React Router v7 (Bun) UI: OIDC code flow, session cookie,
+web/ — React Router v8 (Bun) UI: OIDC code flow, session cookie,
        calls the REST API server-side with the user's id_token
 ```
 
@@ -101,7 +107,7 @@ user re-creation re-attaches by email). Address management is admin-only.
 | DKIM/DMARC/SPF | `emersion/go-msgauth`, `blitiri.com.ar/go/spf` |
 | Metadata + blobs | PostgreSQL (`jackc/pgx`) |
 | Admin/self-service API | Go `net/http` (1.22+ pattern routing), OIDC via `coreos/go-oidc` |
-| Web UI | Bun + React Router v7 + Tailwind CSS v4 |
+| Web UI | Bun + React Router v8 + Vite 8 + Tailwind CSS v4 |
 | Deployment | Docker images (distroless-style), Kubernetes-friendly |
 
 ## Development
@@ -161,7 +167,7 @@ internal/
   store/            # domain types + Store/AdminStore interfaces
     migration/      # embedded SQL migrations (run on boot)
     postgres/       # pgx implementation
-web/                # React Router v7 UI (Bun)
+web/                # React Router v8 UI (Bun)
   app/components/   # atomic UI kit shared across routes
 docs/               # design decision records
 spikes/             # throwaway learning experiments
