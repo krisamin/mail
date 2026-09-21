@@ -122,6 +122,9 @@ func (s *Server) handleMeCreateAppPassword(w http.ResponseWriter, r *http.Reques
 	}
 	var req struct {
 		Label string `json:"label"`
+		// ScopeList limits the password to a protocol (imap / smtp).
+		// Empty or both = full access.
+		ScopeList []string `json:"scopeList"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -137,7 +140,7 @@ func (s *Server) handleMeCreateAppPassword(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "hash failed")
 		return
 	}
-	p, err := s.store.CreateAppPassword(r.Context(), u.ID, req.Label, hash)
+	p, err := s.store.CreateAppPassword(r.Context(), u.ID, req.Label, hash, normalizeScopeList(req.ScopeList))
 	if err != nil {
 		mapStoreErr(w, err)
 		return

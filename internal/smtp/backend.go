@@ -21,6 +21,7 @@ import (
 	"github.com/krisamin/mail/internal/auth"
 	"github.com/krisamin/mail/internal/delivery"
 	"github.com/krisamin/mail/internal/metric"
+	"github.com/krisamin/mail/internal/policy"
 	"github.com/krisamin/mail/internal/spam"
 	"github.com/krisamin/mail/internal/store"
 )
@@ -185,6 +186,28 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 			}
 		}
 		return err
+	}
+
+	// Permission: this port is the outside world knocking, so the recipient's
+	// "accept external mail" switch (and the domain's) decides. Mail between
+	// addresses we host never arrives here — it is handed over inside the
+	// server — so an internal-only account still hears from colleagues.
+	{
+		var recipientDomain *store.Domain
+		if at := strings.LastIndex(to, "@"); at >= 0 {
+			if d, derr := s.backend.store.FindDomain(ctx, strings.ToLower(to[at+1:])); derr == nil {
+				recipientDomain = d
+			}
+		}
+		if v := policy.Receive(u, recipientDomain, true); !v.Allowed {
+			metric.PolicyBlockTotal.WithLabelValues(string(v.Reason), "inbound").Inc()
+			metric.InboundRejectTotal.WithLabelValues("permission").Inc()
+			return &gosmtp.SMTPError{
+				Code:         550,
+				EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
+				Message:      v.Message,
+			}
+		}
 	}
 
 	// Greylist AFTER recipient validation (an unknown user stays a clean 550)

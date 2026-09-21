@@ -15,6 +15,7 @@ import (
 	"github.com/krisamin/mail/internal/delivery"
 	"github.com/krisamin/mail/internal/guard"
 	"github.com/krisamin/mail/internal/metric"
+	"github.com/krisamin/mail/internal/policy"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -68,9 +69,11 @@ type SubmissionSession struct {
 	user        *store.Account // populated on successful auth
 	accountAddr string         // address used to authenticate (for envelope-from validation)
 
-	from     string
-	rcptList []rcpt   // local delivery targets
-	external []string // external domains → outbound queue targets
+	from         string
+	senderDomain *store.Domain // domain of `from` (permission switches live here)
+	rcptList     []rcpt        // local delivery targets
+	external     []string      // external domains → outbound queue targets
+	counted      int           // recipients already charged to the daily limit
 }
 
 var _ gosmtp.Session = (*SubmissionSession)(nil)
@@ -109,8 +112,18 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 		defer cancel()
 
-		u, err := s.backend.store.AuthenticateAppPassword(ctx, username, password)
+		u, err := s.backend.store.AuthenticateAppPassword(ctx, username, password, store.ScopeSMTP)
 		if err != nil {
+			// Correct secret, missing permission — a clean 535 without touching
+			// the brute-force counter.
+			if errors.Is(err, store.ErrScopeDenied) {
+				metric.PolicyBlockTotal.WithLabelValues("scope_missing", "submission").Inc()
+				return &gosmtp.SMTPError{
+					Code:         535,
+					EnhancedCode: gosmtp.EnhancedCode{5, 7, 8},
+					Message:      "this app password is not allowed to send mail",
+				}
+			}
 			if errors.Is(err, store.ErrAuthFailed) || errors.Is(err, store.ErrNotFound) {
 				metric.AuthTotal.WithLabelValues("submission", "fail").Inc()
 				s.backend.limiter.Fail(ipKey)
@@ -155,7 +168,24 @@ func (s *SubmissionSession) Mail(from string, opts *gosmtp.MailOptions) error {
 		}
 	}
 	s.from = from
+
+	// The sending domain carries the operator's kill switch; look it up once
+	// here rather than per recipient. A missing domain is not fatal — sender
+	// ownership was already proven, so the account switch alone decides.
+	if at := strings.LastIndex(from, "@"); at >= 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		if d, err := s.backend.store.FindDomain(ctx, strings.ToLower(from[at+1:])); err == nil {
+			s.senderDomain = d
+		}
+		cancel()
+	}
 	return nil
+}
+
+// refuse turns a policy verdict into an SMTP error and records it.
+func refuse(v policy.Verdict, path string, code int, enhanced gosmtp.EnhancedCode) error {
+	metric.PolicyBlockTotal.WithLabelValues(string(v.Reason), path).Inc()
+	return &gosmtp.SMTPError{Code: code, EnhancedCode: enhanced, Message: v.Message}
 }
 
 // Rcpt classifies the recipient: local domain → verify user, external → rejected until Phase 2-3.
@@ -186,6 +216,9 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 					Message:      "relaying to external domainList is disabled",
 				}
 			}
+			if v := policy.Send(s.user, s.senderDomain, true); !v.Allowed {
+				return refuse(v, "submission", 550, gosmtp.EnhancedCode{5, 7, 1})
+			}
 			s.external = append(s.external, to)
 			return nil
 		}
@@ -202,6 +235,9 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 			}
 		}
 		return err
+	}
+	if v := policy.Send(s.user, s.senderDomain, false); !v.Allowed {
+		return refuse(v, "submission", 550, gosmtp.EnhancedCode{5, 7, 1})
 	}
 	s.rcptList = append(s.rcptList, rcpt{address: to, user: u})
 	return nil
@@ -221,8 +257,28 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 			Message:      "no valid recipients",
 		}
 	}
+
+	// Daily limit. Charged here, once the recipient count is final, and given
+	// back if the transaction fails below — the limit should measure mail that
+	// actually went out, not attempts.
+	if n := len(s.rcptList) + len(s.external); n > 0 && s.user.DailySendLimit != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		used, err := s.backend.store.BumpSendCounter(ctx, s.user.ID, n)
+		cancel()
+		if err != nil {
+			log.Printf("submission: send counter failed user=%s: %v", s.accountAddr, err)
+		} else {
+			s.counted = n
+			if v := policy.DailyLimit(s.user.DailySendLimit, used); !v.Allowed {
+				s.releaseCount()
+				return refuse(v, "submission", 451, gosmtp.EnhancedCode{4, 7, 0})
+			}
+		}
+	}
+
 	raw, err := io.ReadAll(r)
 	if err != nil {
+		s.releaseCount()
 		return err
 	}
 
@@ -309,8 +365,24 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 
 func (s *SubmissionSession) Reset() {
 	s.from = ""
+	s.senderDomain = nil
 	s.rcptList = nil
 	s.external = nil
+	s.counted = 0
+}
+
+// releaseCount gives back the daily-limit slots charged for this transaction.
+// Best-effort: a lost refund only makes the limit slightly stricter for a day.
+func (s *SubmissionSession) releaseCount() {
+	if s.counted == 0 || s.user == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	if err := s.backend.store.ReleaseSendCounter(ctx, s.user.ID, s.counted); err != nil {
+		log.Printf("submission: send counter release failed user=%s: %v", s.accountAddr, err)
+	}
+	cancel()
+	s.counted = 0
 }
 
 // headerFromAddress extracts the From: address from the message header block,

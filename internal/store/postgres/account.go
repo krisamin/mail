@@ -53,12 +53,14 @@ func splitAddress(address string) (local, domain string, err error) {
 // accountSelect is the shared SELECT for account lookups (0006 — identity model).
 const accountSelect = `
 	SELECT a.id, a.oidc_subject, COALESCE(a.oidc_email, ''), a.kind,
-	       a.quota_bytes, a.active, a.created_at
+	       a.quota_bytes, a.active, a.created_at,
+	       a.can_send, a.can_send_external, a.can_receive_external, a.daily_send_limit
 	FROM account a`
 
 func scanAccount(row pgx.Row) (*store.Account, error) {
 	var u store.Account
-	err := row.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt,
+		&u.CanSend, &u.CanSendExternal, &u.CanReceiveExternal, &u.DailySendLimit)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -72,11 +74,13 @@ func scanAccount(row pgx.Row) (*store.Account, error) {
 func (s *Store) FindDomain(ctx context.Context, name string) (*store.Domain, error) {
 	const q = `
 		SELECT id, name, active, created_at,
-		       COALESCE(dkim_selector, ''), COALESCE(dkim_private_key, ''), relay_id
+		       COALESCE(dkim_selector, ''), COALESCE(dkim_private_key, ''), relay_id,
+		       allow_send_external, allow_receive_external
 		FROM domain WHERE name = $1 AND active`
 	var d store.Domain
 	err := s.pool.QueryRow(ctx, q, name).Scan(
-		&d.ID, &d.Name, &d.Active, &d.CreatedAt, &d.DKIMSelector, &d.DKIMPrivateKey, &d.RelayID)
+		&d.ID, &d.Name, &d.Active, &d.CreatedAt, &d.DKIMSelector, &d.DKIMPrivateKey, &d.RelayID,
+		&d.AllowSendExternal, &d.AllowReceiveExternal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -108,13 +112,19 @@ func (s *Store) FindAccountBySubject(ctx context.Context, subject string) (*stor
 
 // AuthenticateAppPassword authenticates with an address + app password.
 // Compares against the account's non-revoked app passwords using argon2id.
-func (s *Store) AuthenticateAppPassword(ctx context.Context, address, password string) (*store.Account, error) {
+//
+// scope is the protocol asking (store.ScopeIMAP / store.ScopeSMTP). A password
+// whose scope list does not carry it authenticates — and is then refused with
+// ErrScopeDenied, which the caller must NOT count as a failed login attempt
+// (the secret was right; the permission was missing). An empty scope list is
+// a password issued before scopes existed and keeps full access.
+func (s *Store) AuthenticateAppPassword(ctx context.Context, address, password, scope string) (*store.Account, error) {
 	u, err := s.FindAccountByAddress(ctx, address)
 	if err != nil {
 		return nil, err
 	}
 	const q = `
-		SELECT id, hash FROM app_password
+		SELECT id, hash, scope_list FROM app_password
 		WHERE account_id = $1 AND revoked_at IS NULL`
 	rows, err := s.pool.Query(ctx, q, u.ID)
 	if err != nil {
@@ -125,12 +135,16 @@ func (s *Store) AuthenticateAppPassword(ctx context.Context, address, password s
 	for rows.Next() {
 		var id uuid.UUID
 		var hash string
-		if err := rows.Scan(&id, &hash); err != nil {
+		var scopeList []string
+		if err := rows.Scan(&id, &hash, &scopeList); err != nil {
 			return nil, err
 		}
 		if verifyPassword(password, hash) {
 			// refresh last_used (best-effort)
 			_, _ = s.pool.Exec(ctx, `UPDATE app_password SET last_used = now() WHERE id = $1`, id)
+			if scope != "" && len(scopeList) > 0 && !hasScope(scopeList, scope) {
+				return nil, store.ErrScopeDenied
+			}
 			return u, nil
 		}
 	}
@@ -163,4 +177,14 @@ func verifyPassword(password, encoded string) bool {
 	}
 	got := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 	return subtleConstEq(got, want)
+}
+
+// hasScope reports whether the scope list carries want.
+func hasScope(scopeList []string, want string) bool {
+	for _, s := range scopeList {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

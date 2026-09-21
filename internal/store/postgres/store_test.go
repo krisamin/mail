@@ -82,7 +82,7 @@ func TestFullFlow(t *testing.T) {
 	ctx := context.Background()
 
 	// Start clean each run (test isolation)
-	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
+	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, send_counter, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	addr := "maro@krisam.in"
 	pass := "super-secret-app-pw"
@@ -90,10 +90,10 @@ func TestFullFlow(t *testing.T) {
 	t.Logf("seed user id=%d", accountID)
 
 	// 1) auth success/failure
-	if _, err := s.AuthenticateAppPassword(ctx, addr, pass); err != nil {
+	if _, err := s.AuthenticateAppPassword(ctx, addr, pass, ""); err != nil {
 		t.Fatalf("auth failed (should succeed): %v", err)
 	}
-	if _, err := s.AuthenticateAppPassword(ctx, addr, "wrong"); err == nil {
+	if _, err := s.AuthenticateAppPassword(ctx, addr, "wrong", ""); err == nil {
 		t.Fatal("auth passed with a wrong password")
 	}
 	t.Log("✔ auth verification passed")

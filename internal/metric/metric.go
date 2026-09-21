@@ -37,6 +37,18 @@ var QuarantineTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Messages quarantined to Junk by trigger.",
 }, []string{"trigger"})
 
+// ── permissions ──────────────────────────────────────────────────
+
+// PolicyBlockTotal counts actions refused by a permission rule.
+// rule: account_inactive | send_disabled | external_send_blocked |
+// domain_send_blocked | external_receive_blocked | domain_receive_blocked |
+// daily_send_limit | scope_missing
+// path: submission | webmail | inbound | imap
+var PolicyBlockTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "mail_policy_block_total",
+	Help: "Actions refused by a permission rule.",
+}, []string{"rule", "path"})
+
 // ── authentication ──────────────────────────────────────────
 
 // AuthTotal counts app-password authentication attempts.

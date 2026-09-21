@@ -24,6 +24,10 @@ var ErrNotFound = errors.New("not found")
 // ErrAuthFailed is an authentication failure.
 var ErrAuthFailed = errors.New("authentication failed")
 
+// ErrScopeDenied means the credential was correct but is not allowed to use
+// the protocol it was presented to (app password scopes, 0004).
+var ErrScopeDenied = errors.New("credential not allowed for this protocol")
+
 // ── Domain types ────────────────────────────────────────────
 
 // Domain is a mail domain (top level of multi-tenancy). E.g. krisam.in
@@ -40,6 +44,12 @@ type Domain struct {
 
 	// Outbound relay assignment (0005). nil = use default relay.
 	RelayID *uuid.UUID
+
+	// Permission switches (0004) — the operator's kill switch for the whole
+	// domain. An account may cross the server boundary only if its own switch
+	// and this one both allow it.
+	AllowSendExternal    bool
+	AllowReceiveExternal bool
 }
 
 // Relay is an SMTP relay for external delivery (Resend, SES, ...).
@@ -74,7 +84,29 @@ type Account struct {
 	QuotaBytes  *int64 // nil = unlimited
 	Active      bool
 	CreatedAt   time.Time
+
+	// Permissions (0004). CanSend gates sending at all; CanSendExternal and
+	// CanReceiveExternal gate crossing the server boundary. DailySendLimit is
+	// recipients per UTC day (nil = unlimited).
+	CanSend            bool
+	CanSendExternal    bool
+	CanReceiveExternal bool
+	DailySendLimit     *int
 }
+
+// AccountPermission is the editable permission set of an account (0004).
+type AccountPermission struct {
+	CanSend            bool
+	CanSendExternal    bool
+	CanReceiveExternal bool
+	DailySendLimit     *int // nil = unlimited
+}
+
+// AppPassword scopes (0004 — enforced at authentication time).
+const (
+	ScopeIMAP = "imap" // read mail with a mail client
+	ScopeSMTP = "smtp" // send mail through submission
+)
 
 // Mailbox is an IMAP folder (INBOX, Sent, ...).
 type Mailbox struct {
@@ -235,7 +267,7 @@ type FilterRule struct {
 // The Postgres implementation satisfies it. IMAP/SMTP backends consume it.
 type Store interface {
 	// Authentication
-	AuthenticateAppPassword(ctx context.Context, address, password string) (*Account, error)
+	AuthenticateAppPassword(ctx context.Context, address, password, scope string) (*Account, error)
 	// FindAccountByAddress finds the active account that owns the address (exact
 	// match only — no wildcards. Used for IMAP/SMTP login and self-service mapping).
 	FindAccountByAddress(ctx context.Context, address string) (*Account, error)
@@ -272,6 +304,13 @@ type Store interface {
 	// nil uids means all; otherwise only the given UIDs (for IMAP UID EXPUNGE).
 	ExpungeDeleted(ctx context.Context, mailboxID uuid.UUID, uids []uint32) ([]uint32, error)
 	CopyMessage(ctx context.Context, messageID, destMailboxID uuid.UUID) (*Message, error)
+
+	// Daily send counter (0004). BumpSendCounter records n recipients against
+	// today and returns the running total including them; ReleaseSendCounter
+	// gives them back when the transaction is refused afterwards.
+	BumpSendCounter(ctx context.Context, accountID uuid.UUID, n int) (int, error)
+	ReleaseSendCounter(ctx context.Context, accountID uuid.UUID, n int) error
+	SendCountToday(ctx context.Context, accountID uuid.UUID) (int, error)
 
 	// Outbound queue (Phase 2-3)
 	// EnqueueOutbound enqueues an outbound item per recipient.
@@ -324,6 +363,10 @@ type AdminStore interface {
 	// Returns the number created.
 	BackfillDomainAddress(ctx context.Context, domainID uuid.UUID) (int, error)
 	SetDomainActive(ctx context.Context, id uuid.UUID, active bool) error
+	// SetDomainPermission sets the domain-wide external send/receive switches (0004).
+	SetDomainPermission(ctx context.Context, id uuid.UUID, allowSend, allowReceive bool) error
+	// SetAccountPermission writes an account's permission switches (0004).
+	SetAccountPermission(ctx context.Context, id uuid.UUID, p AccountPermission) (*Account, error)
 	// SetDomainDKIM sets the DKIM selector/private key (empty strings = unset).
 	SetDomainDKIM(ctx context.Context, id uuid.UUID, selector, privateKeyPEM string) error
 
@@ -352,7 +395,7 @@ type AdminStore interface {
 	// CreateAppPassword stores the hash and returns the record.
 	// Generating the plaintext is the caller's (API layer's) responsibility —
 	// shown exactly once at issuance.
-	CreateAppPassword(ctx context.Context, accountID uuid.UUID, label, hash string) (*AppPassword, error)
+	CreateAppPassword(ctx context.Context, accountID uuid.UUID, label, hash string, scopeList []string) (*AppPassword, error)
 	RevokeAppPassword(ctx context.Context, id uuid.UUID) error
 
 	// Addresses (account-owned mail addresses + wildcards — admin-only add/delete)

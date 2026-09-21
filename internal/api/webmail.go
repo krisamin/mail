@@ -21,6 +21,8 @@ import (
 	gomail "github.com/emersion/go-message/mail"
 
 	"github.com/krisamin/mail/internal/delivery"
+	"github.com/krisamin/mail/internal/metric"
+	"github.com/krisamin/mail/internal/policy"
 	"github.com/krisamin/mail/internal/store"
 )
 
@@ -625,9 +627,50 @@ func (s *Server) handleMeSendMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Permission, same rules the SMTP submission path applies. Looked up per
+	// send because an admin may have flipped a switch a second ago.
+	{
+		var senderDomain *store.Domain
+		if at := strings.LastIndex(from, "@"); at >= 0 {
+			if d, derr := s.store.FindDomain(r.Context(), from[at+1:]); derr == nil {
+				senderDomain = d
+			}
+		}
+		if v := policy.Send(u, senderDomain, len(externalList) > 0); !v.Allowed {
+			metric.PolicyBlockTotal.WithLabelValues(string(v.Reason), "webmail").Inc()
+			writeError(w, http.StatusForbidden, v.Message)
+			return
+		}
+	}
+
+	// Daily limit — charged before anything leaves, given back if the send
+	// fails below.
+	charged := 0
+	if u.DailySendLimit != nil && len(rcptList) > 0 {
+		used, err := s.store.BumpSendCounter(r.Context(), u.ID, len(rcptList))
+		if err != nil {
+			log.Printf("api: send counter failed account=%s: %v", u.ID, err)
+		} else {
+			charged = len(rcptList)
+			if v := policy.DailyLimit(u.DailySendLimit, used); !v.Allowed {
+				_ = s.store.ReleaseSendCounter(r.Context(), u.ID, charged)
+				metric.PolicyBlockTotal.WithLabelValues(string(v.Reason), "webmail").Inc()
+				writeError(w, http.StatusTooManyRequests, v.Message)
+				return
+			}
+		}
+	}
+	refund := func() {
+		if charged > 0 {
+			_ = s.store.ReleaseSendCounter(r.Context(), u.ID, charged)
+			charged = 0
+		}
+	}
+
 	// local recipients must exist — mirror submission's 550 at RCPT time
 	for _, rcptAddr := range localList {
 		if _, err := s.store.ResolveAddress(r.Context(), rcptAddr); err != nil {
+			refund()
 			if errors.Is(err, store.ErrNotFound) {
 				writeError(w, http.StatusBadRequest, "no such user: "+rcptAddr)
 				return
@@ -641,6 +684,7 @@ func (s *Server) handleMeSendMessage(w http.ResponseWriter, r *http.Request) {
 	// delivered yet and the client can simply retry
 	if len(externalList) > 0 {
 		if err := s.store.EnqueueOutbound(r.Context(), from, externalList, raw); err != nil {
+			refund()
 			mapStoreErr(w, err)
 			return
 		}

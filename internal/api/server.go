@@ -61,6 +61,7 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("GET /api/admin/domain", s.handleListDomain)
 	admin.HandleFunc("POST /api/admin/domain", s.handleCreateDomain)
 	admin.HandleFunc("PATCH /api/admin/domain/{id}", s.handlePatchDomain)
+	admin.HandleFunc("PUT /api/admin/domain/{id}/permission", s.handleSetDomainPermission)
 	admin.HandleFunc("POST /api/admin/domain/{id}/dkim", s.handleGenerateDKIM)
 	admin.HandleFunc("DELETE /api/admin/domain/{id}/dkim", s.handleClearDKIM)
 	admin.HandleFunc("GET /api/admin/domain/{id}/address", s.handleListDomainAddress)
@@ -70,6 +71,7 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("GET /api/admin/account/overview", s.handleAccountOverview)
 	admin.HandleFunc("POST /api/admin/account/service", s.handleCreateServiceAccount)
 	admin.HandleFunc("PATCH /api/admin/account/{id}", s.handlePatchAccount)
+	admin.HandleFunc("PUT /api/admin/account/{id}/permission", s.handleSetAccountPermission)
 	admin.HandleFunc("GET /api/admin/account/{id}/address", s.handleListAccountAddress)
 	admin.HandleFunc("POST /api/admin/account/{id}/address", s.handleCreateAccountAddress)
 	admin.HandleFunc("GET /api/admin/account/{id}/app-password", s.handleListAppPassword)
@@ -97,6 +99,7 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	me.HandleFunc("GET /api/me/account", s.handleMeAccount)
 	me.HandleFunc("POST /api/me/provision", s.handleMeProvision)
 	me.HandleFunc("GET /api/me/address", s.handleMeAddress)
+	me.HandleFunc("GET /api/me/permission", s.handleMePermission)
 	me.HandleFunc("GET /api/me/app-password", s.handleMeListAppPassword)
 	me.HandleFunc("POST /api/me/app-password", s.handleMeCreateAppPassword)
 	me.HandleFunc("DELETE /api/me/app-password/{id}", s.handleMeRevokeAppPassword)
@@ -213,6 +216,9 @@ type domainDTO struct {
 	DKIMSelector string    `json:"dkimSelector"`
 	// DKIMPublicTXT is the TXT value to publish in DNS (the private key never leaves).
 	DKIMPublicTXT string `json:"dkimPublicTxt,omitempty"`
+	// Permission switches (0004) — the whole-domain kill switches.
+	AllowSendExternal    bool `json:"allowSendExternal"`
+	AllowReceiveExternal bool `json:"allowReceiveExternal"`
 }
 
 func toDomainDTO(d *store.Domain) domainDTO {
@@ -220,6 +226,9 @@ func toDomainDTO(d *store.Domain) domainDTO {
 		ID: d.ID, Name: d.Name, Active: d.Active,
 		CreatedAt:    d.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		DKIMSelector: d.DKIMSelector,
+
+		AllowSendExternal:    d.AllowSendExternal,
+		AllowReceiveExternal: d.AllowReceiveExternal,
 	}
 	if d.DKIMPrivateKey != "" {
 		if txt, err := dkimPublicTXT(d.DKIMPrivateKey); err == nil {
@@ -418,6 +427,14 @@ type accountDTO struct {
 	// UsageBytes is the logical usage (filled by the overview endpoint only).
 	UsageBytes int64  `json:"usageBytes"`
 	CreatedAt  string `json:"createdAt"`
+
+	// Permissions (0004).
+	CanSend            bool `json:"canSend"`
+	CanSendExternal    bool `json:"canSendExternal"`
+	CanReceiveExternal bool `json:"canReceiveExternal"`
+	DailySendLimit     *int `json:"dailySendLimit"`
+	// SentToday is today's recipient count (overview / self-service only).
+	SentToday int `json:"sentToday"`
 }
 
 func toAccountDTO(u *store.Account) accountDTO {
@@ -425,6 +442,11 @@ func toAccountDTO(u *store.Account) accountDTO {
 		ID: u.ID, Subject: u.OIDCSubject, Email: u.OIDCEmail, Kind: u.Kind, Active: u.Active,
 		QuotaBytes: u.QuotaBytes,
 		CreatedAt:  u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+
+		CanSend:            u.CanSend,
+		CanSendExternal:    u.CanSendExternal,
+		CanReceiveExternal: u.CanReceiveExternal,
+		DailySendLimit:     u.DailySendLimit,
 	}
 }
 
@@ -556,6 +578,9 @@ func (s *Server) handleCreateAppPassword(w http.ResponseWriter, r *http.Request)
 	}
 	var req struct {
 		Label string `json:"label"`
+		// ScopeList limits the password to a protocol (imap / smtp).
+		// Empty or both = full access.
+		ScopeList []string `json:"scopeList"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -572,7 +597,7 @@ func (s *Server) handleCreateAppPassword(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "hash failed")
 		return
 	}
-	p, err := s.store.CreateAppPassword(r.Context(), id, req.Label, hash)
+	p, err := s.store.CreateAppPassword(r.Context(), id, req.Label, hash, normalizeScopeList(req.ScopeList))
 	if err != nil {
 		mapStoreErr(w, err)
 		return

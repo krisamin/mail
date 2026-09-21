@@ -4,6 +4,7 @@ import { ApiError, apiFetch, type AppPassword } from "~/lib/api.server";
 import { useT } from "~/lib/i18n";
 import { requireUser } from "~/lib/session.server";
 import {
+  Badge,
   Banner,
   Button,
   EmptyState,
@@ -11,6 +12,7 @@ import {
   KeyIcon,
   Panel,
   SecretReveal,
+  SelectInput,
   TextInput,
   TimeText,
 } from "~/kit";
@@ -31,10 +33,18 @@ export const action = async ({ request }: Route.ActionArgs) => {
   const intent = String(form.get("intent") ?? "");
   try {
     if (intent === "create") {
+      // scope "both" sends an empty list — the server reads that as full access
+      const scope = String(form.get("scope") ?? "both");
       const result = await apiFetch<{ appPassword: AppPassword; plaintext: string }>(
         user.idToken,
         "/api/me/app-password",
-        { method: "POST", body: { label: String(form.get("label") ?? "") } },
+        {
+          method: "POST",
+          body: {
+            label: String(form.get("label") ?? ""),
+            scopeList: scope === "both" ? [] : [scope],
+          },
+        },
       );
       return { ok: true as const, plaintext: result.plaintext };
     }
@@ -67,9 +77,19 @@ export default function AppPasswordPage({ loaderData, actionData }: Route.Compon
           <SecretReveal title={t("setting.secretIssued")} value={actionData.plaintext} />
         )}
 
-        <Form method="post" className="flex gap-2">
+        <Form method="post" className="flex flex-wrap gap-2">
           <input type="hidden" name="intent" value="create" />
-          <TextInput name="label" required placeholder={t("setting.labelPlaceholder")} className="flex-1" />
+          <TextInput
+            name="label"
+            required
+            placeholder={t("setting.labelPlaceholder")}
+            className="min-w-48 flex-1"
+          />
+          <SelectInput name="scope" defaultValue="both" aria-label={t("permission.scope")} className="w-44">
+            <option value="both">{t("permission.scopeBoth")}</option>
+            <option value="imap">{t("permission.scopeImap")}</option>
+            <option value="smtp">{t("permission.scopeSmtp")}</option>
+          </SelectInput>
           <Button pending={busy}>{t("setting.issue")}</Button>
         </Form>
 
@@ -84,7 +104,16 @@ export default function AppPasswordPage({ loaderData, actionData }: Route.Compon
               {activeList.map((item) => (
                 <li key={item.id} className="flex items-center gap-3 px-4 py-3">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm text-ink">{item.label || t("setting.noLabel")}</p>
+                    <p className="flex items-center gap-1.5 truncate text-sm text-ink">
+                      {item.label || t("setting.noLabel")}
+                      {item.scopeList.length === 1 && (
+                        <Badge tone="muted">
+                          {item.scopeList[0] === "imap"
+                            ? t("permission.scopeImap")
+                            : t("permission.scopeSmtp")}
+                        </Badge>
+                      )}
+                    </p>
                     <p className="text-xs text-ink-3">
                       {t("setting.issuedAt")} <TimeText value={item.createdAt} mode="full" />
                       {item.lastUsed && (

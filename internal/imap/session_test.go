@@ -44,7 +44,7 @@ func setupServer(t *testing.T) (addr string) {
 	t.Cleanup(st.Close)
 
 	// test isolation
-	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
+	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, send_counter, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	// seed: domain + account + address + app password + INBOX (0006 model)
 	local := testAddr[:strings.LastIndex(testAddr, "@")]

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Form, useNavigation } from "react-router";
+import { Form, useFetcher, useNavigation } from "react-router";
 import type { Route } from "./+types/domain";
 import {
   ApiError,
@@ -23,6 +23,7 @@ import {
   EmptyText,
   ErrorBanner,
   SelectInput,
+  Switch,
   TextInput,
 } from "~/kit";
 
@@ -46,6 +47,16 @@ export const action = async ({ request }: Route.ActionArgs) => {
         await apiFetch(user.idToken, "/api/admin/domain", {
           method: "POST",
           body: { name: String(form.get("name") ?? "") },
+        });
+        return { ok: true as const };
+      }
+      case "permission": {
+        await apiFetch(user.idToken, `/api/admin/domain/${form.get("id")}/permission`, {
+          method: "PUT",
+          body: {
+            allowSendExternal: form.get("allowSendExternal") === "on",
+            allowReceiveExternal: form.get("allowReceiveExternal") === "on",
+          },
         });
         return { ok: true as const };
       }
@@ -161,6 +172,51 @@ function DnsResultPanel({ dns }: { dns: DnsVerify }) {
     </ul>
   );
 }
+
+
+/** The domain-wide kill switches. Each flip saves on its own. */
+const DomainPermission = ({ domain }: { domain: Domain }) => {
+  const t = useT();
+  const fetcher = useFetcher();
+  const busy = fetcher.state !== "idle";
+  const pending = fetcher.formData;
+  const read = (field: string, fallback: boolean) =>
+    pending ? pending.get(field) === "on" : fallback;
+  const send = read("allowSendExternal", domain.allowSendExternal);
+  const receive = read("allowReceiveExternal", domain.allowReceiveExternal);
+
+  const save = (next: { allowSendExternal?: boolean; allowReceiveExternal?: boolean }) =>
+    fetcher.submit(
+      {
+        intent: "permission",
+        id: domain.id,
+        allowSendExternal: (next.allowSendExternal ?? send) ? "on" : "",
+        allowReceiveExternal: (next.allowReceiveExternal ?? receive) ? "on" : "",
+      },
+      { method: "post" },
+    );
+
+  return (
+    <div className="rounded-md bg-raised/40 px-3 py-2">
+      <p className="text-xs text-ink-3">{t("permission.domainTitle")}</p>
+      <div className="grid gap-x-6 sm:grid-cols-2">
+        <Switch
+          checked={send}
+          disabled={busy}
+          label={t("permission.domainSendExternal")}
+          onChange={(v) => save({ allowSendExternal: v })}
+        />
+        <Switch
+          checked={receive}
+          disabled={busy}
+          label={t("permission.domainReceiveExternal")}
+          onChange={(v) => save({ allowReceiveExternal: v })}
+        />
+      </div>
+      <p className="text-xs text-ink-faint">{t("permission.domainHint")}</p>
+    </div>
+  );
+};
 
 export default function DomainList({ loaderData, actionData }: Route.ComponentProps) {
   const { domainList } = loaderData;
@@ -292,6 +348,8 @@ export default function DomainList({ loaderData, actionData }: Route.ComponentPr
                     </Form>
                   )}
                 </div>
+
+                <DomainPermission domain={d} />
 
                 {actionData?.ok &&
                   "dns" in actionData &&

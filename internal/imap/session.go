@@ -95,8 +95,19 @@ func (s *Session) Login(username, password string) error {
 	ctx, cancel := opCtx()
 	defer cancel()
 
-	u, err := s.backend.store.AuthenticateAppPassword(ctx, username, password)
+	u, err := s.backend.store.AuthenticateAppPassword(ctx, username, password, store.ScopeIMAP)
 	if err != nil {
+		// Right secret, wrong permission — tell the client plainly and do NOT
+		// feed the brute-force counter (it would lock out an honest client
+		// that simply used a send-only password).
+		if errors.Is(err, store.ErrScopeDenied) {
+			metric.PolicyBlockTotal.WithLabelValues("scope_missing", "imap").Inc()
+			return &goimap.Error{
+				Type: goimap.StatusResponseTypeNo,
+				Code: goimap.ResponseCodeAuthorizationFailed,
+				Text: "this app password is not allowed to read mail",
+			}
+		}
 		if errors.Is(err, store.ErrAuthFailed) || errors.Is(err, store.ErrNotFound) {
 			metric.AuthTotal.WithLabelValues("imap", "fail").Inc()
 			s.backend.limiter.Fail(ipKey)

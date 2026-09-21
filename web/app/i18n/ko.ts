@@ -248,6 +248,32 @@ export const ko = {
   "system.down": "다운",
 
   // ── filter rules ────────────────────────────────────────
+  // ── permissions ─────────────────────────────────────────
+  "permission.title": "권한",
+  "permission.canSend": "메일 보내기",
+  "permission.canSendHint": "끄면 이 계정은 아무 데도 못 보내요.",
+  "permission.canSendExternal": "바깥으로 보내기",
+  "permission.canSendExternalHint": "끄면 이 서버 안 주소끼리만 보낼 수 있어요.",
+  "permission.canReceiveExternal": "바깥에서 받기",
+  "permission.canReceiveExternalHint": "끄면 외부에서 오는 메일을 거절해요. 내부 메일은 그대로 받아요.",
+  "permission.dailyLimit": "하루 발송 한도",
+  "permission.dailyLimitPlaceholder": "통 (비우면 무제한)",
+  "permission.sentToday": "오늘 {{count}}통",
+  "permission.domainTitle": "이 도메인 전체",
+  "permission.domainSendExternal": "바깥으로 보내기 허용",
+  "permission.domainReceiveExternal": "바깥에서 받기 허용",
+  "permission.domainHint": "도메인 스위치를 끄면 그 도메인 계정은 개인 설정과 상관없이 막혀요.",
+  "permission.mine": "내 권한",
+  "permission.mineHint": "권한은 관리자만 바꿀 수 있어요.",
+  "permission.allowed": "가능",
+  "permission.blocked": "막힘",
+  "permission.unlimited": "무제한",
+  "permission.scope": "용도",
+  "permission.scopeHint": "이 비밀번호로 할 수 있는 일을 정해요.",
+  "permission.scopeBoth": "읽기 + 보내기",
+  "permission.scopeImap": "읽기만 (IMAP)",
+  "permission.scopeSmtp": "보내기만 (SMTP)",
+
   "filter.title": "메일 필터",
   "filter.description":
     "받은 메일이 받은편지함에 들어오기 전에 규칙을 순서대로 검사해요. 처음 맞는 규칙 하나만 적용되고, 스팸 격리가 필터보다 우선이에요.",

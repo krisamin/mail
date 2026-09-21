@@ -15,17 +15,20 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     apiFetch<Address[]>(user.idToken, "/api/me/address").then((r) => r ?? []),
     apiFetch<AppPassword[]>(user.idToken, "/api/me/app-password").then((r) => r ?? []),
   ]);
+  // permission carries today's send count, which /api/me/account does not
+  const permission = await apiFetch<Account>(user.idToken, "/api/me/permission").catch(() => null);
   return {
     name: user.name,
     email: user.email,
     account,
     addressCount: addressList.length,
     activeKeyCount: appPasswordList.filter((p) => !p.revoked).length,
+    permission,
   };
 };
 
 export default function Profile({ loaderData }: Route.ComponentProps) {
-  const { name, email, account, addressCount, activeKeyCount } = loaderData;
+  const { name, email, account, addressCount, activeKeyCount, permission } = loaderData;
   const t = useT();
 
   return (
@@ -56,6 +59,35 @@ export default function Profile({ loaderData }: Route.ComponentProps) {
             )}
           </div>
         </Panel>
+
+        {permission && (
+          <Panel>
+            <PanelHeader title={t("permission.mine")} description={t("permission.mineHint")} />
+            <div className="px-4 py-3">
+              <DataRow label={t("permission.canSend")}>
+                <Badge tone={permission.canSend ? "ok" : "bad"}>
+                  {permission.canSend ? t("permission.allowed") : t("permission.blocked")}
+                </Badge>
+              </DataRow>
+              <DataRow label={t("permission.canSendExternal")}>
+                <Badge tone={permission.canSendExternal ? "ok" : "bad"}>
+                  {permission.canSendExternal ? t("permission.allowed") : t("permission.blocked")}
+                </Badge>
+              </DataRow>
+              <DataRow label={t("permission.canReceiveExternal")}>
+                <Badge tone={permission.canReceiveExternal ? "ok" : "bad"}>
+                  {permission.canReceiveExternal ? t("permission.allowed") : t("permission.blocked")}
+                </Badge>
+              </DataRow>
+              <DataRow label={t("permission.dailyLimit")}>
+                {t("permission.sentToday", { count: permission.sentToday })}
+                {permission.dailySendLimit
+                  ? ` / ${permission.dailySendLimit}`
+                  : ` (${t("permission.unlimited")})`}
+              </DataRow>
+            </div>
+          </Panel>
+        )}
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Panel>

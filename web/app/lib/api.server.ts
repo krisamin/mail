@@ -55,6 +55,9 @@ export type Domain = {
   dkimSelector: string;
   dkimPublicTxt?: string;
   relayId?: string | null;
+  /** Domain-wide kill switches for crossing the server boundary. */
+  allowSendExternal: boolean;
+  allowReceiveExternal: boolean;
 };
 
 export type Account = {
@@ -68,6 +71,14 @@ export type Account = {
   /** Logical usage in bytes (overview endpoint only). */
   usageBytes: number;
   createdAt: string;
+  /** Permissions. External send/receive also need the domain switch. */
+  canSend: boolean;
+  canSendExternal: boolean;
+  canReceiveExternal: boolean;
+  /** Recipients per UTC day (null = unlimited). */
+  dailySendLimit: number | null;
+  /** Today's recipient count (permission + overview endpoints). */
+  sentToday: number;
 };
 
 export type AppPassword = {

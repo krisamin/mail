@@ -52,7 +52,7 @@ func setupServers(t *testing.T) *testEnv {
 	}
 	t.Cleanup(st.Close)
 
-	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
+	_, _ = st.Pool().Exec(ctx, `TRUNCATE domain, account, send_counter, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	// seed: krisam.in domain + 2 accounts (maro has an INBOX, shiro doesn't — verifies auto-creation)
 	var domainID uuid.UUID

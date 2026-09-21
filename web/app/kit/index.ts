@@ -10,6 +10,7 @@ export { Menu, MenuDivider, MenuItem } from "./menu";
 export { Modal } from "./modal";
 export { SecretReveal } from "./secret";
 export { StatCard } from "./stat";
+export { Switch } from "./switch";
 export { DataRow, EmptyState, EmptyText, PageHeader, Panel, PanelHeader } from "./surface";
 export { Table, Td, Th, Tr } from "./table";
 export { TimeText } from "./time";

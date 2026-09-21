@@ -23,7 +23,7 @@ func TestBlobDedupAndGC(t *testing.T) {
 	ctx := context.Background()
 
 	// Start clean each run (test isolation)
-	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
+	_, _ = s.pool.Exec(ctx, `TRUNCATE domain, account, send_counter, app_password, mailbox, message, message_flag, message_blob, outbound_queue, address, relay RESTART IDENTITY CASCADE`)
 
 	maroID := seedAccount(t, s, "maro@krisam.in", "pw-maro-blob1")
 	guestID := seedAccount(t, s, "guest@krisam.in", "pw-guest-blob1")
