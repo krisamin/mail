@@ -102,12 +102,19 @@
 @layer base {
   html {
     background-color: var(--tone-canvas);
+    /* The app owns its own scroll areas; the document itself must not
+       rubber-band or the whole UI slides under the notch/menu bar. */
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
 
   body {
     @apply bg-canvas text-ink antialiased;
     font-family: var(--font-sans);
-    overflow-x: hidden;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }

@@ -71,13 +71,34 @@ export type Account = {
   /** Logical usage in bytes (overview endpoint only). */
   usageBytes: number;
   createdAt: string;
-  /** Permissions. External send/receive also need the domain switch. */
+  /** Extra permission groups this account joined (overview only). */
+  groupList: string[];
+};
+
+/** A three-state grant on a group. */
+export type Grant = "allow" | "deny" | "inherit";
+
+export type Group = {
+  id: string;
+  name: string;
+  /** Higher sits above and wins where it has an opinion. */
+  position: number;
+  isDefault: boolean;
+  canSend: Grant;
+  canSendExternal: Grant;
+  canReceiveExternal: Grant;
+  dailySendLimit: number | null;
+  memberIdList: string[];
+  createdAt: string;
+};
+
+/** What a group stack adds up to for one account. */
+export type EffectivePermission = {
   canSend: boolean;
   canSendExternal: boolean;
   canReceiveExternal: boolean;
-  /** Recipients per UTC day (null = unlimited). */
   dailySendLimit: number | null;
-  /** Today's recipient count (permission + overview endpoints). */
+  groupList: string[];
   sentToday: number;
 };
 

@@ -199,7 +199,16 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 				recipientDomain = d
 			}
 		}
-		if v := policy.Receive(u, recipientDomain, true); !v.Allowed {
+		var perm policy.Effective
+		if groupList, gerr := s.backend.store.GroupListForAccount(ctx, u.ID); gerr == nil {
+			perm = policy.Resolve(groupList)
+		} else {
+			// A lookup failure must not silently refuse mail: fall back to
+			// accepting, the same way the other screening steps fail open.
+			log.Printf("smtp: group resolve failed rcpt=%s: %v", to, gerr)
+			perm = policy.Effective{CanSend: true, CanSendExternal: true, CanReceiveExternal: true}
+		}
+		if v := policy.Receive(u, perm, recipientDomain, true); !v.Allowed {
 			metric.PolicyBlockTotal.WithLabelValues(string(v.Reason), "inbound").Inc()
 			metric.InboundRejectTotal.WithLabelValues("permission").Inc()
 			return &gosmtp.SMTPError{

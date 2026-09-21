@@ -187,8 +187,7 @@ func (s *Store) SetDomainDKIM(ctx context.Context, id uuid.UUID, selector, priva
 func (s *Store) ListAccount(ctx context.Context) ([]*store.Account, error) {
 	const q = `
 		SELECT id, oidc_subject, COALESCE(oidc_email, ''), kind,
-		       quota_bytes, active, created_at,
-		       can_send, can_send_external, can_receive_external, daily_send_limit
+		       quota_bytes, active, created_at
 		FROM account ORDER BY kind, oidc_email`
 	rows, err := s.pool.Query(ctx, q)
 	if err != nil {
@@ -200,8 +199,7 @@ func (s *Store) ListAccount(ctx context.Context) ([]*store.Account, error) {
 	for rows.Next() {
 		var u store.Account
 		if err := rows.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind,
-			&u.QuotaBytes, &u.Active, &u.CreatedAt,
-			&u.CanSend, &u.CanSendExternal, &u.CanReceiveExternal, &u.DailySendLimit); err != nil {
+			&u.QuotaBytes, &u.Active, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &u)
@@ -290,11 +288,9 @@ func (s *Store) createBareAccount(ctx context.Context, subject, email, kind stri
 	var u store.Account
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO account (oidc_subject, oidc_email, kind) VALUES ($1, $2, $3)
-		 RETURNING id, oidc_subject, COALESCE(oidc_email, ''), kind, quota_bytes, active, created_at,
-		           can_send, can_send_external, can_receive_external, daily_send_limit`,
+		 RETURNING id, oidc_subject, COALESCE(oidc_email, ''), kind, quota_bytes, active, created_at`,
 		subject, email, kind).Scan(
-		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt,
-		&u.CanSend, &u.CanSendExternal, &u.CanReceiveExternal, &u.DailySendLimit)
+		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("account create: %w", err)
 	}
@@ -333,11 +329,9 @@ func (s *Store) createAccountWithAddress(ctx context.Context, subject, email, ki
 	var u store.Account
 	err = tx.QueryRow(ctx,
 		`INSERT INTO account (oidc_subject, oidc_email, kind) VALUES ($1, $2, $3)
-		 RETURNING id, oidc_subject, COALESCE(oidc_email, ''), kind, quota_bytes, active, created_at,
-		           can_send, can_send_external, can_receive_external, daily_send_limit`,
+		 RETURNING id, oidc_subject, COALESCE(oidc_email, ''), kind, quota_bytes, active, created_at`,
 		subject, email, kind).Scan(
-		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt,
-		&u.CanSend, &u.CanSendExternal, &u.CanReceiveExternal, &u.DailySendLimit)
+		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("account create: %w", err)
 	}
@@ -547,13 +541,11 @@ func (s *Store) OutboundStat(ctx context.Context) (map[string]int64, error) {
 func (s *Store) FindAccountByID(ctx context.Context, id uuid.UUID) (*store.Account, error) {
 	const q = `
 		SELECT id, oidc_subject, COALESCE(oidc_email, ''), kind,
-		       quota_bytes, active, created_at,
-		       can_send, can_send_external, can_receive_external, daily_send_limit
+		       quota_bytes, active, created_at
 		FROM account WHERE id = $1`
 	var u store.Account
 	err := s.pool.QueryRow(ctx, q, id).Scan(
-		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt,
-		&u.CanSend, &u.CanSendExternal, &u.CanReceiveExternal, &u.DailySendLimit)
+		&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

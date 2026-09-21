@@ -14,6 +14,7 @@ import {
   DomainIcon,
   QueueIcon,
   RelayIcon,
+  ShieldIcon,
   UserIcon,
 } from "~/kit";
 
@@ -51,6 +52,7 @@ export default function AdminLayout({ loaderData }: Route.ComponentProps) {
         <SideNavGroup title={t("admin.groupMail")}>
           <SideNavItem to="/admin/domain" icon={<DomainIcon className="size-4" />} label={t("admin.domain")} />
           <SideNavItem to="/admin/account" icon={<UserIcon className="size-4" />} label={t("admin.account")} />
+          <SideNavItem to="/admin/group" icon={<ShieldIcon className="size-4" />} label={t("admin.group")} />
         </SideNavGroup>
         <SideNavGroup title={t("admin.groupDelivery")}>
           <SideNavItem to="/admin/relay" icon={<RelayIcon className="size-4" />} label={t("admin.relay")} />

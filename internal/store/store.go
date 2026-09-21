@@ -85,21 +85,43 @@ type Account struct {
 	Active      bool
 	CreatedAt   time.Time
 
-	// Permissions (0004). CanSend gates sending at all; CanSendExternal and
-	// CanReceiveExternal gate crossing the server boundary. DailySendLimit is
-	// recipients per UTC day (nil = unlimited).
-	CanSend            bool
-	CanSendExternal    bool
-	CanReceiveExternal bool
-	DailySendLimit     *int
+	// Permissions live on groups (0005), not here.
 }
 
-// AccountPermission is the editable permission set of an account (0004).
-type AccountPermission struct {
-	CanSend            bool
-	CanSendExternal    bool
-	CanReceiveExternal bool
-	DailySendLimit     *int // nil = unlimited
+// Grant is a three-state permission on a group (0005).
+const (
+	GrantAllow   = "allow"
+	GrantDeny    = "deny"
+	GrantInherit = "inherit"
+)
+
+// AccountGroup is a stack of permissions a set of accounts shares. The
+// default group is the floor everyone stands on; groups with a higher
+// Position sit above it and win where they have an opinion.
+type AccountGroup struct {
+	ID        uuid.UUID
+	Name      string
+	Position  int
+	IsDefault bool
+
+	CanSend            string // GrantAllow | GrantDeny | GrantInherit
+	CanSendExternal    string
+	CanReceiveExternal string
+	DailySendLimit     *int // nil = no opinion
+
+	CreatedAt time.Time
+	// MemberCount / MemberIDList are filled by the admin listing only.
+	MemberCount  int
+	MemberIDList []uuid.UUID
+}
+
+// GroupPermission is the editable permission set of a group (0005).
+type GroupPermission struct {
+	Name               string
+	CanSend            string
+	CanSendExternal    string
+	CanReceiveExternal string
+	DailySendLimit     *int
 }
 
 // AppPassword scopes (0004 — enforced at authentication time).
@@ -305,6 +327,10 @@ type Store interface {
 	ExpungeDeleted(ctx context.Context, mailboxID uuid.UUID, uids []uint32) ([]uint32, error)
 	CopyMessage(ctx context.Context, messageID, destMailboxID uuid.UUID) (*Message, error)
 
+	// GroupListForAccount returns the default group plus every group the
+	// account belongs to (0005) — the input of policy.Resolve.
+	GroupListForAccount(ctx context.Context, accountID uuid.UUID) ([]*AccountGroup, error)
+
 	// Daily send counter (0004). BumpSendCounter records n recipients against
 	// today and returns the running total including them; ReleaseSendCounter
 	// gives them back when the transaction is refused afterwards.
@@ -365,8 +391,14 @@ type AdminStore interface {
 	SetDomainActive(ctx context.Context, id uuid.UUID, active bool) error
 	// SetDomainPermission sets the domain-wide external send/receive switches (0004).
 	SetDomainPermission(ctx context.Context, id uuid.UUID, allowSend, allowReceive bool) error
-	// SetAccountPermission writes an account's permission switches (0004).
-	SetAccountPermission(ctx context.Context, id uuid.UUID, p AccountPermission) (*Account, error)
+	// Groups (0005)
+	ListAccountGroup(ctx context.Context) ([]*AccountGroup, error)
+	CreateAccountGroup(ctx context.Context, name string) (*AccountGroup, error)
+	UpdateAccountGroup(ctx context.Context, id uuid.UUID, p GroupPermission) (*AccountGroup, error)
+	DeleteAccountGroup(ctx context.Context, id uuid.UUID) error
+	// MoveAccountGroup swaps a group with its neighbour (up = towards the top).
+	MoveAccountGroup(ctx context.Context, id uuid.UUID, up bool) error
+	SetAccountGroupMember(ctx context.Context, groupID uuid.UUID, accountIDList []uuid.UUID) error
 	// SetDomainDKIM sets the DKIM selector/private key (empty strings = unset).
 	SetDomainDKIM(ctx context.Context, id uuid.UUID, selector, privateKeyPEM string) error
 

@@ -67,11 +67,17 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("GET /api/admin/domain/{id}/address", s.handleListDomainAddress)
 	admin.HandleFunc("POST /api/admin/domain/{id}/address", s.handleCreateAddress)
 	admin.HandleFunc("DELETE /api/admin/address/{id}", s.handleDeleteAddress)
+	admin.HandleFunc("GET /api/admin/group", s.handleListGroup)
+	admin.HandleFunc("POST /api/admin/group", s.handleCreateGroup)
+	admin.HandleFunc("PATCH /api/admin/group/{id}", s.handlePatchGroup)
+	admin.HandleFunc("DELETE /api/admin/group/{id}", s.handleDeleteGroup)
+	admin.HandleFunc("POST /api/admin/group/{id}/move", s.handleMoveGroup)
+	admin.HandleFunc("PUT /api/admin/group/{id}/member", s.handleSetGroupMember)
+
 	admin.HandleFunc("GET /api/admin/account", s.handleListAccount)
 	admin.HandleFunc("GET /api/admin/account/overview", s.handleAccountOverview)
 	admin.HandleFunc("POST /api/admin/account/service", s.handleCreateServiceAccount)
 	admin.HandleFunc("PATCH /api/admin/account/{id}", s.handlePatchAccount)
-	admin.HandleFunc("PUT /api/admin/account/{id}/permission", s.handleSetAccountPermission)
 	admin.HandleFunc("GET /api/admin/account/{id}/address", s.handleListAccountAddress)
 	admin.HandleFunc("POST /api/admin/account/{id}/address", s.handleCreateAccountAddress)
 	admin.HandleFunc("GET /api/admin/account/{id}/app-password", s.handleListAppPassword)
@@ -428,13 +434,9 @@ type accountDTO struct {
 	UsageBytes int64  `json:"usageBytes"`
 	CreatedAt  string `json:"createdAt"`
 
-	// Permissions (0004).
-	CanSend            bool `json:"canSend"`
-	CanSendExternal    bool `json:"canSendExternal"`
-	CanReceiveExternal bool `json:"canReceiveExternal"`
-	DailySendLimit     *int `json:"dailySendLimit"`
-	// SentToday is today's recipient count (overview / self-service only).
-	SentToday int `json:"sentToday"`
+	// GroupList names the permission groups this account belongs to
+	// (overview only; the default group is implicit and not listed).
+	GroupList []string `json:"groupList"`
 }
 
 func toAccountDTO(u *store.Account) accountDTO {
@@ -443,10 +445,6 @@ func toAccountDTO(u *store.Account) accountDTO {
 		QuotaBytes: u.QuotaBytes,
 		CreatedAt:  u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 
-		CanSend:            u.CanSend,
-		CanSendExternal:    u.CanSendExternal,
-		CanReceiveExternal: u.CanReceiveExternal,
-		DailySendLimit:     u.DailySendLimit,
 	}
 }
 

@@ -1,5 +1,11 @@
 import type { Route } from "./+types/index";
-import { apiFetch, type Account, type Address, type AppPassword } from "~/lib/api.server";
+import {
+  apiFetch,
+  type Account,
+  type Address,
+  type AppPassword,
+  type EffectivePermission,
+} from "~/lib/api.server";
 import { useT } from "~/lib/i18n";
 import { requireUser } from "~/lib/session.server";
 import { formatBytes } from "~/lib/format";
@@ -16,7 +22,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     apiFetch<AppPassword[]>(user.idToken, "/api/me/app-password").then((r) => r ?? []),
   ]);
   // permission carries today's send count, which /api/me/account does not
-  const permission = await apiFetch<Account>(user.idToken, "/api/me/permission").catch(() => null);
+  const permission = await apiFetch<EffectivePermission>(user.idToken, "/api/me/permission").catch(
+    () => null,
+  );
   return {
     name: user.name,
     email: user.email,
@@ -78,6 +86,15 @@ export default function Profile({ loaderData }: Route.ComponentProps) {
                 <Badge tone={permission.canReceiveExternal ? "ok" : "bad"}>
                   {permission.canReceiveExternal ? t("permission.allowed") : t("permission.blocked")}
                 </Badge>
+              </DataRow>
+              <DataRow label={t("group.title")}>
+                <span className="flex flex-wrap items-center gap-1">
+                  {permission.groupList.map((name) => (
+                    <Badge key={name} tone="muted">
+                      {name}
+                    </Badge>
+                  ))}
+                </span>
               </DataRow>
               <DataRow label={t("permission.dailyLimit")}>
                 {t("permission.sentToday", { count: permission.sentToday })}

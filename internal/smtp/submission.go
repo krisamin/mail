@@ -66,8 +66,9 @@ type SubmissionSession struct {
 	remoteAddr string
 	heloName   string
 
-	user        *store.Account // populated on successful auth
-	accountAddr string         // address used to authenticate (for envelope-from validation)
+	user        *store.Account  // populated on successful auth
+	accountAddr string          // address used to authenticate (for envelope-from validation)
+	perm        policy.Effective // group stack folded once, at auth time
 
 	from         string
 	senderDomain *store.Domain // domain of `from` (permission switches live here)
@@ -141,6 +142,13 @@ func (s *SubmissionSession) Auth(mech string) (sasl.Server, error) {
 		s.backend.limiter.Success(acctKey)
 		s.user = u
 		s.accountAddr = strings.ToLower(username)
+		// Permissions come from the group stack; fold it once here rather
+		// than per recipient.
+		if groupList, gerr := s.backend.store.GroupListForAccount(ctx, u.ID); gerr == nil {
+			s.perm = policy.Resolve(groupList)
+		} else {
+			log.Printf("submission: group resolve failed user=%s: %v", username, gerr)
+		}
 		return nil
 	}), nil
 }
@@ -216,7 +224,7 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 					Message:      "relaying to external domainList is disabled",
 				}
 			}
-			if v := policy.Send(s.user, s.senderDomain, true); !v.Allowed {
+			if v := policy.Send(s.user, s.perm, s.senderDomain, true); !v.Allowed {
 				return refuse(v, "submission", 550, gosmtp.EnhancedCode{5, 7, 1})
 			}
 			s.external = append(s.external, to)
@@ -236,7 +244,7 @@ func (s *SubmissionSession) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 		}
 		return err
 	}
-	if v := policy.Send(s.user, s.senderDomain, false); !v.Allowed {
+	if v := policy.Send(s.user, s.perm, s.senderDomain, false); !v.Allowed {
 		return refuse(v, "submission", 550, gosmtp.EnhancedCode{5, 7, 1})
 	}
 	s.rcptList = append(s.rcptList, rcpt{address: to, user: u})
@@ -261,7 +269,7 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 	// Daily limit. Charged here, once the recipient count is final, and given
 	// back if the transaction fails below — the limit should measure mail that
 	// actually went out, not attempts.
-	if n := len(s.rcptList) + len(s.external); n > 0 && s.user.DailySendLimit != nil {
+	if n := len(s.rcptList) + len(s.external); n > 0 && s.perm.DailySendLimit != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 		used, err := s.backend.store.BumpSendCounter(ctx, s.user.ID, n)
 		cancel()
@@ -269,7 +277,7 @@ func (s *SubmissionSession) Data(r io.Reader) error {
 			log.Printf("submission: send counter failed user=%s: %v", s.accountAddr, err)
 		} else {
 			s.counted = n
-			if v := policy.DailyLimit(s.user.DailySendLimit, used); !v.Allowed {
+			if v := policy.DailyLimit(s.perm.DailySendLimit, used); !v.Allowed {
 				s.releaseCount()
 				return refuse(v, "submission", 451, gosmtp.EnhancedCode{4, 7, 0})
 			}

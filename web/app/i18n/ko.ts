@@ -249,6 +249,29 @@ export const ko = {
 
   // ── filter rules ────────────────────────────────────────
   // ── permissions ─────────────────────────────────────────
+  // ── permission groups ───────────────────────────────────
+  "admin.group": "권한 그룹",
+  "group.title": "권한 그룹",
+  "group.howItWorks": "위에 있는 그룹이 이겨요",
+  "group.howItWorksHint":
+    "기본 그룹이 바닥이고, 그 위에 올린 그룹이 같은 항목을 정하면 위엣것이 이겨요. 아무 말도 안 하면(상속) 아래로 넘어가요.",
+  "group.name": "이름",
+  "group.namePlaceholder": "예: 외부 발송 허용",
+  "group.empty": "그룹이 없어요.",
+  "group.default": "기본",
+  "group.everyone": "모두",
+  "group.everyoneHint": "모든 계정이 여기에 속해요. 여기서 정한 게 기본값이 돼요.",
+  "group.inherit": "상속",
+  "group.allow": "허용",
+  "group.deny": "차단",
+  "group.member": "이 그룹에 넣을 계정",
+  "group.memberCount": "{{count}}명",
+  "group.saveMember": "구성원 저장",
+  "group.moveUp": "위로",
+  "group.moveDown": "아래로",
+  "group.confirmDelete": "이 그룹을 지울까요? 구성원의 권한이 기본 그룹으로 돌아가요.",
+  "group.manage": "그룹 관리",
+
   "permission.title": "권한",
   "permission.canSend": "메일 보내기",
   "permission.canSendHint": "끄면 이 계정은 아무 데도 못 보내요.",

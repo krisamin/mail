@@ -1,4 +1,4 @@
-import { Form, useFetcher, useNavigation } from "react-router";
+import { Form, useNavigation } from "react-router";
 import type { Route } from "./+types/account";
 import {
   ApiError,
@@ -19,15 +19,14 @@ import {
   AppPasswordRow,
   Badge,
   Button,
+  ButtonLink,
   Panel,
   EmptyText,
   ErrorBanner,
   SecretReveal,
   SelectInput,
-  Switch,
   TextInput,
 } from "~/kit";
-import type { Account } from "~/lib/api.server";
 
 // Account management — every account with its addresses and app passwords.
 // Human accounts appear via JIT provisioning (first OIDC login); service
@@ -54,23 +53,6 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   try {
     switch (intent) {
-      case "set-permission": {
-        const limitRaw = String(form.get("dailySendLimit") ?? "").trim();
-        const limit = limitRaw === "" ? null : Number(limitRaw);
-        if (limit !== null && (!Number.isFinite(limit) || limit < 0)) {
-          return { ok: false as const, error: translate(await getLocale(request), "common.invalidValue") };
-        }
-        await apiFetch(user.idToken, `/api/admin/account/${form.get("id")}/permission`, {
-          method: "PUT",
-          body: {
-            canSend: form.get("canSend") === "on",
-            canSendExternal: form.get("canSendExternal") === "on",
-            canReceiveExternal: form.get("canReceiveExternal") === "on",
-            dailySendLimit: limit,
-          },
-        });
-        return { ok: true as const };
-      }
       case "create-service": {
         await apiFetch(user.idToken, "/api/admin/account/service", {
           method: "POST",
@@ -140,99 +122,6 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 };
 
-
-/** Permission switches for one account — each flip saves on its own. */
-const PermissionRow = ({ account }: { account: Account }) => {
-  const t = useT();
-  const fetcher = useFetcher();
-  const busy = fetcher.state !== "idle";
-
-  // optimistic: show what is in flight, not the stale loader value
-  const pending = fetcher.formData;
-  const read = (field: string, fallback: boolean) =>
-    pending ? pending.get(field) === "on" : fallback;
-  const canSend = read("canSend", account.canSend);
-  const canSendExternal = read("canSendExternal", account.canSendExternal);
-  const canReceiveExternal = read("canReceiveExternal", account.canReceiveExternal);
-
-  const save = (patch: Partial<Record<string, string>>) => {
-    fetcher.submit(
-      {
-        intent: "set-permission",
-        id: account.id,
-        canSend: canSend ? "on" : "",
-        canSendExternal: canSendExternal ? "on" : "",
-        canReceiveExternal: canReceiveExternal ? "on" : "",
-        dailySendLimit: account.dailySendLimit ? String(account.dailySendLimit) : "",
-        ...patch,
-      },
-      { method: "post" },
-    );
-  };
-
-  return (
-    <div className="border-b border-line px-4 py-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-ink-3">{t("permission.title")}</p>
-        <p className="text-xs text-ink-faint">
-          {t("permission.sentToday", { count: account.sentToday })}
-          {account.dailySendLimit ? ` / ${account.dailySendLimit}` : ""}
-        </p>
-      </div>
-      <div className="mt-1 grid gap-x-6 sm:grid-cols-2">
-        <Switch
-          checked={canSend}
-          disabled={busy}
-          label={t("permission.canSend")}
-          hint={t("permission.canSendHint")}
-          onChange={(next) => save({ canSend: next ? "on" : "" })}
-        />
-        <Switch
-          checked={canSendExternal}
-          disabled={busy || !canSend}
-          label={t("permission.canSendExternal")}
-          hint={t("permission.canSendExternalHint")}
-          onChange={(next) => save({ canSendExternal: next ? "on" : "" })}
-        />
-        <Switch
-          checked={canReceiveExternal}
-          disabled={busy}
-          label={t("permission.canReceiveExternal")}
-          hint={t("permission.canReceiveExternalHint")}
-          onChange={(next) => save({ canReceiveExternal: next ? "on" : "" })}
-        />
-        <fetcher.Form
-          method="post"
-          className="flex items-center gap-2 py-1.5"
-          onSubmit={(e) => {
-            // keep the switches as they are on screen while saving the limit
-            const form = e.currentTarget;
-            form.canSend.value = canSend ? "on" : "";
-            form.canSendExternal.value = canSendExternal ? "on" : "";
-            form.canReceiveExternal.value = canReceiveExternal ? "on" : "";
-          }}
-        >
-          <input type="hidden" name="intent" value="set-permission" />
-          <input type="hidden" name="id" value={account.id} />
-          <input type="hidden" name="canSend" />
-          <input type="hidden" name="canSendExternal" />
-          <input type="hidden" name="canReceiveExternal" />
-          <span className="text-sm text-ink">{t("permission.dailyLimit")}</span>
-          <TextInput
-            name="dailySendLimit"
-            fieldSize="sm"
-            className="w-24"
-            placeholder={t("permission.dailyLimitPlaceholder")}
-            defaultValue={account.dailySendLimit ? String(account.dailySendLimit) : ""}
-          />
-          <Button variant="subtle" size="sm" pending={busy}>
-            {t("common.save")}
-          </Button>
-        </fetcher.Form>
-      </div>
-    </div>
-  );
-};
 
 export default function AccountList({ loaderData, actionData }: Route.ComponentProps) {
   const { overviewList, domainList } = loaderData;
@@ -306,7 +195,20 @@ export default function AccountList({ loaderData, actionData }: Route.ComponentP
                 </Form>
               </div>
 
-              <PermissionRow account={u} />
+              <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+                <p className="text-xs text-ink-3">{t("group.title")}</p>
+                <div className="flex flex-wrap items-center gap-1">
+                  <Badge tone="muted">{t("group.everyone")}</Badge>
+                  {u.groupList.map((name) => (
+                    <Badge key={name} tone="brand">
+                      {name}
+                    </Badge>
+                  ))}
+                </div>
+                <ButtonLink to="/admin/group" variant="subtle" size="sm" className="ml-auto">
+                  {t("group.manage")}
+                </ButtonLink>
+              </div>
 
               {/* Storage: usage + quota */}
               <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">

@@ -10,8 +10,14 @@ import (
 	gosmtp "github.com/emersion/go-smtp"
 )
 
-// Permission tests (0004). They drive the real servers the same way a mail
-// client does, because the switches are only worth anything at the wire.
+// Permission tests (0005 — group model). They drive the real servers the way
+// a mail client does, because the switches are only worth anything at the
+// wire.
+//
+// The default group is seeded by the migration: mail inside the server and
+// mail from outside are fine, going out to the world needs a group that says
+// so. setupServers truncates accounts, which cascades to group membership,
+// so every test starts with plain accounts standing on the floor.
 
 // setupRelaying is setupSubmission with the outbound queue enabled — without
 // it every external recipient is refused for an unrelated reason and the
@@ -32,13 +38,34 @@ func setupRelaying(t *testing.T) (*testEnv, string) {
 	return env, ln.Addr().String()
 }
 
-// setPermission flips one column on the account owning addr.
-func setPermission(t *testing.T, env *testEnv, addr, column string, value any) {
+// grant sets one three-state column on a group.
+func grant(t *testing.T, env *testEnv, groupName, column, value string) {
 	t.Helper()
-	_, err := env.store.Pool().Exec(context.Background(),
-		`UPDATE account SET `+column+` = $2 WHERE oidc_email = $1`, addr, value)
-	if err != nil {
-		t.Fatalf("set %s: %v", column, err)
+	if _, err := env.store.Pool().Exec(context.Background(),
+		`UPDATE account_group SET `+column+` = $2 WHERE name = $1`, groupName, value); err != nil {
+		t.Fatalf("grant %s.%s: %v", groupName, column, err)
+	}
+}
+
+// makeGroup creates a group at the given position (higher sits above).
+func makeGroup(t *testing.T, env *testEnv, name string, position int) {
+	t.Helper()
+	if _, err := env.store.Pool().Exec(context.Background(),
+		`INSERT INTO account_group (name, position) VALUES ($1, $2)
+		 ON CONFLICT (name) DO UPDATE SET position = EXCLUDED.position`, name, position); err != nil {
+		t.Fatalf("create group %s: %v", name, err)
+	}
+}
+
+// join puts the account owning addr into a group.
+func join(t *testing.T, env *testEnv, groupName, addr string) {
+	t.Helper()
+	if _, err := env.store.Pool().Exec(context.Background(),
+		`INSERT INTO account_group_member (group_id, account_id)
+		 SELECT g.id, a.id FROM account_group g, account a
+		 WHERE g.name = $1 AND a.oidc_email = $2
+		 ON CONFLICT DO NOTHING`, groupName, addr); err != nil {
+		t.Fatalf("join %s: %v", groupName, err)
 	}
 }
 
@@ -49,11 +76,9 @@ func authenticate(t *testing.T, c *gosmtp.Client, addr string) {
 	}
 }
 
-// An account with "send outside" off may still write to a colleague, but is
-// refused the moment the recipient lives elsewhere.
-func TestExternalSendBlocked(t *testing.T) {
-	env, subAddr := setupRelaying(t)
-	setPermission(t, env, testAddr, "can_send_external", false)
+// The floor: colleagues yes, the outside world no.
+func TestDefaultGroupBlocksExternalSend(t *testing.T) {
+	_, subAddr := setupRelaying(t)
 
 	c := dialSubmission(t, subAddr)
 	authenticate(t, c, testAddr)
@@ -61,26 +86,53 @@ func TestExternalSendBlocked(t *testing.T) {
 		t.Fatalf("MAIL: %v", err)
 	}
 	if err := c.Rcpt(testAddr2, nil); err != nil {
-		t.Fatalf("internal recipient must still be accepted: %v", err)
+		t.Fatalf("internal recipient must be accepted by default: %v", err)
 	}
 	err := c.Rcpt("someone@example.com", nil)
 	if err == nil {
-		t.Fatal("external recipient accepted although sending outside is off")
+		t.Fatal("external recipient accepted although the default group forbids it")
 	}
 	if !strings.Contains(err.Error(), "inside this server") {
 		t.Fatalf("unexpected refusal: %v", err)
 	}
-	t.Logf("✔ external recipient refused: %v", err)
+	t.Logf("✔ default group keeps mail inside: %v", err)
 }
 
-// With the account switch on but the domain switch off, the same send is
-// refused — the domain is the operator's kill switch.
-func TestDomainSendSwitch(t *testing.T) {
+// Joining a group that allows external sending opens the border for that
+// account only.
+func TestGroupGrantsExternalSend(t *testing.T) {
 	env, subAddr := setupRelaying(t)
-	if _, err := env.store.Pool().Exec(context.Background(),
-		`UPDATE domain SET allow_send_external = false WHERE name = 'krisam.in'`); err != nil {
-		t.Fatalf("domain switch: %v", err)
+	join(t, env, "external-sender", testAddr)
+
+	c := dialSubmission(t, subAddr)
+	authenticate(t, c, testAddr)
+	if err := c.Mail(testAddr, nil); err != nil {
+		t.Fatalf("MAIL: %v", err)
 	}
+	if err := c.Rcpt("someone@example.com", nil); err != nil {
+		t.Fatalf("group member must reach the outside: %v", err)
+	}
+	t.Log("✔ group membership opened external sending")
+
+	// the account that did not join is still held inside
+	c2 := dialSubmission(t, subAddr)
+	authenticate(t, c2, testAddr2)
+	if err := c2.Mail(testAddr2, nil); err != nil {
+		t.Fatalf("MAIL: %v", err)
+	}
+	if err := c2.Rcpt("someone@example.com", nil); err == nil {
+		t.Fatal("a non-member reached the outside")
+	}
+}
+
+// Two groups disagree: the one sitting higher decides.
+func TestHigherGroupWins(t *testing.T) {
+	env, subAddr := setupRelaying(t)
+	join(t, env, "external-sender", testAddr) // position 10, allows
+
+	makeGroup(t, env, "quarantine", 50)
+	grant(t, env, "quarantine", "can_send_external", "deny")
+	join(t, env, "quarantine", testAddr)
 
 	c := dialSubmission(t, subAddr)
 	authenticate(t, c, testAddr)
@@ -89,18 +141,15 @@ func TestDomainSendSwitch(t *testing.T) {
 	}
 	err := c.Rcpt("someone@example.com", nil)
 	if err == nil {
-		t.Fatal("external recipient accepted although the domain forbids it")
+		t.Fatal("the higher group said deny and was ignored")
 	}
-	if !strings.Contains(err.Error(), "domain") {
-		t.Fatalf("unexpected refusal: %v", err)
-	}
-	t.Logf("✔ domain switch refused the send: %v", err)
+	t.Logf("✔ higher group overruled the lower one: %v", err)
 }
 
-// Sending turned off entirely refuses even internal recipients.
-func TestSendDisabled(t *testing.T) {
+// Turning sending off on the floor stops even internal mail.
+func TestDefaultGroupCanStopSending(t *testing.T) {
 	env, subAddr := setupSubmission(t)
-	setPermission(t, env, testAddr, "can_send", false)
+	grant(t, env, "everyone", "can_send", "deny")
 
 	c := dialSubmission(t, subAddr)
 	authenticate(t, c, testAddr)
@@ -111,13 +160,16 @@ func TestSendDisabled(t *testing.T) {
 		t.Fatal("recipient accepted although sending is disabled")
 	}
 	t.Log("✔ sending disabled refuses every recipient")
+	grant(t, env, "everyone", "can_send", "allow")
 }
 
-// Mail arriving from outside is refused for a recipient who does not accept
-// external mail; the inbox is reachable from inside all the same.
-func TestExternalReceiveBlocked(t *testing.T) {
+// Mail from outside is refused for a member of a group that says no, while
+// everyone else keeps receiving.
+func TestGroupBlocksExternalReceive(t *testing.T) {
 	env := setupServers(t)
-	setPermission(t, env, testAddr, "can_receive_external", false)
+	makeGroup(t, env, "no-inbound", 20)
+	grant(t, env, "no-inbound", "can_receive_external", "deny")
+	join(t, env, "no-inbound", testAddr)
 
 	c, err := gosmtp.Dial(env.smtpAddr)
 	if err != nil {
@@ -131,21 +183,25 @@ func TestExternalReceiveBlocked(t *testing.T) {
 		t.Fatalf("MAIL: %v", err)
 	}
 	if err := c.Rcpt(testAddr, nil); err == nil {
-		t.Fatal("inbound mail accepted although external receiving is off")
+		t.Fatal("inbound mail accepted although the group refuses it")
 	} else {
 		t.Logf("✔ inbound refused: %v", err)
 	}
-	// the other account still receives normally
 	if err := c.Rcpt(testAddr2, nil); err != nil {
 		t.Fatalf("unrelated recipient must still receive: %v", err)
 	}
 }
 
-// The daily limit counts recipients and refuses with a temporary error, so a
-// well-behaved sender retries tomorrow instead of bouncing.
-func TestDailySendLimit(t *testing.T) {
+// The daily limit comes from the group stack and refuses with a temporary
+// error, so a well-behaved sender retries tomorrow instead of bouncing.
+func TestGroupDailySendLimit(t *testing.T) {
 	env, subAddr := setupSubmission(t)
-	setPermission(t, env, testAddr, "daily_send_limit", 1)
+	makeGroup(t, env, "limited", 30)
+	if _, err := env.store.Pool().Exec(context.Background(),
+		`UPDATE account_group SET daily_send_limit = 1 WHERE name = 'limited'`); err != nil {
+		t.Fatalf("limit: %v", err)
+	}
+	join(t, env, "limited", testAddr)
 
 	send := func() error {
 		c := dialSubmission(t, subAddr)
@@ -171,7 +227,7 @@ func TestDailySendLimit(t *testing.T) {
 	}
 	err := send()
 	if err == nil {
-		t.Fatal("second send passed although the daily limit is 1")
+		t.Fatal("second send passed although the group limit is 1")
 	}
 	if !strings.Contains(err.Error(), "daily") {
 		t.Fatalf("unexpected refusal: %v", err)

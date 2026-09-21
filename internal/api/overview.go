@@ -39,6 +39,23 @@ func (s *Server) handleAccountOverview(w http.ResponseWriter, r *http.Request) {
 		mapStoreErr(w, err)
 		return
 	}
+	groupList, err := s.store.ListAccountGroup(ctx)
+	if err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+
+	// which extra groups each account carries (the default group holds
+	// everyone and is left implicit)
+	groupMap := map[uuid.UUID][]string{}
+	for _, g := range groupList {
+		if g.IsDefault {
+			continue
+		}
+		for _, accountID := range g.MemberIDList {
+			groupMap[accountID] = append(groupMap[accountID], g.Name)
+		}
+	}
 
 	addressMap := map[uuid.UUID][]addressDTO{}
 	for _, a := range addressList {
@@ -57,6 +74,10 @@ func (s *Server) handleAccountOverview(w http.ResponseWriter, r *http.Request) {
 			AppPasswordList: passwordMap[u.ID],
 		}
 		entry.Account.UsageBytes = usageMap[u.ID]
+		entry.Account.GroupList = groupMap[u.ID]
+		if entry.Account.GroupList == nil {
+			entry.Account.GroupList = []string{}
+		}
 		if entry.AddressList == nil {
 			entry.AddressList = []addressDTO{}
 		}

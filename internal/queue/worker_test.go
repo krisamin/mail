@@ -254,6 +254,16 @@ func TestSubmissionToQueueToRelay(t *testing.T) {
 	go func() { _ = relaySrv.Serve(relayLn) }()
 	t.Cleanup(func() { _ = relaySrv.Close() })
 
+	// Sending outside is a group grant now (0005) — the default group keeps
+	// mail inside the server, so this account joins the group that opens it.
+	if _, err := st.Pool().Exec(ctx,
+		`INSERT INTO account_group_member (group_id, account_id)
+		 SELECT g.id, a.id FROM account_group g, account a
+		 WHERE g.name = 'external-sender' AND a.oidc_email = 'maro@krisam.in'
+		 ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatalf("group join: %v", err)
+	}
+
 	// submission server (external-domain enqueueing enabled)
 	subSrv := gosmtp.NewServer(mailsmtp.NewSubmissionBackend(st, "submit.krisam.in", true))
 	subSrv.Domain = "submit.krisam.in"

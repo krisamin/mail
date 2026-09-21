@@ -53,14 +53,12 @@ func splitAddress(address string) (local, domain string, err error) {
 // accountSelect is the shared SELECT for account lookups (0006 — identity model).
 const accountSelect = `
 	SELECT a.id, a.oidc_subject, COALESCE(a.oidc_email, ''), a.kind,
-	       a.quota_bytes, a.active, a.created_at,
-	       a.can_send, a.can_send_external, a.can_receive_external, a.daily_send_limit
+	       a.quota_bytes, a.active, a.created_at
 	FROM account a`
 
 func scanAccount(row pgx.Row) (*store.Account, error) {
 	var u store.Account
-	err := row.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt,
-		&u.CanSend, &u.CanSendExternal, &u.CanReceiveExternal, &u.DailySendLimit)
+	err := row.Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

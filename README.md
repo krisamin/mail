@@ -44,10 +44,12 @@ routing, multi-tenancy, and the management plane are implemented here.
 - **One shell for everything** — mail, personal settings and server admin are
   three areas of a single app (one rail, one account menu), not three
   separately built pages.
-- **Permissions with two locks** — per-account and per-domain switches for
-  sending at all, sending outside the server, and accepting mail from outside,
-  plus a daily send limit. Mail between addresses hosted here is never blocked
-  by them. App passwords can be scoped to reading (IMAP) or sending (SMTP).
+- **Permission groups** — a default group is the floor everyone stands on;
+  groups stacked above it win where they have an opinion (Discord's role
+  model). Out of the box: mail inside the server and mail from outside are
+  fine, sending to the outside world needs a group that grants it. Domains
+  keep their own kill switch, and mail between addresses hosted here is never
+  blocked. App passwords can be scoped to reading (IMAP) or sending (SMTP).
 - **Per-account appearance** — theme (system/dark/light) and display language
   live on the account, so they follow the person to any browser.
 - **Embedded migrations** — the daemon converges any database (empty or

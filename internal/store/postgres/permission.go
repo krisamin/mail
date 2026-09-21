@@ -9,35 +9,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/krisamin/mail/internal/store"
 )
 
 // Permission storage (0004) — the switches themselves and the daily counter.
-
-// SetAccountPermission writes an account's permission switches.
-func (s *Store) SetAccountPermission(ctx context.Context, id uuid.UUID, p store.AccountPermission) (*store.Account, error) {
-	if p.DailySendLimit != nil && *p.DailySendLimit < 0 {
-		return nil, fmt.Errorf("invalid daily send limit")
-	}
-	const q = `
-		UPDATE account
-		SET can_send = $2, can_send_external = $3,
-		    can_receive_external = $4, daily_send_limit = $5
-		WHERE id = $1
-		RETURNING id, oidc_subject, COALESCE(oidc_email, ''), kind, quota_bytes, active, created_at,
-		          can_send, can_send_external, can_receive_external, daily_send_limit`
-	var u store.Account
-	err := s.pool.QueryRow(ctx, q, id, p.CanSend, p.CanSendExternal, p.CanReceiveExternal, p.DailySendLimit).
-		Scan(&u.ID, &u.OIDCSubject, &u.OIDCEmail, &u.Kind, &u.QuotaBytes, &u.Active, &u.CreatedAt,
-			&u.CanSend, &u.CanSendExternal, &u.CanReceiveExternal, &u.DailySendLimit)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("account permission update: %w", err)
-	}
-	return &u, nil
-}
 
 // SetDomainPermission writes a domain's permission switches.
 func (s *Store) SetDomainPermission(ctx context.Context, id uuid.UUID, allowSend, allowReceive bool) error {

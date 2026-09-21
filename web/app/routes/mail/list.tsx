@@ -95,6 +95,10 @@ export default function MessageList({ loaderData, params }: Route.ComponentProps
   const [cursor, setCursor] = useState(page.nextBefore);
   const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
   const [cursorIndex, setCursorIndex] = useState(0);
+  // Opening a mail marks it read on the server, but the list was loaded
+  // before that happened. Remember what was opened and draw it read at once
+  // instead of waiting for the next load to catch up.
+  const [openedSet, setOpenedSet] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLUListElement>(null);
 
   // a new mailbox/query resets the accumulated pages
@@ -285,6 +289,7 @@ export default function MessageList({ loaderData, params }: Route.ComponentProps
           ) : (
             rowList.map((row, index) => {
               const active = openId === row.id;
+              const seen = row.seen || openedSet.has(row.id);
               const sender = row.fromAddr || t("mail.unknownSender");
               return (
                 <li key={row.id} className="border-b border-line/60">
@@ -304,7 +309,10 @@ export default function MessageList({ loaderData, params }: Route.ComponentProps
                     </label>
                     <Link
                       to={`/mail/${encodeURIComponent(row.mailbox ?? mailbox)}/${row.id}`}
-                      onClick={() => setCursorIndex(index)}
+                      onClick={() => {
+                        setCursorIndex(index);
+                        setOpenedSet((prev) => new Set(prev).add(row.id));
+                      }}
                       className="flex min-w-0 flex-1 gap-2.5"
                     >
                       <Avatar label={sender} seed={sender} size={28} />
@@ -312,7 +320,7 @@ export default function MessageList({ loaderData, params }: Route.ComponentProps
                         <div className="flex items-baseline gap-2">
                           <span
                             className={`min-w-0 flex-1 truncate text-xs ${
-                              row.seen ? "text-ink-3" : "font-semibold text-ink"
+                              seen ? "text-ink-3" : "font-semibold text-ink"
                             }`}
                           >
                             {sender}
@@ -320,7 +328,7 @@ export default function MessageList({ loaderData, params }: Route.ComponentProps
                           <TimeText value={row.internalDate} className="shrink-0 text-[11px] text-ink-faint" />
                         </div>
                         <p
-                          className={`truncate text-sm ${row.seen ? "text-ink-2" : "font-medium text-ink"}`}
+                          className={`truncate text-sm ${seen ? "text-ink-2" : "font-medium text-ink"}`}
                         >
                           {row.flagged && <StarIcon className="mr-1 inline size-3 text-warn" />}
                           {row.subject || t("mail.noSubject")}
@@ -329,7 +337,7 @@ export default function MessageList({ loaderData, params }: Route.ComponentProps
                           <p className="truncate text-xs text-ink-faint">{row.preview}</p>
                         )}
                       </div>
-                      {!row.seen && <span className="mt-2 size-2 shrink-0 rounded-full bg-brand" />}
+                      {!seen && <span className="mt-2 size-2 shrink-0 rounded-full bg-brand" />}
                     </Link>
                   </div>
                 </li>

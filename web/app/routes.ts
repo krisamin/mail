@@ -37,6 +37,7 @@ export default [
       index("routes/admin/index.tsx"),
       route("domain", "routes/admin/domain.tsx"),
       route("account", "routes/admin/account.tsx"),
+      route("group", "routes/admin/group.tsx"),
       route("relay", "routes/admin/relay.tsx"),
       route("queue", "routes/admin/queue.tsx"),
       route("system", "routes/admin/system.tsx"),
