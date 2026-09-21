@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "~/lib/i18n";
 import { Button } from "~/kit";
 
@@ -44,7 +44,12 @@ const frameDoc = (html: string, remote: boolean): string => {
     font: 14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Pretendard, sans-serif;
     word-break: break-word;
     overflow-wrap: anywhere;
+  }
+  /* The measured box. Padding lives here, and the overflow guard keeps a
+     child's margin from escaping and making the height wrong. */
+  #__mail {
     padding: 14px 16px;
+    overflow: hidden;
   }
   a { color: #2f6fe4; }
   img { max-width: 100%; height: auto; }
@@ -54,33 +59,74 @@ const frameDoc = (html: string, remote: boolean): string => {
     border-left: 2px solid #c9ced8;
     color: #454b55;
   }
-</style></head><body>${html}</body></html>`;
+</style></head><body><div id="__mail">${html}</div></body></html>`;
 };
 
 export const HtmlBody = ({ html }: { html: string }) => {
   const t = useT();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [remote, setRemote] = useState(false);
-  const [height, setHeight] = useState(240);
+  // null until measured. A placeholder height would be a wrong size shown for
+  // one beat and then corrected, which reads worse than a blank moment.
+  const [height, setHeight] = useState<number | null>(null);
 
   const doc = useMemo(() => frameDoc(html, remote), [html, remote]);
+  // lets the retry inside sizeToContent call the latest version of itself
+  const sizeToContentRef = useRef<() => void>(() => {});
 
-  // size the frame to its content; re-measure after images settle
+  // Reset when the document changes, so the previous mail's height is never
+  // worn by the next one.
+  useEffect(() => setHeight(null), [doc]);
+
+  // Size the frame to its content. srcdoc parses synchronously, so the load
+  // event fires with the layout already settled — that is the measurement
+  // that matters, and it lands in the same frame the mail appears in.
+  // A ResizeObserver keeps up with whatever arrives later (images decoding,
+  // the reader allowing remote content).
+  const sizeToContent = useCallback(() => {
+    const frame = frameRef.current;
+    const content = frame?.contentDocument?.getElementById("__mail");
+    if (!content) return;
+    const next = Math.min(Math.ceil(content.getBoundingClientRect().height), 20000);
+    // Pre-layout reads come back as a few pixels of padding; publishing that
+    // is what showed a sliver that then jumped to full size.
+    if (next <= 32) {
+      requestAnimationFrame(() => requestAnimationFrame(sizeToContentRef.current));
+      return;
+    }
+    setHeight((current) => (current === next ? current : next));
+  }, []);
+
+  // The load event can arrive before the frame has laid its content out — the
+  // body measured 12px there and 82px one frame later, which is exactly the
+  // "resizes a beat late" being reported. Wait for a painted frame before the
+  // first measurement, so the height it appears at is the height it keeps.
+  sizeToContentRef.current = sizeToContent;
+
+  const sizeWhenSettled = useCallback(() => {
+    requestAnimationFrame(() => requestAnimationFrame(sizeToContent));
+  }, [sizeToContent]);
+
   useEffect(() => {
     const frame = frameRef.current;
     if (!frame) return;
-    const measure = () => {
-      const body = frame.contentDocument?.body;
-      if (body) setHeight(Math.min(body.scrollHeight + 4, 20000));
-    };
-    measure();
-    const id = setInterval(measure, 400);
-    const stop = setTimeout(() => clearInterval(id), 4000);
+    sizeWhenSettled();
+
+    const target = frame.contentDocument?.documentElement;
+    if (!target || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => sizeToContent());
+    observer.observe(target);
+    // Images report their size only once decoded; body growth covers most of
+    // it, but a fixed-size image swapping in does not always resize the root.
+    const imageList = [...(frame.contentDocument?.images ?? [])];
+    for (const image of imageList) {
+      if (!image.complete) image.addEventListener("load", sizeToContent, { once: true });
+    }
     return () => {
-      clearInterval(id);
-      clearTimeout(stop);
+      observer.disconnect();
+      for (const image of imageList) image.removeEventListener("load", sizeToContent);
     };
-  }, [doc]);
+  }, [doc, sizeToContent, sizeWhenSettled]);
 
   const hasRemoteAsset = useMemo(
     () => /(<img[^>]+src=["']https?:)|(url\(https?:)/i.test(html),
@@ -97,13 +143,17 @@ export const HtmlBody = ({ html }: { html: string }) => {
           </Button>
         </div>
       )}
-      <div className="overflow-hidden rounded-lg border border-line bg-white">
+      <div
+        className="overflow-hidden rounded-lg border border-line bg-white"
+        style={{ visibility: height === null ? "hidden" : "visible" }}
+      >
         <iframe
           ref={frameRef}
           title={t("mail.htmlBody")}
           sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
           srcDoc={doc}
-          style={{ height }}
+          onLoad={sizeWhenSettled}
+          style={{ height: height ?? 0 }}
           className="block w-full border-0"
         />
       </div>
