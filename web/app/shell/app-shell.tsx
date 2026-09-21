@@ -14,7 +14,7 @@ import {
   SystemThemeIcon,
 } from "~/kit";
 import { useT } from "~/lib/i18n";
-import type { Theme } from "~/lib/theme";
+import { applyTheme, type Theme } from "~/lib/theme";
 import { BrandMark } from "./brand";
 
 // The one shell every signed-in screen lives in.
@@ -56,14 +56,17 @@ export const AppShell = ({
   const t = useT();
   const fetcher = useFetcher();
 
-  const setTheme = (theme: Theme) =>
+  const setTheme = (theme: Theme) => {
+    // paint first, persist second
+    applyTheme(theme);
     fetcher.submit({ theme }, { method: "post", action: "/preference" });
+  };
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-canvas">
       {/* rail — becomes a bottom bar on narrow screens */}
-      <div className="fixed inset-x-0 bottom-0 z-30 flex h-14 shrink-0 items-center justify-around border-t border-line bg-surface px-2 md:static md:h-auto md:w-14 md:flex-col md:justify-start md:gap-1 md:border-t-0 md:border-r md:px-0 md:py-3">
-        <div className="hidden md:mb-2 md:block">
+      <div className="fixed inset-x-0 bottom-0 z-30 flex h-14 shrink-0 items-center justify-around border-t border-line bg-surface px-2 md:static md:h-auto md:w-14 md:flex-col md:justify-start md:gap-1 md:border-t-0 md:border-r md:px-0 md:py-2">
+        <div className="hidden md:mb-1 md:block">
           <BrandMark />
         </div>
         <RailLink to="/mail" label={t("nav.mail")}>
@@ -77,9 +80,10 @@ export const AppShell = ({
             <AdminIcon className="size-5" />
           </RailLink>
         )}
-        <div className="md:mt-auto">
+        <div className="md:mt-auto md:pt-1">
           <Menu
             align="start"
+            side="right"
             trigger={({ toggle }) => (
               <button
                 type="button"

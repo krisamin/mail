@@ -4,7 +4,7 @@ import { useT } from "~/lib/i18n";
 import { readPreference } from "~/lib/preference.server";
 import { requireUser } from "~/lib/session.server";
 import { LOCALE_LABEL_MAP, LOCALE_LIST } from "~/lib/locale";
-import { THEME_LIST, type Theme } from "~/lib/theme";
+import { applyTheme, THEME_LIST, type Theme } from "~/lib/theme";
 import { DarkIcon, LightIcon, Panel, PanelHeader, SystemThemeIcon } from "~/kit";
 import { ShellContent, ShellHeader } from "~/shell/app-shell";
 
@@ -33,8 +33,12 @@ export default function Appearance({ loaderData }: Route.ComponentProps) {
   const pendingLocale = fetcher.formData?.get("locale");
   const locale = pendingLocale ? String(pendingLocale) : preference.locale;
 
-  const save = (next: { theme?: string; locale?: string }) =>
+  const save = (next: { theme?: string; locale?: string }) => {
+    // paint first, persist second — the choice should land under the cursor,
+    // not one network round-trip later
+    if (next.theme) applyTheme(next.theme as Theme);
     fetcher.submit({ ...next }, { method: "post", action: "/preference" });
+  };
 
   return (
     <>

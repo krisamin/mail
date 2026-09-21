@@ -4,7 +4,7 @@ import { apiFetch, ApiError } from "~/lib/api.server";
 import { translate } from "~/i18n";
 import { getLocale } from "~/lib/locale.server";
 import { decodeClaims, exchangeCode, publicOrigin } from "~/lib/oidc.server";
-import { getSession, sessionStorage, type SessionUser } from "~/lib/session.server";
+import { getSession, storeUser } from "~/lib/session.server";
 
 // IdP callback: verify state → exchange code → provision → store the user in the session.
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -39,20 +39,17 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     throw e;
   }
 
-  const user: SessionUser = {
-    sub: claims.sub,
-    name: claims.name ?? claims.preferred_username ?? claims.sub,
-    email: claims.email ?? "",
-    groupList: claims.groups ?? [],
-    idToken: tokenSet.idToken,
-  };
-
   const returnTo = (session.get("returnTo") as string | undefined) ?? "/";
-  session.unset("oauthState");
-  session.unset("returnTo");
-  session.set("user", user);
+  const cookie = await storeUser(
+    request,
+    {
+      sub: claims.sub,
+      name: claims.name ?? claims.preferred_username ?? claims.sub,
+      email: claims.email ?? "",
+      groupList: claims.groups ?? [],
+    },
+    tokenSet,
+  );
 
-  return redirect(returnTo, {
-    headers: { "Set-Cookie": await sessionStorage.commitSession(session) },
-  });
+  return redirect(returnTo, { headers: { "Set-Cookie": cookie } });
 };

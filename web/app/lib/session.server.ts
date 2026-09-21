@@ -1,29 +1,33 @@
-import { createMemorySessionStorage, redirect } from "react-router";
+import { createCookieSessionStorage, redirect } from "react-router";
+import { decodeClaims, refreshTokens } from "./oidc.server";
 
-// Session storage — server-side (in-memory), the cookie carries only a
-// session ID. The id_token alone is ~4KB which overflows the 4096-byte
-// browser cookie limit once state/returnTo are added on the /login hop
-// ("Cookie length will exceed browser maximum"), so token material must
-// never live in the cookie itself.
-// Trade-off: sessions reset on pod restart — fine here (single replica,
-// and the IdP SSO session silently re-issues on the /login round-trip).
+// Session.
+//
+// The cookie carries only what is small and long-lived: who you are and a
+// refresh token. The id_token (~4KB, and often minutes old) never goes in it —
+// it would blow the 4096-byte cookie limit and expire long before the session
+// does. It lives in a process-local cache instead, and when it is missing or
+// stale the refresh token silently buys a new one.
+//
+// That combination is what makes the session survive the two things that used
+// to end it: the IdP's short token lifetime (five minutes here) and a web pod
+// restart (the previous in-memory session store forgot everyone on deploy).
+//
 // Dev default secret; production must set SESSION_SECRET.
 const secret = process.env.SESSION_SECRET ?? "mail-dev-session-secret";
 
-export const sessionStorage = createMemorySessionStorage({
+export const sessionStorage = createCookieSessionStorage({
   cookie: {
-    // Renamed from "__mail_session" when sessions moved server-side: the old
-    // cookie held the full session data under the same secret, so it still
-    // parses — but as an object where a session ID string is expected, which
-    // silently breaks the store lookup (state mismatch on OIDC callback).
-    // A new name makes stale cookies invisible; /login clears the legacy one.
-    name: "__mail_sid",
+    // Renamed whenever the stored shape changes: an old cookie still decrypts
+    // under the same secret and would be read as the new shape, which fails in
+    // confusing ways. A new name makes stale cookies invisible.
+    name: "__mail_session2",
     httpOnly: true,
     path: "/",
     sameSite: "lax",
     secrets: [secret],
     secure: process.env.NODE_ENV === "production",
-    maxAge: 60 * 60 * 8, // 8h
+    maxAge: 60 * 60 * 24 * 30, // 30d — the refresh token's own lifetime
   },
 });
 
@@ -35,39 +39,120 @@ export type SessionUser = {
   idToken: string;
 };
 
+/** What actually lives in the cookie. */
+type StoredUser = Omit<SessionUser, "idToken"> & { refreshToken: string };
+
 export const getSession = (request: Request) =>
   sessionStorage.getSession(request.headers.get("Cookie"));
 
-// Token liveness check — the session lives 8h but the id_token expires much
-// sooner (per IdP settings). An expired token would 401 at the Go API's JWKS
-// check and kill the loader, so treat it as signed-out here instead. The
-// guard bounces to /login, and as long as the IdP SSO session is alive the
-// round-trip re-issues a token silently.
-const tokenAlive = (idToken: string): boolean => {
+/** id_token cache, keyed by refresh token. Process-local on purpose: losing it
+ *  costs one refresh round-trip, never a sign-out. */
+const tokenCache = new Map<string, { idToken: string; expiresAt: number }>();
+
+const claimExpiry = (idToken: string): number => {
   try {
     const payload = idToken.split(".")[1];
-    if (!payload) return false;
+    if (!payload) return 0;
     const pad = payload + "=".repeat((4 - (payload.length % 4)) % 4);
     const claims = JSON.parse(Buffer.from(pad, "base64url").toString()) as { exp?: number };
-    if (!claims.exp) return true;
-    return claims.exp - 60 > Date.now() / 1000; // 60s clock-skew margin
+    return claims.exp ? claims.exp * 1000 : 0;
   } catch {
-    return false;
+    return 0;
   }
+};
+
+/** Usable for a little longer — 60s of clock-skew margin so a token never
+ *  expires mid-request at the Go API's JWKS check. */
+const alive = (expiresAt: number) => expiresAt - 60_000 > Date.now();
+
+export const rememberToken = (refreshToken: string, idToken: string) => {
+  tokenCache.set(refreshToken, { idToken, expiresAt: claimExpiry(idToken) });
+};
+
+export const forgetToken = (refreshToken: string) => {
+  tokenCache.delete(refreshToken);
+};
+
+/** In-flight refreshes, so a page firing five parallel loaders performs one
+ *  token exchange rather than five. */
+const inFlightMap = new Map<string, Promise<string | null>>();
+
+const freshIdToken = async (stored: StoredUser): Promise<string | null> => {
+  const cached = tokenCache.get(stored.refreshToken);
+  if (cached && alive(cached.expiresAt)) return cached.idToken;
+
+  const running = inFlightMap.get(stored.refreshToken);
+  if (running) return running;
+
+  const task = (async () => {
+    const next = await refreshTokens(stored.refreshToken);
+    if (!next) {
+      tokenCache.delete(stored.refreshToken);
+      return null;
+    }
+    rememberToken(stored.refreshToken, next.idToken);
+    // A rotating IdP hands back a new refresh token. The cookie still carries
+    // the old one for this request, so index the new id_token under both.
+    if (next.refreshToken !== stored.refreshToken) {
+      rememberToken(next.refreshToken, next.idToken);
+    }
+    return next.idToken;
+  })().finally(() => inFlightMap.delete(stored.refreshToken));
+
+  inFlightMap.set(stored.refreshToken, task);
+  return task;
 };
 
 export const getUser = async (request: Request): Promise<SessionUser | null> => {
   const session = await getSession(request);
-  const user = session.get("user") as SessionUser | undefined;
-  if (!user) return null;
-  if (!tokenAlive(user.idToken)) return null;
-  return user;
+  const stored = session.get("user") as StoredUser | undefined;
+  if (!stored) return null;
+
+  const idToken = await freshIdToken(stored);
+  if (!idToken) return null;
+
+  // Claims can change between sign-ins (name, group membership); trust the
+  // token we just got over what the cookie remembered.
+  let name = stored.name;
+  let email = stored.email;
+  let groupList = stored.groupList;
+  try {
+    const claims = decodeClaims(idToken);
+    name = claims.name ?? claims.preferred_username ?? name;
+    email = claims.email ?? email;
+    groupList = claims.groups ?? groupList;
+  } catch {
+    // keep what the cookie had
+  }
+
+  return { sub: stored.sub, name, email, groupList, idToken };
+};
+
+/** Writes the session cookie. Called from the OIDC callback only. */
+export const storeUser = async (
+  request: Request,
+  user: Omit<SessionUser, "idToken">,
+  tokenSet: { idToken: string; refreshToken: string },
+) => {
+  const session = await getSession(request);
+  session.unset("oauthState");
+  session.unset("returnTo");
+  const stored: StoredUser = {
+    sub: user.sub,
+    name: user.name,
+    email: user.email,
+    groupList: user.groupList,
+    refreshToken: tokenSet.refreshToken,
+  };
+  session.set("user", stored);
+  rememberToken(tokenSet.refreshToken, tokenSet.idToken);
+  return sessionStorage.commitSession(session);
 };
 
 /** For login-required routes — throws a /login redirect when there is no
- *  user or the token has expired. RR7 runs parent/child loaders in parallel,
- *  so child loaders must call this too (leaning on the parent guard alone
- *  can null-deref). */
+ *  user or the session can no longer produce a token. RR runs parent/child
+ *  loaders in parallel, so child loaders must call this too (leaning on the
+ *  parent guard alone can null-deref). */
 export const requireUser = async (request: Request): Promise<SessionUser> => {
   const user = await getUser(request);
   if (!user) {
@@ -79,16 +164,12 @@ export const requireUser = async (request: Request): Promise<SessionUser> => {
 
 export const ADMIN_GROUP = process.env.MAIL_ADMIN_GROUP ?? "mail-admin";
 
-export const isAdmin = (user: SessionUser | null): boolean =>
-  !!user && user.groupList.some((g) => g === ADMIN_GROUP || g === `/${ADMIN_GROUP}`);
+export const isAdmin = (user: SessionUser): boolean => user.groupList.includes(ADMIN_GROUP);
 
-/** For admin routes. RR7 runs parent/child loaders in PARALLEL, so the
- *  layout's 403 does not stop child loaders from hitting the Go API — every
- *  admin child loader must guard itself with this. */
 export const requireAdmin = async (request: Request): Promise<SessionUser> => {
   const user = await requireUser(request);
   if (!isAdmin(user)) {
-    throw new Response("admin group required", { status: 403 });
+    throw new Response("admin only", { status: 403 });
   }
   return user;
 };

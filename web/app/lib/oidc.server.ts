@@ -6,6 +6,12 @@ const CLIENT_ID = process.env.MAIL_OIDC_CLIENT_ID ?? "mail-web";
 const CLIENT_SECRET = process.env.MAIL_OIDC_CLIENT_SECRET ?? "mail-web-dev-secret";
 // Dev Keycloak attaches claims via client-level mappers, so "openid" is enough.
 // Real IdPs (Authentik etc.) need "openid profile email" for email/groups claims.
+// The authorization-code flow already returns a refresh token for the life
+// of the IdP session, which is what keeps this app signed in; asking for
+// offline_access on top of that is a different thing (a token that outlives
+// the session) and IdPs refuse it unless the client is allowed to — dev
+// Keycloak answers "Offline tokens not allowed for the user or client" and
+// the whole sign-in fails. So: plain scopes.
 const SCOPE = process.env.MAIL_OIDC_SCOPE ?? "openid";
 
 /** Behind a reverse proxy the request origin looks like http — pin via env in production. */
@@ -47,7 +53,7 @@ export const buildAuthorizeUrl = async (redirectUri: string, state: string): Pro
   return `${d.authorization_endpoint}?${params}`;
 };
 
-export type TokenSet = { idToken: string; accessToken: string };
+export type TokenSet = { idToken: string; accessToken: string; refreshToken: string };
 
 /** Exchange the callback code for tokens. */
 export const exchangeCode = async (code: string, redirectUri: string): Promise<TokenSet> => {
@@ -65,8 +71,48 @@ export const exchangeCode = async (code: string, redirectUri: string): Promise<T
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`token exchange failed: ${res.status} ${await res.text()}`);
-  const body = (await res.json()) as { id_token: string; access_token: string };
-  return { idToken: body.id_token, accessToken: body.access_token };
+  const body = (await res.json()) as {
+    id_token: string;
+    access_token: string;
+    refresh_token?: string;
+  };
+  return {
+    idToken: body.id_token,
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token ?? "",
+  };
+};
+
+/** Trade a refresh token for a fresh id_token. Returns null when the IdP
+ *  refuses (revoked, expired, or the provider never issued one) — the caller
+ *  then falls back to a normal sign-in round-trip. */
+export const refreshTokens = async (refreshToken: string): Promise<TokenSet | null> => {
+  if (!refreshToken) return null;
+  const d = await discover();
+  const res = await fetch(d.token_endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      refresh_token: refreshToken,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) return null;
+  const body = (await res.json()) as {
+    id_token?: string;
+    access_token: string;
+    refresh_token?: string;
+  };
+  if (!body.id_token) return null;
+  return {
+    idToken: body.id_token,
+    accessToken: body.access_token,
+    // Rotating IdPs hand back a new refresh token; keep the old one otherwise.
+    refreshToken: body.refresh_token ?? refreshToken,
+  };
 };
 
 export type IdClaims = {

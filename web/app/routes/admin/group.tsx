@@ -11,7 +11,7 @@ import {
   ErrorBanner,
   IconButton,
   Panel,
-  SelectInput,
+  GrantSwitch,
   TextInput,
 } from "~/kit";
 import { ChevronDownIcon, ChevronUpIcon, TrashIcon } from "~/kit/icon";
@@ -85,31 +85,28 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 };
 
-/** allow / deny / inherit, as a three-way select. */
-const GrantSelect = ({
+/** One rule of a group: what it is, and the deny / inherit / allow switch. */
+const GrantRow = ({
   name,
   value,
   label,
+  hint,
   isDefault,
 }: {
   name: string;
   value: Grant;
   label: string;
+  hint?: string;
   isDefault: boolean;
-}) => {
-  const t = useT();
-  return (
-    <label className="flex items-center justify-between gap-2 py-1">
-      <span className="text-sm text-ink-2">{label}</span>
-      <SelectInput name={name} defaultValue={value} fieldSize="sm" className="w-28">
-        {/* the floor has nobody to inherit from, so it only says yes or no */}
-        {!isDefault && <option value="inherit">{t("group.inherit")}</option>}
-        <option value="allow">{t("group.allow")}</option>
-        <option value="deny">{t("group.deny")}</option>
-      </SelectInput>
-    </label>
-  );
-};
+}) => (
+  <div className="flex items-center justify-between gap-3 py-1.5">
+    <div className="min-w-0">
+      <p className="text-sm text-ink">{label}</p>
+      {hint && <p className="text-xs text-ink-faint">{hint}</p>}
+    </div>
+    <GrantSwitch name={name} value={value} allowInherit={!isDefault} label={label} />
+  </div>
+);
 
 const MemberEditor = ({ group, accountList }: { group: Group; accountList: Account[] }) => {
   const t = useT();
@@ -248,22 +245,25 @@ export default function GroupList({ loaderData, actionData }: Route.ComponentPro
                       <TextInput name="name" defaultValue={g.name} fieldSize="sm" className="w-44" />
                     </label>
                   )}
-                  <GrantSelect
+                  <GrantRow
                     name="canSend"
                     value={g.canSend}
                     label={t("permission.canSend")}
+                    hint={t("permission.canSendHint")}
                     isDefault={g.isDefault}
                   />
-                  <GrantSelect
+                  <GrantRow
                     name="canSendExternal"
                     value={g.canSendExternal}
                     label={t("permission.canSendExternal")}
+                    hint={t("permission.canSendExternalHint")}
                     isDefault={g.isDefault}
                   />
-                  <GrantSelect
+                  <GrantRow
                     name="canReceiveExternal"
                     value={g.canReceiveExternal}
                     label={t("permission.canReceiveExternal")}
+                    hint={t("permission.canReceiveExternalHint")}
                     isDefault={g.isDefault}
                   />
                   <label className="flex items-center justify-between gap-2 py-1">
