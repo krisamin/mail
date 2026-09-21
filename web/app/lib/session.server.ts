@@ -146,6 +146,16 @@ export const storeUser = async (
   };
   session.set("user", stored);
   rememberToken(tokenSet.refreshToken, tokenSet.idToken);
+  if (!tokenSet.refreshToken) {
+    // Then the session can only live as long as this id_token and a restart
+    // signs everyone out. authentik, for one, only issues refresh tokens when
+    // offline_access is in MAIL_OIDC_SCOPE — say so out loud rather than
+    // letting it show up as "I keep getting logged out".
+    console.warn(
+      "session: the IdP returned no refresh token — sign-ins will expire with the id_token. " +
+        "Add offline_access to MAIL_OIDC_SCOPE if the IdP requires it.",
+    );
+  }
   return sessionStorage.commitSession(session);
 };
 
