@@ -6,6 +6,10 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
+# Public hosts allowed to submit actions — the CSRF guard compares the browser
+# Origin against the request URL, which behind the ingress is the pod address.
+ARG MAIL_ALLOWED_ORIGINS=mail.krisam.in
+ENV MAIL_ALLOWED_ORIGINS=$MAIL_ALLOWED_ORIGINS
 RUN bun run build && bun install --frozen-lockfile --production
 
 FROM node:24-alpine

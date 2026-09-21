@@ -253,3 +253,30 @@ authentik 쪽 mail provider의 access token 수명은 5분에서 1시간으로 �
 - **권한은 3분할 스위치로 고른다.** 차단 / 상속 / 허용이 한 컨트롤 안에
   나란히 있어서 "아무 말도 안 함"이 "아니오"와 다르게 읽힌다. 선택 목록은
   침묵조차 결정처럼 보이게 만들었다.
+
+## DD-15. 프록시 뒤에서는 "액션 허용 오리진"을 적어줘야 한다 (2026-09)
+
+운영에서만 모든 폼이 `Unexpected Server Error`로 끝났다. 서버 로그에는
+`POST /preference.data 400`과 `Error: Bad Request at singleFetchAction`.
+
+React Router 8은 액션 요청마다 CSRF를 검사한다. 브라우저가 보낸 `Origin`과
+`request.url`의 오리진을 비교하는데, 인그레스 뒤에서는 그 둘이 원래 다르다 —
+브라우저는 `https://mail.krisam.in`, 서버가 보는 요청 URL은
+`http://<pod>:3000/...`. 그래서 개발에서는 멀쩡하고 배포하면 모든 액션이
+400으로 죽는다(테마 변경, 권한 저장, 메일 발송까지 전부).
+
+`react-router.config.ts`의 `allowedActionOrigins`에 공개 호스트를 적으면
+해결된다. 빌드 타임 값이라 다른 배포는 `MAIL_ALLOWED_ORIGINS`를
+`docker build --build-arg`로 넘긴다.
+
+실측(프로덕션 빌드, `POST /preference.data`):
+
+| Origin | 결과 |
+|---|---|
+| `https://mail.krisam.in` (허용 목록) | 202 |
+| `http://localhost:5599` (동일 오리진) | 202 |
+| `https://evil.example` | 400 |
+
+보호는 그대로 살아 있고 우리 도메인만 통과한다. RR7에는 없던 검사라 스택을
+올리면서 함께 들어왔고, 개발 화면에서는 절대 재현되지 않는 종류다 — 배포
+후에는 화면을 한 번 눌러보는 것까지가 검증이다.
