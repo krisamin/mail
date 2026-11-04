@@ -158,6 +158,16 @@ type Message struct {
 	// fills them from the raw body the first time it lists the message.
 	Preview *string
 	ToAddr  *string
+
+	// SyncMeta is the internal sync cache (0006, JSON). nil = not parsed yet.
+	// Only the sync query loads it.
+	SyncMeta []byte
+}
+
+// UIDFlag is one row of a flag listing (internal sync API).
+type UIDFlag struct {
+	UID      uint32
+	FlagList []string
 }
 
 // MessageHit is a search result: the message plus the mailbox it sits in
@@ -239,6 +249,10 @@ type MailboxSummary struct {
 	Name         string
 	MessageCount uint32
 	UnseenCount  uint32
+	// UIDValidity/UIDNext let a syncing client tell whether its UID cursor
+	// is still valid and whether anything new arrived.
+	UIDValidity uint32
+	UIDNext     uint32
 }
 
 // FilterRule field values.

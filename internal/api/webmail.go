@@ -220,6 +220,12 @@ func (s *Server) handleMeMessageList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMeMessageDetail(w http.ResponseWriter, r *http.Request) {
+	s.messageDetail(w, r, true)
+}
+
+// messageDetail renders one message. markSeen is the web client's "opening
+// marks it read"; the internal API passes false (ara decides on its own).
+func (s *Server) messageDetail(w http.ResponseWriter, r *http.Request, markSeen bool) {
 	u := s.resolveMe(w, r)
 	if u == nil {
 		return
@@ -247,7 +253,7 @@ func (s *Server) handleMeMessageDetail(w http.ResponseWriter, r *http.Request) {
 	detail.HTMLBody = sanitizeHTML(detail.HTMLBody)
 
 	// opening a message marks it read (like every mail client). Non-fatal.
-	if !detail.Seen {
+	if markSeen && !detail.Seen {
 		flagList := append(append([]string{}, m.Flags...), "\\Seen")
 		if err := s.store.SetAccountMessageFlag(r.Context(), u.ID, m.ID, flagList); err == nil {
 			detail.Seen = true
@@ -426,7 +432,7 @@ func (s *Server) handleMeMessageRaw(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "message/rfc822")
 	w.Header().Set("Content-Disposition",
 		mime.FormatMediaType("attachment", map[string]string{
-			"filename": fmt.Sprintf("message-%d.eml", m.ID),
+			"filename": fmt.Sprintf("message-%s.eml", m.ID),
 		}))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(raw)
@@ -610,118 +616,9 @@ func (s *Server) handleMeSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// split recipients: our domain → direct delivery, otherwise → queue
-	var localList, externalList []string
-	for _, rcptAddr := range rcptList {
-		at := strings.LastIndex(rcptAddr, "@")
-		if at < 0 {
-			writeError(w, http.StatusBadRequest, "invalid recipient: "+rcptAddr)
-			return
-		}
-		if _, err := s.store.FindDomain(r.Context(), rcptAddr[at+1:]); err == nil {
-			localList = append(localList, rcptAddr)
-		} else if errors.Is(err, store.ErrNotFound) {
-			externalList = append(externalList, rcptAddr)
-		} else {
-			mapStoreErr(w, err)
-			return
-		}
-	}
-	// Permission, same rules the SMTP submission path applies. Looked up per
-	// send because an admin may have changed a group a second ago.
-	var sendPerm policy.Effective
-	{
-		var senderDomain *store.Domain
-		if at := strings.LastIndex(from, "@"); at >= 0 {
-			if d, derr := s.store.FindDomain(r.Context(), from[at+1:]); derr == nil {
-				senderDomain = d
-			}
-		}
-		var perm policy.Effective
-		if groupList, gerr := s.store.GroupListForAccount(r.Context(), u.ID); gerr == nil {
-			perm = policy.Resolve(groupList)
-		} else {
-			mapStoreErr(w, gerr)
-			return
-		}
-		sendPerm = perm
-		if v := policy.Send(u, perm, senderDomain, len(externalList) > 0); !v.Allowed {
-			metric.PolicyBlockTotal.WithLabelValues(string(v.Reason), "webmail").Inc()
-			writeError(w, http.StatusForbidden, v.Message)
-			return
-		}
-	}
-
-	// Daily limit — charged before anything leaves, given back if the send
-	// fails below.
-	charged := 0
-	if sendPerm.DailySendLimit != nil && len(rcptList) > 0 {
-		used, err := s.store.BumpSendCounter(r.Context(), u.ID, len(rcptList))
-		if err != nil {
-			log.Printf("api: send counter failed account=%s: %v", u.ID, err)
-		} else {
-			charged = len(rcptList)
-			if v := policy.DailyLimit(sendPerm.DailySendLimit, used); !v.Allowed {
-				_ = s.store.ReleaseSendCounter(r.Context(), u.ID, charged)
-				metric.PolicyBlockTotal.WithLabelValues(string(v.Reason), "webmail").Inc()
-				writeError(w, http.StatusTooManyRequests, v.Message)
-				return
-			}
-		}
-	}
-	refund := func() {
-		if charged > 0 {
-			_ = s.store.ReleaseSendCounter(r.Context(), u.ID, charged)
-			charged = 0
-		}
-	}
-
-	// local recipients must exist — mirror submission's 550 at RCPT time
-	for _, rcptAddr := range localList {
-		if _, err := s.store.ResolveAddress(r.Context(), rcptAddr); err != nil {
-			refund()
-			if errors.Is(err, store.ErrNotFound) {
-				writeError(w, http.StatusBadRequest, "no such user: "+rcptAddr)
-				return
-			}
-			mapStoreErr(w, err)
-			return
-		}
-	}
-
-	// enqueue external first — if the queue insert fails nothing was
-	// delivered yet and the client can simply retry
-	if len(externalList) > 0 {
-		if err := s.store.EnqueueOutbound(r.Context(), from, externalList, raw); err != nil {
-			refund()
-			mapStoreErr(w, err)
-			return
-		}
-	}
-	for _, rcptAddr := range localList {
-		acct, err := s.store.ResolveAddress(r.Context(), rcptAddr)
-		if err != nil {
-			mapStoreErr(w, err)
-			return
-		}
-		// same pipeline as the SMTP delivery path — filters, folder, notify
-		if _, err := delivery.Deliver(r.Context(), s.store, delivery.Request{
-			AccountID: acct.ID,
-			Address:   rcptAddr,
-			Origin:    "webmail",
-			Raw:       raw,
-		}); err != nil {
-			mapStoreErr(w, err)
-			return
-		}
-	}
-
-	// Sent copy (\Seen — you already read what you wrote). Failure is warned,
-	// not fatal: the mail is out, a missing Sent copy must not error the send.
-	if box, err := s.store.EnsureMailbox(r.Context(), u.ID, mailboxSent); err == nil {
-		if _, err := s.store.AppendMessage(r.Context(), box.ID, raw, []string{"\\Seen"}, time.Now()); err != nil {
-			log.Printf("api: Sent copy failed account=%s: %v", u.ID, err)
-		}
+	localCount, externalCount, ok := s.deliverOutgoing(w, r, u, from, rcptList, raw, "webmail")
+	if !ok {
+		return
 	}
 
 	// mark the original answered (best-effort)
@@ -741,11 +638,134 @@ func (s *Server) handleMeSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("api: webmail send from=%s local=%d external=%d size=%d",
-		from, len(localList), len(externalList), len(raw))
+		from, localCount, externalCount, len(raw))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"delivered": len(localList),
-		"queued":    len(externalList),
+		"delivered": localCount,
+		"queued":    externalCount,
 	})
+}
+
+// deliverOutgoing is the delivery half of every send path (webmail compose
+// and the internal raw send): permission check, daily limit, local direct
+// delivery, external queueing (DKIM signing happens in the worker) and the
+// Sent copy. from is the checked sender address, path labels the metrics.
+// On failure it has already written the error response and returns ok=false.
+func (s *Server) deliverOutgoing(w http.ResponseWriter, r *http.Request, u *store.Account,
+	from string, rcptList []string, raw []byte, path string) (localCount, externalCount int, ok bool) {
+	// split recipients: our domain → direct delivery, otherwise → queue
+	var localList, externalList []string
+	for _, rcptAddr := range rcptList {
+		at := strings.LastIndex(rcptAddr, "@")
+		if at < 0 {
+			writeError(w, http.StatusBadRequest, "invalid recipient: "+rcptAddr)
+			return 0, 0, false
+		}
+		if _, err := s.store.FindDomain(r.Context(), rcptAddr[at+1:]); err == nil {
+			localList = append(localList, rcptAddr)
+		} else if errors.Is(err, store.ErrNotFound) {
+			externalList = append(externalList, rcptAddr)
+		} else {
+			mapStoreErr(w, err)
+			return 0, 0, false
+		}
+	}
+	// Permission, same rules the SMTP submission path applies. Looked up per
+	// send because an admin may have changed a group a second ago.
+	var sendPerm policy.Effective
+	{
+		var senderDomain *store.Domain
+		if at := strings.LastIndex(from, "@"); at >= 0 {
+			if d, derr := s.store.FindDomain(r.Context(), from[at+1:]); derr == nil {
+				senderDomain = d
+			}
+		}
+		var perm policy.Effective
+		if groupList, gerr := s.store.GroupListForAccount(r.Context(), u.ID); gerr == nil {
+			perm = policy.Resolve(groupList)
+		} else {
+			mapStoreErr(w, gerr)
+			return 0, 0, false
+		}
+		sendPerm = perm
+		if v := policy.Send(u, perm, senderDomain, len(externalList) > 0); !v.Allowed {
+			metric.PolicyBlockTotal.WithLabelValues(string(v.Reason), path).Inc()
+			writeError(w, http.StatusForbidden, v.Message)
+			return 0, 0, false
+		}
+	}
+
+	// Daily limit — charged before anything leaves, given back if the send
+	// fails below.
+	charged := 0
+	if sendPerm.DailySendLimit != nil && len(rcptList) > 0 {
+		used, err := s.store.BumpSendCounter(r.Context(), u.ID, len(rcptList))
+		if err != nil {
+			log.Printf("api: send counter failed account=%s: %v", u.ID, err)
+		} else {
+			charged = len(rcptList)
+			if v := policy.DailyLimit(sendPerm.DailySendLimit, used); !v.Allowed {
+				_ = s.store.ReleaseSendCounter(r.Context(), u.ID, charged)
+				metric.PolicyBlockTotal.WithLabelValues(string(v.Reason), path).Inc()
+				writeError(w, http.StatusTooManyRequests, v.Message)
+				return 0, 0, false
+			}
+		}
+	}
+	refund := func() {
+		if charged > 0 {
+			_ = s.store.ReleaseSendCounter(r.Context(), u.ID, charged)
+			charged = 0
+		}
+	}
+
+	// local recipients must exist — mirror submission's 550 at RCPT time
+	for _, rcptAddr := range localList {
+		if _, err := s.store.ResolveAddress(r.Context(), rcptAddr); err != nil {
+			refund()
+			if errors.Is(err, store.ErrNotFound) {
+				writeError(w, http.StatusBadRequest, "no such user: "+rcptAddr)
+				return 0, 0, false
+			}
+			mapStoreErr(w, err)
+			return 0, 0, false
+		}
+	}
+
+	// enqueue external first — if the queue insert fails nothing was
+	// delivered yet and the client can simply retry
+	if len(externalList) > 0 {
+		if err := s.store.EnqueueOutbound(r.Context(), from, externalList, raw); err != nil {
+			refund()
+			mapStoreErr(w, err)
+			return 0, 0, false
+		}
+	}
+	for _, rcptAddr := range localList {
+		acct, err := s.store.ResolveAddress(r.Context(), rcptAddr)
+		if err != nil {
+			mapStoreErr(w, err)
+			return 0, 0, false
+		}
+		// same pipeline as the SMTP delivery path — filters, folder, notify
+		if _, err := delivery.Deliver(r.Context(), s.store, delivery.Request{
+			AccountID: acct.ID,
+			Address:   rcptAddr,
+			Origin:    "webmail",
+			Raw:       raw,
+		}); err != nil {
+			mapStoreErr(w, err)
+			return 0, 0, false
+		}
+	}
+
+	// Sent copy (\Seen — you already read what you wrote). Failure is warned,
+	// not fatal: the mail is out, a missing Sent copy must not error the send.
+	if box, err := s.store.EnsureMailbox(r.Context(), u.ID, mailboxSent); err == nil {
+		if _, err := s.store.AppendMessage(r.Context(), box.ID, raw, []string{"\\Seen"}, time.Now()); err != nil {
+			log.Printf("api: Sent copy failed account=%s: %v", u.ID, err)
+		}
+	}
+	return len(localList), len(externalList), true
 }
 
 // buildOutgoingMessage assembles an RFC 5322 text/plain message.

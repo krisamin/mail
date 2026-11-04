@@ -35,6 +35,12 @@ type config struct {
 	OIDCClientID string
 	AdminGroup   string
 	DevInsecure  bool
+
+	// internal API + event webhook (ara integration). Empty token = the
+	// /internal/v1 routes do not exist; URL and secret both set = webhook on.
+	InternalToken string
+	EventURL      string
+	EventSecret   string
 }
 
 func loadConfig() config {
@@ -56,6 +62,12 @@ func loadConfig() config {
 		OIDCClientID:   os.Getenv("MAIL_OIDC_CLIENT_ID"),
 		AdminGroup:     env("MAIL_ADMIN_GROUP", "mail-admin"),
 		DevInsecure:    os.Getenv("MAIL_DEV_INSECURE") == "true",
+		InternalToken:  os.Getenv("MAIL_INTERNAL_TOKEN"),
+		EventURL:       os.Getenv("MAIL_EVENT_URL"),
+		EventSecret:    os.Getenv("MAIL_EVENT_SECRET"),
+	}
+	if (c.EventURL == "") != (c.EventSecret == "") {
+		log.Printf("maild: MAIL_EVENT_URL and MAIL_EVENT_SECRET must both be set — event webhook stays off")
 	}
 	if c.DSN == "" {
 		log.Fatal("MAIL_DSN unset (e.g. postgres://mail:maildev@localhost:55432/mail)")

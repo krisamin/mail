@@ -81,6 +81,9 @@ func (s *Store) AppendMessage(ctx context.Context, mailboxID uuid.UUID, raw []by
 		mailboxID.String()); err != nil {
 		return nil, fmt.Errorf("change notify: %w", err)
 	}
+	if err := notifyEvent(ctx, tx, EventNew, mailboxID, &uid); err != nil {
+		return nil, fmt.Errorf("mail event: %w", err)
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
@@ -165,6 +168,19 @@ func (s *Store) SetFlag(ctx context.Context, messageID uuid.UUID, flagList []str
 	}
 	defer tx.Rollback(ctx)
 
+	// the mailbox/uid feed the mail.flags event; the row lock keeps a
+	// concurrent expunge from racing the flag rewrite
+	var mailboxID uuid.UUID
+	var uid int64
+	err = tx.QueryRow(ctx,
+		`SELECT mailbox_id, uid FROM message WHERE id = $1 FOR UPDATE`, messageID).Scan(&mailboxID, &uid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("flag target lookup: %w", err)
+	}
+
 	if _, err := tx.Exec(ctx, `DELETE FROM message_flag WHERE message_id = $1`, messageID); err != nil {
 		return fmt.Errorf("delete existing flags: %w", err)
 	}
@@ -174,6 +190,9 @@ func (s *Store) SetFlag(ctx context.Context, messageID uuid.UUID, flagList []str
 			messageID, f); err != nil {
 			return fmt.Errorf("flag insert: %w", err)
 		}
+	}
+	if err := notifyEvent(ctx, tx, EventFlags, mailboxID, &uid); err != nil {
+		return fmt.Errorf("flag event: %w", err)
 	}
 	return tx.Commit(ctx)
 }
@@ -224,6 +243,14 @@ func (s *Store) ExpungeDeleted(ctx context.Context, mailboxID uuid.UUID, uidSet 
 			// notification failure is not fatal — fallback polling absorbs it
 			_ = err
 		}
+		// one event per expunge call; the UID only when exactly one went
+		// (consumers find the rest by diffing a flag listing)
+		var one *int64
+		if len(out) == 1 {
+			v := int64(out[0])
+			one = &v
+		}
+		_ = notifyEvent(ctx, s.pool, EventExpunge, mailboxID, one)
 	}
 	return out, nil
 }
@@ -271,6 +298,9 @@ func (s *Store) CopyMessage(ctx context.Context, messageID, destMailboxID uuid.U
 		&m.Subject, &m.FromAddr, &m.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("copy insert: %w", err)
+	}
+	if err := notifyEvent(ctx, tx, EventNew, destMailboxID, &uid); err != nil {
+		return nil, fmt.Errorf("copy event: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err

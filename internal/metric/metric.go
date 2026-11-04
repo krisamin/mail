@@ -80,3 +80,13 @@ var SendDuration = promauto.NewHistogram(prometheus.HistogramOpts{
 	Help:    "Outbound per-message send duration.",
 	Buckets: prometheus.DefBuckets,
 })
+
+// ── outbound event webhook ──────────────────────────────────
+
+// EventWebhookTotal counts mail event webhook outcomes.
+// outcome: delivered | retry | dropped (gave up after retries or a
+// non-retryable answer) | overflow (emitter queue full, never sent)
+var EventWebhookTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "mail_event_webhook_total",
+	Help: "Mail event webhook deliveries by outcome.",
+}, []string{"outcome"})

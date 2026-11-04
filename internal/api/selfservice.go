@@ -20,8 +20,14 @@ import (
 // verifies the target password belongs to the caller first (IDOR prevention).
 
 // resolveMe finds the caller's account by the token's sub claim.
+// For internal calls it returns the X-Mail-Account target instead.
 // On a sub miss it also tries the email-owned address (pre-provisioning reads).
 func (s *Server) resolveMe(w http.ResponseWriter, r *http.Request) *store.Account {
+	// internal API calls (/internal/v1) arrive with the target account already
+	// resolved from X-Mail-Account by the service-token middleware
+	if u := internalAccountFrom(r.Context()); u != nil {
+		return u
+	}
 	id := IdentityFrom(r.Context())
 	if id == nil || id.Subject == "" {
 		writeError(w, http.StatusUnauthorized, "sub claim required")

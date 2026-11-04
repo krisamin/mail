@@ -27,6 +27,7 @@ import (
 	"github.com/krisamin/mail/internal/spam"
 	"github.com/krisamin/mail/internal/store/migration"
 	"github.com/krisamin/mail/internal/store/postgres"
+	"github.com/krisamin/mail/internal/webhook"
 )
 
 func env(key, fallback string) string {
@@ -82,6 +83,14 @@ func main() {
 	// mailbox-change push hub (LISTEN/NOTIFY) — IDLE wakes immediately instead of polling
 	notifyCtx, notifyCancel := context.WithCancel(context.Background())
 	notifier := postgres.NewNotifier(st)
+	// subscribe before Run so no event published after LISTEN starts is missed
+	if cfg.EventURL != "" && cfg.EventSecret != "" {
+		emitter := webhook.New(webhook.Config{URL: cfg.EventURL, Secret: cfg.EventSecret})
+		eventCh, _ := notifier.SubscribeEvent(1024)
+		go emitter.Pump(notifyCtx, eventCh)
+		go emitter.Run(notifyCtx)
+		log.Printf("maild: mail event webhook active (url=%s)", cfg.EventURL)
+	}
 	go notifier.Run(notifyCtx)
 
 	// IMAP server — implicit TLS when configured, plaintext otherwise (proxy/dev assumption)
@@ -215,6 +224,7 @@ func main() {
 	apiSrv := &http.Server{
 		Addr: apiAddr,
 		Handler: api.NewServer(st, authn).WithHostname(hostname).
+			WithInternal(cfg.InternalToken).
 			WithSystemPort(systemPortList).
 			WithExternalPort(hostname, []api.ExternalPort{
 				{Name: "imaps", Port: "993", Mode: "tls"},
@@ -227,6 +237,9 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
+	}
+	if cfg.InternalToken != "" {
+		log.Printf("maild: internal API /internal/v1 enabled (service token)")
 	}
 	go func() {
 		log.Printf("maild: Admin API listening %s (issuer=%q group=%s)",

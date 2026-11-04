@@ -24,7 +24,8 @@ func (s *Store) ListMailboxSummary(ctx context.Context, accountID uuid.UUID) ([]
 			(SELECT count(*) FROM message m
 			   WHERE m.mailbox_id = mb.id
 			     AND NOT EXISTS (SELECT 1 FROM message_flag f
-			                     WHERE f.message_id = m.id AND f.flag = '\Seen')) AS num_unseen
+			                     WHERE f.message_id = m.id AND f.flag = '\Seen')) AS num_unseen,
+			mb.uid_validity, mb.uid_next
 		FROM mailbox mb
 		WHERE mb.account_id = $1
 		ORDER BY (mb.name <> 'INBOX'), mb.name`
@@ -37,10 +38,12 @@ func (s *Store) ListMailboxSummary(ctx context.Context, accountID uuid.UUID) ([]
 	var out []*store.MailboxSummary
 	for rows.Next() {
 		var m store.MailboxSummary
-		var total, unseen int64
-		if err := rows.Scan(&m.Name, &total, &unseen); err != nil {
+		var total, unseen, uidValidity, uidNext int64
+		if err := rows.Scan(&m.Name, &total, &unseen, &uidValidity, &uidNext); err != nil {
 			return nil, err
 		}
+		m.UIDValidity = uint32(uidValidity)
+		m.UIDNext = uint32(uidNext)
 		m.MessageCount = uint32(total)
 		m.UnseenCount = uint32(unseen)
 		out = append(out, &m)
@@ -135,10 +138,11 @@ func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID uui
 
 	// ownership check + source mailbox
 	var srcMailboxID uuid.UUID
+	var srcUID int64
 	err = tx.QueryRow(ctx, `
-		SELECT m.mailbox_id FROM message m
+		SELECT m.mailbox_id, m.uid FROM message m
 		JOIN mailbox mb ON mb.id = m.mailbox_id
-		WHERE mb.account_id = $1 AND m.id = $2`, accountID, messageID).Scan(&srcMailboxID)
+		WHERE mb.account_id = $1 AND m.id = $2`, accountID, messageID).Scan(&srcMailboxID, &srcUID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -183,6 +187,13 @@ func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID uui
 			return fmt.Errorf("move notify: %w", err)
 		}
 	}
+	// a move is an expunge in the source and a new message in the destination
+	if err := notifyEvent(ctx, tx, EventExpunge, srcMailboxID, &srcUID); err != nil {
+		return fmt.Errorf("move event: %w", err)
+	}
+	if err := notifyEvent(ctx, tx, EventNew, destMailboxID, &uid); err != nil {
+		return fmt.Errorf("move event: %w", err)
+	}
 	return tx.Commit(ctx)
 }
 
@@ -191,11 +202,12 @@ func (s *Store) MoveAccountMessage(ctx context.Context, accountID, messageID uui
 // else is moved to Trash first (two-step delete like every mail client).
 func (s *Store) DeleteAccountMessage(ctx context.Context, accountID, messageID uuid.UUID) error {
 	var mailboxID, blobID uuid.UUID
+	var uid int64
 	err := s.pool.QueryRow(ctx, `
 		DELETE FROM message m
 		USING mailbox mb
 		WHERE mb.id = m.mailbox_id AND mb.account_id = $1 AND m.id = $2
-		RETURNING m.mailbox_id, m.blob_id`, accountID, messageID).Scan(&mailboxID, &blobID)
+		RETURNING m.mailbox_id, m.blob_id, m.uid`, accountID, messageID).Scan(&mailboxID, &blobID, &uid)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -208,6 +220,8 @@ func (s *Store) DeleteAccountMessage(ctx context.Context, accountID, messageID u
 		// notification failure is not fatal — fallback polling absorbs it
 		_ = err
 	}
+	// event failure is not fatal either — consumers resync by cursor
+	_ = notifyEvent(ctx, s.pool, EventExpunge, mailboxID, &uid)
 	return nil
 }
 
