@@ -52,6 +52,10 @@ routing, multi-tenancy, and the management plane are implemented here.
   blocked. App passwords can be scoped to reading (IMAP) or sending (SMTP).
 - **Per-account appearance** — theme (system/dark/light) and display language
   live on the account, so they follow the person to any browser.
+- **Internal API for one trusted backend**: opt-in `/internal/v1` behind a
+  service token: provisioning, UID-cursor sync, flags, raw send (iMIP-safe),
+  plus HMAC-signed mail event webhooks. See
+  [docs/internal-api.md](docs/internal-api.md).
 - **Embedded migrations** — the daemon converges any database (empty or
   existing) to the current schema on boot. Single binary, k8s-friendly.
 
@@ -154,6 +158,8 @@ The essentials:
 | `MAIL_OIDC_ISSUER` | OIDC issuer URL (empty = dev mode, no auth) |
 | `MAIL_OIDC_CLIENT_ID` | Audience for token verification |
 | `MAIL_ADMIN_GROUP` | OIDC group granting admin access (default `mail-admin`) |
+| `MAIL_INTERNAL_TOKEN` | Service token for `/internal/v1` (empty = routes absent), see [docs/internal-api.md](docs/internal-api.md) |
+| `MAIL_EVENT_URL` / `MAIL_EVENT_SECRET` | Mail event webhook target and HMAC key (both set = on) |
 
 Domains and outbound relays are managed entirely in the DB through the
 admin UI — no bootstrap or relay env vars. Anyone can log in via OIDC;
@@ -165,11 +171,12 @@ accounts receive a mailbox only when their email domain is registered
 ```
 cmd/maild/          # the daemon: wires every server together
 internal/
-  api/              # REST API (admin + self-service), OIDC verification
+  api/              # REST API (admin + self-service + internal), OIDC verification
   auth/             # DKIM sign/verify, SPF, DMARC
   imap/             # go-imap v2 session backend
   queue/            # outbound queue worker, relay resolution, DKIM signing
   smtp/             # MX receive + submission backends
+  webhook/          # signed mail event webhook (best-effort pokes)
   store/            # domain types + Store/AdminStore interfaces
     migration/      # embedded SQL migrations (run on boot)
     postgres/       # pgx implementation
