@@ -234,6 +234,8 @@ type domainDTO struct {
 	// Permission switches (0004) — the whole-domain kill switches.
 	AllowSendExternal    bool `json:"allowSendExternal"`
 	AllowReceiveExternal bool `json:"allowReceiveExternal"`
+	// RelayID is the outbound relay assigned to this domain (null = the default relay).
+	RelayID *uuid.UUID `json:"relayId"`
 }
 
 func toDomainDTO(d *store.Domain) domainDTO {
@@ -244,6 +246,7 @@ func toDomainDTO(d *store.Domain) domainDTO {
 
 		AllowSendExternal:    d.AllowSendExternal,
 		AllowReceiveExternal: d.AllowReceiveExternal,
+		RelayID:              d.RelayID,
 	}
 	if d.DKIMPrivateKey != "" {
 		if txt, err := dkimPublicTXT(d.DKIMPrivateKey); err == nil {
