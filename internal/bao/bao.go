@@ -49,6 +49,12 @@ type Client struct {
 	token     string
 	tokenFrom time.Time
 	tokenTTL  time.Duration
+	// index is the X-Vault-Index of this client's last write. A standby node
+	// serves reads from its own copy, which lags a write that was forwarded to
+	// the active node by a few ms (a read right after a write got a 404 in
+	// production). Sending the index with X-Vault-Inconsistent makes a standby
+	// that has not caught up forward the read to the active node instead.
+	index string
 }
 
 // New validates the config and returns a client. It does not connect.
@@ -150,39 +156,53 @@ func (c *Client) do(ctx context.Context, method, target string, payload []byte) 
 		if err != nil {
 			return 0, nil, err
 		}
-		status, body, err := c.raw(ctx, method, target, tok, payload)
+		status, body, hdr, err := c.raw(ctx, method, target, tok, payload)
 		if err != nil {
 			return 0, nil, err
 		}
 		if status == http.StatusForbidden && attempt == 0 {
 			continue
 		}
+		if method != http.MethodGet && status < 300 {
+			if idx := hdr.Get("X-Vault-Index"); idx != "" {
+				c.mu.Lock()
+				c.index = idx
+				c.mu.Unlock()
+			}
+		}
 		return status, body, nil
 	}
 }
 
-func (c *Client) raw(ctx context.Context, method, target, token string, payload []byte) (int, []byte, error) {
+func (c *Client) raw(ctx context.Context, method, target, token string, payload []byte) (int, []byte, http.Header, error) {
 	var rd io.Reader
 	if payload != nil {
 		rd = bytes.NewReader(payload)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, rd)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	if token != "" {
 		req.Header.Set("X-Vault-Token", token)
+		c.mu.Lock()
+		idx := c.index
+		c.mu.Unlock()
+		if idx != "" {
+			req.Header.Set("X-Vault-Index", idx)
+			req.Header.Set("X-Vault-Inconsistent", "forward-active-node")
+		}
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.cfg.HTTP.Do(req)
 	if err != nil {
-		return 0, nil, fmt.Errorf("bao: %s %s: %w", method, req.URL.Path, err)
+		return 0, nil, nil, fmt.Errorf("bao: %s %s: %w", method, req.URL.Path, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	return resp.StatusCode, body, err
+	return resp.StatusCode, body, resp.Header, err
 }
 
 // login returns a valid client token, logging in when there is none, it is past
@@ -199,7 +219,7 @@ func (c *Client) login(ctx context.Context, force bool) (string, error) {
 	}
 	payload, _ := json.Marshal(map[string]string{"role": c.cfg.Role, "jwt": strings.TrimSpace(string(jwt))})
 	target := fmt.Sprintf("%s/v1/auth/%s/login", c.cfg.Addr, url.PathEscape(c.cfg.AuthMount))
-	status, body, err := c.raw(ctx, http.MethodPost, target, "", payload)
+	status, body, _, err := c.raw(ctx, http.MethodPost, target, "", payload)
 	if err != nil {
 		return "", err
 	}

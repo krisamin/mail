@@ -247,6 +247,22 @@ func TestMoveLegacy(t *testing.T) {
 	}
 }
 
+// Production hit this: OpenBao runs three nodes behind one Service, a read right
+// after a write landed on a lagging standby and 404ed, so the move read-back failed.
+func TestMoveLegacyOnLaggingStandby(t *testing.T) {
+	st, srv := testStore(t), baotest.New(t)
+	srv.Standby = true
+	ctx := context.Background()
+	a, _ := st.CreateRelay(ctx, newRelay("resend", "pw-a", true))
+	n, err := relaysecret.Wrap(st, srv.Client(t), prefix).MoveLegacy(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("move through a lagging standby: n=%d err=%v", n, err)
+	}
+	if pw, ref := column(t, st, a.ID); pw != "" || ref == "" {
+		t.Fatalf("row: %q %q", pw, ref)
+	}
+}
+
 func TestMoveLegacyFailureKeepsPlaintextAndSending(t *testing.T) {
 	st, srv := testStore(t), baotest.New(t)
 	ctx := context.Background()

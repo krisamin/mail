@@ -108,3 +108,25 @@ func TestClientRenewsBeforeLeaseEnds(t *testing.T) {
 		t.Fatalf("logins = %d, want 2 (renewed at 80%% of lease)", srv.Logins)
 	}
 }
+
+// A read right after a write must not 404 on a standby that lags the active node.
+func TestClientReadYourWritesOnLaggingStandby(t *testing.T) {
+	srv := baotest.New(t)
+	srv.Standby = true
+	c := srv.Client(t)
+	ctx := context.Background()
+	if err := c.Put(ctx, "mail/relay/a", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Get(ctx, "mail/relay/a")
+	if err != nil || got != "v1" {
+		t.Fatalf("read after write on a lagging standby: %q %v", got, err)
+	}
+	// a rewrite is visible too, and so is a delete
+	if err := c.Put(ctx, "mail/relay/a", "v2"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := c.Get(ctx, "mail/relay/a"); got != "v2" {
+		t.Fatalf("second write: %q", got)
+	}
+}

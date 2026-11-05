@@ -29,12 +29,18 @@ type Server struct {
 	*httptest.Server
 	JWTPath string
 
-	mu      sync.Mutex
-	secret  map[string]string
-	valid   map[string]bool
-	n       int
-	Lease   int  // lease_duration returned by login (default 3600)
-	Down    bool // true = every KV call answers 503
+	mu     sync.Mutex
+	secret map[string]string
+	valid  map[string]bool
+	n      int
+	Lease  int  // lease_duration returned by login (default 3600)
+	Down   bool // true = every KV call answers 503
+	// Standby simulates reading from a standby node that lags the active node:
+	// a GET is answered from a stale copy (404 for anything written since)
+	// unless it carries X-Vault-Index at or past the latest write together with
+	// X-Vault-Inconsistent: forward-active-node (then it is forwarded and fresh).
+	Standby bool
+	index   int
 	Logins  int
 	Reads   int
 	Writes  int
@@ -131,6 +137,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		case http.MethodGet:
 			s.Reads++
 			v, ok := s.secret[path]
+			if s.Standby && !s.caughtUp(r) {
+				ok = false
+			}
 			if !ok {
 				http.Error(w, `{"errors":[]}`, http.StatusNotFound)
 				return
@@ -138,6 +147,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"data": map[string]string{"password": v}, "metadata": map[string]any{"version": 1}}})
 		case http.MethodPost:
 			s.Writes++
+			s.index++
+			w.Header().Set("X-Vault-Index", fmt.Sprintf("idx-%d", s.index))
 			var in struct{ Data map[string]string }
 			b, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(b, &in)
@@ -148,9 +159,24 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	case strings.HasPrefix(r.URL.Path, prefix+"metadata/") && r.Method == http.MethodDelete:
 		s.Deletes++
+		s.index++
+		w.Header().Set("X-Vault-Index", fmt.Sprintf("idx-%d", s.index))
 		delete(s.secret, strings.TrimPrefix(r.URL.Path, prefix+"metadata/"))
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// caughtUp reports whether a read carries the headers that make a lagging
+// standby forward it to the active node.
+func (s *Server) caughtUp(r *http.Request) bool {
+	if r.Header.Get("X-Vault-Inconsistent") != "forward-active-node" {
+		return false
+	}
+	var n int
+	if _, err := fmt.Sscanf(r.Header.Get("X-Vault-Index"), "idx-%d", &n); err != nil {
+		return false
+	}
+	return n >= s.index
 }
