@@ -584,3 +584,40 @@ func TestInternalWebhook(t *testing.T) {
 	}
 	t.Log("✔ move to Trash → mail.expunge INBOX + mail.new Trash, all signatures valid")
 }
+
+// TestInternalAppPassword: an account's own app passwords through the service
+// token (ara's mail setting). Issue shows the plain text once, list has it,
+// another account can neither see nor revoke it.
+func TestInternalAppPassword(t *testing.T) {
+	srv, st := internalServer(t, testServiceToken)
+	if _, err := st.CreateDomain(context.Background(), "ara.test"); err != nil {
+		t.Fatalf("domain: %v", err)
+	}
+	acctA, _ := provisionAs(t, srv, "ara:a", "alpha@ara.test")
+	acctB, _ := provisionAs(t, srv, "ara:b", "beta@ara.test")
+
+	code, made := ijson(t, srv, "POST", "/internal/v1/app-password", acctA, map[string]any{"label": "thunderbird"})
+	if code != http.StatusCreated || made["plaintext"] == "" || made["plaintext"] == nil {
+		t.Fatalf("issue: %d %v", code, made)
+	}
+	id := made["appPassword"].(map[string]any)["id"].(string)
+
+	code, raw := icall(t, srv, "GET", "/internal/v1/app-password", testServiceToken, acctA, nil)
+	if code != 200 || !strings.Contains(string(raw), id) || strings.Contains(string(raw), made["plaintext"].(string)) {
+		t.Fatalf("A's list: %d %s", code, raw)
+	}
+	_, raw = icall(t, srv, "GET", "/internal/v1/app-password", testServiceToken, acctB, nil)
+	if strings.Contains(string(raw), id) {
+		t.Fatalf("B must not see A's app password: %s", raw)
+	}
+	if code, _ := icall(t, srv, "DELETE", "/internal/v1/app-password/"+id, testServiceToken, acctB, nil); code == http.StatusNoContent || code == 200 {
+		t.Fatalf("B revoked A's app password: %d", code)
+	}
+	if code, _ := icall(t, srv, "DELETE", "/internal/v1/app-password/"+id, testServiceToken, acctA, nil); code != http.StatusNoContent && code != 200 {
+		t.Fatalf("A revoke: %d", code)
+	}
+	if code, _ := icall(t, srv, "GET", "/internal/v1/app-password", "", acctA, nil); code != 401 {
+		t.Fatalf("no service token must be 401, got %d", code)
+	}
+	t.Log("✔ own app passwords issued once, listed without the secret, not crossable, revoked")
+}

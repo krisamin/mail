@@ -76,6 +76,10 @@ func (s *Server) WithInternal(token string) *Server {
 	scoped.HandleFunc("GET /internal/v1/message/{id}/attachment/{index}", s.handleMeAttachment)
 	scoped.HandleFunc("POST /internal/v1/message/batch", s.handleMeBatch)
 	scoped.HandleFunc("POST /internal/v1/send", s.handleInternalSend)
+	// the account's own app passwords: ara's mail setting, in place of mail-web /setting
+	scoped.HandleFunc("GET /internal/v1/app-password", s.handleMeListAppPassword)
+	scoped.HandleFunc("POST /internal/v1/app-password", s.handleMeCreateAppPassword)
+	scoped.HandleFunc("DELETE /internal/v1/app-password/{id}", s.handleMeRevokeAppPassword)
 
 	in := http.NewServeMux()
 	// account management names the account in the body/path, not the header
