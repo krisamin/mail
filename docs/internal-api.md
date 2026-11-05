@@ -74,9 +74,12 @@ OIDC-protected `/api/admin/*`: `/internal/v1/admin/<rest>` is served as
   write-only, `hasPassword` only), queue, system check, locale.
 - `GET /internal/v1/admin/me` is 404: it answers "which person is this",
   and a service call has none.
-- `GET /api/admin/spam` (both surfaces) reports the inbound screening
-  switches (rspamd reachable, greylist and its delay, DMARC enforcement,
-  DNSBL zones). They come from env (`source: "env"`) and are read-only.
+- `GET /api/admin/spam` (both surfaces) reports the inbound screening policy
+  in force (`policy`), the env default (`default`), where it comes from
+  (`source`: `setting` or `env`) and whether rspamd answers its ping.
+  `PUT` saves a whole policy (dmarcEnforce, dnsblZoneList, greylist,
+  greylistDelaySecond, rspamd, junkScore, rejectScore) that applies to the
+  next SMTP connection; `DELETE` returns to the env default.
 
 ## Mail event webhook
 

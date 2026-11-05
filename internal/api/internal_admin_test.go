@@ -1,12 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/krisamin/mail/internal/spam"
+	"github.com/krisamin/mail/internal/store"
 )
 
 // TestInternalAdmin — /internal/v1/admin/* serves the /api/admin/* handlers
@@ -64,9 +69,10 @@ func TestInternalAdmin(t *testing.T) {
 	}
 }
 
-// TestSpamSetting — GET /api/admin/spam reports env switches and whether
-// rspamd answers its ping.
-func TestSpamSetting(t *testing.T) {
+// TestSpamPolicy: GET reports the env default with rspamd's ping; PUT saves a
+// whole policy (validated) that GET then returns as source "setting"; DELETE
+// goes back to env.
+func TestSpamPolicy(t *testing.T) {
 	pong := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ping" {
 			http.NotFound(w, r)
@@ -76,42 +82,64 @@ func TestSpamSetting(t *testing.T) {
 	}))
 	defer pong.Close()
 
-	check := func(sp SpamSetting) map[string]any {
-		t.Helper()
-		st := (&Server{}).WithSpam(sp)
-		rec := httptest.NewRecorder()
-		st.handleSpamSetting(rec, httptest.NewRequest("GET", "/api/admin/spam", nil))
-		var out map[string]any
-		_ = json.Unmarshal(rec.Body.Bytes(), &out)
-		return out
+	srv, st := internalServer(t, testServiceToken)
+	_ = srv
+	src := spam.NewSource(spam.Policy{
+		DMARCEnforce: true, DNSBLZoneList: []string{"zen.spamhaus.org"},
+		Greylist: true, GreylistDelaySecond: 60, Rspamd: true,
+	}, spam.NewScanner(pong.URL, ""), func(ctx context.Context) (string, bool, error) {
+		raw, err := st.GetSetting(ctx, spam.PolicySettingKey)
+		if errors.Is(err, store.ErrNotFound) {
+			return "", false, nil
+		}
+		return raw, err == nil, err
+	})
+	auth, _ := NewAuthenticator(context.Background(), AuthConfig{AdminGroup: "mail-admin", InsecureSkipVerify: true})
+	api := httptest.NewServer(NewServer(st, auth).WithInternal(testServiceToken).
+		WithSpam(SpamSetting{RspamdURL: pong.URL, Source: src}))
+	defer api.Close()
+
+	code, out := ijson(t, api, "GET", "/internal/v1/admin/spam", "", nil)
+	if code != 200 || out["source"] != "env" || out["rspamd"].(map[string]any)["reachable"] != true {
+		t.Fatalf("get env: %d %v", code, out)
+	}
+	if p := out["policy"].(map[string]any); p["greylist"] != true || p["greylistDelaySecond"] != float64(60) {
+		t.Fatalf("env policy: %v", p)
 	}
 
-	out := check(SpamSetting{RspamdURL: pong.URL, Greylist: true, GreylistDelay: 90 * time.Second, DMARCEnforce: true, DNSBLZoneList: []string{"zen.spamhaus.org"}})
-	rs := out["rspamd"].(map[string]any)
-	if rs["configured"] != true || rs["reachable"] != true {
-		t.Fatalf("rspamd up: %v", out)
-	}
-	if out["greylist"] != true || out["greylistDelaySecond"] != float64(90) || out["dmarcEnforce"] != true || out["source"] != "env" {
-		t.Fatalf("switches: %v", out)
-	}
-	if zl := out["dnsblZoneList"].([]any); len(zl) != 1 || zl[0] != "zen.spamhaus.org" {
-		t.Fatalf("zones: %v", out)
+	for _, bad := range []map[string]any{
+		{"greylistDelaySecond": 0},
+		{"greylistDelaySecond": 60, "dnsblZoneList": []string{"not a zone"}},
+		{"greylistDelaySecond": 60, "junkScore": 9, "rejectScore": 5},
+	} {
+		if code, _ := ijson(t, api, "PUT", "/internal/v1/admin/spam", "", bad); code != 400 {
+			t.Fatalf("bad %v: want 400, got %d", bad, code)
+		}
 	}
 
-	// rspamd that answers something else is not reachable
-	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("nope")) }))
-	defer bad.Close()
-	out = check(SpamSetting{RspamdURL: bad.URL})
-	if rs := out["rspamd"].(map[string]any); rs["reachable"] != false || rs["error"] == nil {
-		t.Fatalf("rspamd bad: %v", out)
+	code, out = ijson(t, api, "PUT", "/internal/v1/admin/spam", "", map[string]any{
+		"dmarcEnforce": false, "dnsblZoneList": []string{"Zen.Spamhaus.org", "bl.spamcop.net", "zen.spamhaus.org"},
+		"greylist": false, "greylistDelaySecond": 120, "rspamd": true, "junkScore": 5, "rejectScore": 12,
+	})
+	if code != 200 || out["source"] != "setting" {
+		t.Fatalf("put: %d %v", code, out)
+	}
+	snap, saved := src.Current(context.Background())
+	if !saved || snap.Greylist || snap.EnforceDMARC || snap.GreylistDelay != 120*time.Second ||
+		len(snap.Policy.DNSBLZoneList) != 2 || snap.Policy.DNSBLZoneList[0] != "zen.spamhaus.org" ||
+		snap.Scanner == nil || *snap.Policy.RejectScore != 12 {
+		t.Fatalf("snapshot after put: %+v", snap)
+	}
+	raw, err := st.GetSetting(context.Background(), spam.PolicySettingKey)
+	if err != nil || !strings.Contains(raw, `"junkScore":5`) {
+		t.Fatalf("stored: %q %v", raw, err)
 	}
 
-	// no rspamd configured, screening off
-	out = check(SpamSetting{})
-	if rs := out["rspamd"].(map[string]any); rs["configured"] != false {
-		t.Fatalf("rspamd off: %v", out)
+	code, out = ijson(t, api, "DELETE", "/internal/v1/admin/spam", "", nil)
+	if code != 200 || out["source"] != "env" {
+		t.Fatalf("delete: %d %v", code, out)
 	}
-	if zl := out["dnsblZoneList"].([]any); len(zl) != 0 {
-		t.Fatalf("zones off: %v", out)
+	if snap, saved := src.Current(context.Background()); saved || !snap.Greylist {
+		t.Fatalf("after reset: %+v", snap)
 	}
 }

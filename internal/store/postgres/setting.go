@@ -26,6 +26,14 @@ func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
 	return value, nil
 }
 
+// DeleteSetting removes a setting (missing is not an error).
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM setting WHERE key = $1`, key); err != nil {
+		return fmt.Errorf("setting delete(%s): %w", key, err)
+	}
+	return nil
+}
+
 // SetSetting stores a setting value (upsert).
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	if _, err := s.pool.Exec(ctx, `
