@@ -22,8 +22,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/krisamin/mail/internal/api"
+	"github.com/krisamin/mail/internal/bao"
 	imapbackend "github.com/krisamin/mail/internal/imap"
 	"github.com/krisamin/mail/internal/queue"
+	"github.com/krisamin/mail/internal/relaysecret"
 	smtpbackend "github.com/krisamin/mail/internal/smtp"
 	"github.com/krisamin/mail/internal/spam"
 	"github.com/krisamin/mail/internal/store"
@@ -78,6 +80,33 @@ func main() {
 	// embedded migrations — schema converges here for both empty and existing DBs (the whole story on k8s)
 	if err := migration.Run(context.Background(), st.Pool()); err != nil {
 		log.Fatalf("migration failed: %v", err)
+	}
+
+	// Relay passwords: OpenBao when MAIL_BAO_ADDR is set (the database column is
+	// then kept blank), the database column otherwise. senderStore is what the
+	// outbound worker resolves relays through; relayStore is what the admin API edits.
+	var senderStore store.Store = st
+	var relayStore api.RelayStore = st
+	if cfg.BaoAddr != "" {
+		baoClient, err := bao.New(bao.Config{
+			Addr: cfg.BaoAddr, Role: cfg.BaoRole, Mount: cfg.BaoMount,
+			AuthMount: cfg.BaoAuthMount, JWTPath: cfg.BaoJWTPath,
+		})
+		if err != nil {
+			log.Fatalf("OpenBao config: %v", err)
+		}
+		vaulted := relaysecret.Wrap(st, baoClient, cfg.BaoPrefix)
+		senderStore, relayStore = vaulted, vaulted
+		// Move rows that still hold a plaintext password. A failure is not fatal:
+		// those relays keep sending with the database value and the next start retries.
+		moveCtx, moveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		moved, err := vaulted.MoveLegacy(moveCtx)
+		moveCancel()
+		if err != nil {
+			log.Printf("maild: relay password move to OpenBao incomplete (moved %d): %v", moved, err)
+		}
+		log.Printf("maild: relay passwords in OpenBao (addr=%s mount=%s prefix=%s role=%s), moved %d plaintext row(s)",
+			cfg.BaoAddr, cfg.BaoMount, cfg.BaoPrefix, cfg.BaoRole, moved)
 	}
 
 	errCh := make(chan error, 5) // sender: IMAP/SMTP/submission/SMTPS/API
@@ -194,7 +223,7 @@ func main() {
 	// outbound queue worker — relays are fully DB-managed (add/change via the
 	// admin UI, no restart). Sends for relay-less domains retry as transient errors.
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	worker := queue.NewWorker(st, queue.NewResolvingSender(st), queue.Config{}).
+	worker := queue.NewWorker(st, queue.NewResolvingSender(senderStore), queue.Config{}).
 		WithSigner(queue.NewDKIMSigner(st)).
 		WithHostname(hostname)
 	workerDone := make(chan struct{})
@@ -228,6 +257,7 @@ func main() {
 	apiSrv := &http.Server{
 		Addr: apiAddr,
 		Handler: api.NewServer(st, authn).WithHostname(hostname).
+			WithRelayStore(relayStore).
 			WithInternal(cfg.InternalToken).
 			WithSpam(api.SpamSetting{RspamdURL: cfg.RspamdURL, Source: spamSource}).
 			WithSystemPort(systemPortList).

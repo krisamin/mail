@@ -14,11 +14,11 @@ import (
 
 // Outbound relays (migration 0005) — manage multiple relays in the DB instead of env hardcoding.
 
-const relayColumnList = `id, name, host, port, username, password, starttls, is_default, active, created_at`
+const relayColumnList = `id, name, host, port, username, password, password_ref, starttls, is_default, active, created_at`
 
 func scanRelay(row pgx.Row) (*store.Relay, error) {
 	var r store.Relay
-	err := row.Scan(&r.ID, &r.Name, &r.Host, &r.Port, &r.Username, &r.Password,
+	err := row.Scan(&r.ID, &r.Name, &r.Host, &r.Port, &r.Username, &r.Password, &r.PasswordRef,
 		&r.StartTLS, &r.IsDefault, &r.Active, &r.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, store.ErrNotFound
@@ -63,7 +63,7 @@ func (s *Store) ListRelay(ctx context.Context) ([]*store.Relay, error) {
 	var out []*store.Relay
 	for rows.Next() {
 		var r store.Relay
-		if err := rows.Scan(&r.ID, &r.Name, &r.Host, &r.Port, &r.Username, &r.Password,
+		if err := rows.Scan(&r.ID, &r.Name, &r.Host, &r.Port, &r.Username, &r.Password, &r.PasswordRef,
 			&r.StartTLS, &r.IsDefault, &r.Active, &r.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -85,6 +85,8 @@ func validateRelay(r *store.Relay) error {
 }
 
 // CreateRelay creates a relay. When is_default=true, the existing default is unset.
+// A non-zero r.ID is used as the row id (the OpenBao wrapper needs the id before
+// the insert so the secret is written first); zero lets the database pick one.
 func (s *Store) CreateRelay(ctx context.Context, r *store.Relay) (*store.Relay, error) {
 	if err := validateRelay(r); err != nil {
 		return nil, err
@@ -101,10 +103,11 @@ func (s *Store) CreateRelay(ctx context.Context, r *store.Relay) (*store.Relay, 
 		}
 	}
 	out, err := scanRelay(tx.QueryRow(ctx, `
-		INSERT INTO relay (name, host, port, username, password, starttls, is_default, active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO relay (id, name, host, port, username, password, password_ref, starttls, is_default, active)
+		VALUES (COALESCE($9, gen_random_uuid()), $1, $2, $3, $4, $5, $10, $6, $7, $8)
 		RETURNING `+relayColumnList,
-		r.Name, r.Host, r.Port, r.Username, r.Password, r.StartTLS, r.IsDefault, r.Active))
+		r.Name, r.Host, r.Port, r.Username, r.Password, r.StartTLS, r.IsDefault, r.Active,
+		nilIfZeroUUID(r.ID), r.PasswordRef))
 	if err != nil {
 		return nil, fmt.Errorf("relay create: %w", err)
 	}
@@ -114,7 +117,16 @@ func (s *Store) CreateRelay(ctx context.Context, r *store.Relay) (*store.Relay, 
 	return out, nil
 }
 
+func nilIfZeroUUID(id uuid.UUID) *uuid.UUID {
+	if id == uuid.Nil {
+		return nil
+	}
+	return &id
+}
+
 // UpdateRelay updates a relay. Empty Password = keep the existing value.
+// A non-empty PasswordRef points the row at OpenBao and blanks the password
+// column in the same statement; an empty one keeps the stored reference.
 func (s *Store) UpdateRelay(ctx context.Context, r *store.Relay) (*store.Relay, error) {
 	if err := validateRelay(r); err != nil {
 		return nil, err
@@ -132,11 +144,13 @@ func (s *Store) UpdateRelay(ctx context.Context, r *store.Relay) (*store.Relay, 
 	}
 	out, err := scanRelay(tx.QueryRow(ctx, `
 		UPDATE relay SET name = $2, host = $3, port = $4, username = $5,
-		       password = COALESCE(NULLIF($6, ''), password),
+		       password = CASE WHEN $10::text <> '' THEN '' ELSE COALESCE(NULLIF($6, ''), password) END,
+		       password_ref = COALESCE(NULLIF($10::text, ''), password_ref),
 		       starttls = $7, is_default = $8, active = $9
 		WHERE id = $1
 		RETURNING `+relayColumnList,
-		r.ID, r.Name, r.Host, r.Port, r.Username, r.Password, r.StartTLS, r.IsDefault, r.Active))
+		r.ID, r.Name, r.Host, r.Port, r.Username, r.Password, r.StartTLS, r.IsDefault, r.Active,
+		r.PasswordRef))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, store.ErrNotFound
@@ -167,6 +181,21 @@ func (s *Store) SetDomainRelay(ctx context.Context, domainID uuid.UUID, relayID 
 		`UPDATE domain SET relay_id = $2 WHERE id = $1`, domainID, relayID)
 	if err != nil {
 		return fmt.Errorf("domain relay assign: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// SetRelayPasswordRef points a relay at its OpenBao secret and blanks the
+// plaintext column in one statement (used by the startup move). ErrNotFound if
+// the relay is gone.
+func (s *Store) SetRelayPasswordRef(ctx context.Context, id uuid.UUID, ref string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE relay SET password_ref = $2, password = '' WHERE id = $1`, id, ref)
+	if err != nil {
+		return fmt.Errorf("relay password ref: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return store.ErrNotFound

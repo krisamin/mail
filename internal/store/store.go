@@ -55,16 +55,20 @@ type Domain struct {
 // Relay is an SMTP relay for external delivery (Resend, SES, ...).
 // Resolved in order: per-domain assignment (domain.relay_id) → default → env fallback.
 type Relay struct {
-	ID        uuid.UUID
-	Name      string // display name such as 'resend'
-	Host      string
-	Port      int
-	Username  string
-	Password  string // plaintext (never exposed via API — write-only)
-	StartTLS  bool
-	IsDefault bool
-	Active    bool
-	CreatedAt time.Time
+	ID       uuid.UUID
+	Name     string // display name such as 'resend'
+	Host     string
+	Port     int
+	Username string
+	Password string // plaintext (never exposed via API — write-only). Empty when PasswordRef is set.
+	// PasswordRef is the OpenBao KV path (relative to the mount) holding the
+	// password (0007). Set = the secret is not in this database. The relaysecret
+	// wrapper fills Password from it when resolving for a send.
+	PasswordRef string
+	StartTLS    bool
+	IsDefault   bool
+	Active      bool
+	CreatedAt   time.Time
 }
 
 // AccountKind values — account.kind column (0007).

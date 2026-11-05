@@ -31,7 +31,7 @@ func toRelayDTO(r *store.Relay) relayDTO {
 		Username: r.Username, StartTLS: r.StartTLS,
 		IsDefault: r.IsDefault, Active: r.Active,
 		CreatedAt:   r.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		HasPassword: r.Password != "",
+		HasPassword: r.Password != "" || r.PasswordRef != "",
 	}
 }
 
@@ -66,7 +66,7 @@ func (req *relayReq) toRelay() *store.Relay {
 }
 
 func (s *Server) handleListRelay(w http.ResponseWriter, r *http.Request) {
-	relayList, err := s.store.ListRelay(r.Context())
+	relayList, err := s.relay.ListRelay(r.Context())
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -84,7 +84,7 @@ func (s *Server) handleCreateRelay(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	created, err := s.store.CreateRelay(r.Context(), req.toRelay())
+	created, err := s.relay.CreateRelay(r.Context(), req.toRelay())
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -105,7 +105,7 @@ func (s *Server) handleUpdateRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	rl := req.toRelay()
 	rl.ID = id
-	updated, err := s.store.UpdateRelay(r.Context(), rl)
+	updated, err := s.relay.UpdateRelay(r.Context(), rl)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -119,7 +119,7 @@ func (s *Server) handleDeleteRelay(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if err := s.store.DeleteRelay(r.Context(), id); err != nil {
+	if err := s.relay.DeleteRelay(r.Context(), id); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
