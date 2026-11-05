@@ -59,6 +59,18 @@ func TestInternalAdmin(t *testing.T) {
 		t.Fatalf("create relay: %d %s", code, raw)
 	}
 
+	// the domain shows the relay assigned to it (null = default)
+	var relay map[string]any
+	_ = json.Unmarshal(raw, &relay)
+	if code, _ := ijson(t, srv, "PUT", "/internal/v1/admin/domain/"+id+"/relay", "", map[string]any{"relayId": relay["id"]}); code != http.StatusOK {
+		t.Fatalf("set domain relay: %d", code)
+	}
+	_, raw = icall(t, srv, "GET", "/internal/v1/admin/domain", testServiceToken, "", nil)
+	_ = json.Unmarshal(raw, &domainList)
+	if domainList[0]["relayId"] != relay["id"] {
+		t.Fatalf("domain relayId: %s", raw)
+	}
+
 	// a person's identity has no meaning for a service call
 	if code, _ := icall(t, srv, "GET", "/internal/v1/admin/me", testServiceToken, "", nil); code != http.StatusNotFound {
 		t.Fatalf("admin/me: want 404, got %d", code)
