@@ -35,6 +35,11 @@ type Server struct {
 	// externalHost/externalPortList are the external-reachability probe targets.
 	externalHost     string
 	externalPortList []ExternalPort
+	// admin is the bare /api/admin/* mux (before RequireAdmin); the
+	// internal admin routes reuse it behind the service token.
+	admin http.Handler
+	// spamSetting is the env screening configuration shown at /api/admin/spam.
+	spamSetting SpamSetting
 }
 
 // WithHostname sets the server hostname used as the expected MX in DNS checks.
@@ -96,6 +101,8 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("GET /api/admin/system", s.handleSystemCheck)
 	admin.HandleFunc("GET /api/admin/system/external", s.handleSystemExternal)
 	admin.HandleFunc("PUT /api/admin/setting/locale", s.handleSetLocale)
+	admin.HandleFunc("GET /api/admin/spam", s.handleSpamSetting)
+	s.admin = admin
 
 	s.mux.Handle("/api/admin/", auth.RequireAdmin(admin))
 
