@@ -102,6 +102,8 @@ func NewServer(st *postgres.Store, auth *Authenticator) *Server {
 	admin.HandleFunc("GET /api/admin/system/external", s.handleSystemExternal)
 	admin.HandleFunc("PUT /api/admin/setting/locale", s.handleSetLocale)
 	admin.HandleFunc("GET /api/admin/spam", s.handleSpamSetting)
+	admin.HandleFunc("PUT /api/admin/spam", s.handleSetSpamPolicy)
+	admin.HandleFunc("DELETE /api/admin/spam", s.handleResetSpamPolicy)
 	s.admin = admin
 
 	s.mux.Handle("/api/admin/", auth.RequireAdmin(admin))

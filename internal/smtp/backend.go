@@ -52,6 +52,9 @@ type Backend struct {
 	greylistEnabled bool
 	// greylistMinDelay is the wait before a retry passes (default 1m).
 	greylistMinDelay time.Duration
+	// source, when set, overrides the fields above with the admin policy
+	// (re-read every few seconds, so changes apply without a restart).
+	source *spam.Source
 }
 
 // NewBackend creates an inbound backend on top of store.
@@ -98,6 +101,27 @@ func (b *Backend) WithDMARCEnforcement() *Backend {
 	return b
 }
 
+// WithPolicySource takes the screening switches from an admin-editable source.
+func (b *Backend) WithPolicySource(src *spam.Source) *Backend {
+	b.source = src
+	return b
+}
+
+// snapshot is the screening a new session runs under.
+func (b *Backend) snapshot() spam.Snapshot {
+	if b.source != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		snap, _ := b.source.Current(ctx)
+		return snap
+	}
+	return spam.Snapshot{
+		Checker: b.checker, Scanner: b.scanner,
+		Greylist: b.greylistEnabled, GreylistDelay: b.greylistMinDelay,
+		EnforceDMARC: b.enforceDMARC,
+	}
+}
+
 // NewSession is called per connection (gosmtp.Backend interface).
 func (b *Backend) NewSession(c *gosmtp.Conn) (gosmtp.Session, error) {
 	remote := ""
@@ -132,6 +156,16 @@ type Session struct {
 	// on). Verified MTAs skip greylisting — the 451 delay penalty targets
 	// fire-and-forget bots, not real mail servers.
 	rdnsVerified bool
+	// sp is the screening policy, taken once per session on first use.
+	sp       spam.Snapshot
+	spLoaded bool
+}
+
+func (s *Session) policy() *spam.Snapshot {
+	if !s.spLoaded {
+		s.sp, s.spLoaded = s.backend.snapshot(), true
+	}
+	return &s.sp
 }
 
 var _ gosmtp.Session = (*Session)(nil)
@@ -139,12 +173,12 @@ var _ gosmtp.Session = (*Session)(nil)
 func (s *Session) Mail(from string, opts *gosmtp.MailOptions) error {
 	// Connection screening at MAIL FROM — after HELO (so we have the name)
 	// but before any recipient/body work is wasted on a listed sender.
-	if s.backend.checker != nil {
+	if s.policy().Checker != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 		defer cancel()
 		ip := remoteIP(s.remoteAddr)
 
-		if v := s.backend.checker.CheckDNSBL(ctx, ip); v.Listed {
+		if v := s.policy().Checker.CheckDNSBL(ctx, ip); v.Listed {
 			metric.InboundRejectTotal.WithLabelValues("dnsbl").Inc()
 			log.Printf("smtp: DNSBL reject ip=%s zone=%s code=%s from=%s", ip, v.Zone, v.Code, from)
 			return &gosmtp.SMTPError{
@@ -154,7 +188,7 @@ func (s *Session) Mail(from string, opts *gosmtp.MailOptions) error {
 			}
 		}
 		// weak signals: never reject, quarantine at delivery time
-		conn := s.backend.checker.CheckConnection(ctx, ip, s.heloName)
+		conn := s.policy().Checker.CheckConnection(ctx, ip, s.heloName)
 		s.rdnsVerified = conn.RDNSOk
 		if conn.Suspicious {
 			s.suspicious = true
@@ -222,12 +256,12 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	// Greylist AFTER recipient validation (an unknown user stays a clean 550)
 	// and only for unverified sources — FCrDNS-verified MTAs and private/dev
 	// addresses skip the delay.
-	if s.backend.greylistEnabled && !s.rdnsVerified {
+	if s.policy().Greylist && !s.rdnsVerified {
 		if ip := remoteIP(s.remoteAddr); ip != nil && !isPrivateIP(ip) {
 			pass, gerr := s.backend.store.CheckGreylist(ctx,
 				greylistSourceNet(ip),
 				strings.ToLower(s.from), strings.ToLower(to),
-				s.backend.greylistMinDelay, greylistStaleAfter)
+				s.policy().GreylistDelay, greylistStaleAfter)
 			if gerr != nil {
 				// fail-open: an internal error must never bounce mail
 				log.Printf("smtp: greylist check failed (fail-open) from=%s to=%s: %v", s.from, to, gerr)
@@ -288,17 +322,17 @@ func (s *Session) Data(r io.Reader) error {
 	// with the connection-screening quarantine below. Fail-open on errors.
 	var authHeader []byte
 	folder := "INBOX"
-	if s.backend.scanner != nil {
+	if s.policy().Scanner != nil {
 		ip := remoteIP(s.remoteAddr)
 		var rcptAddrList []string
 		for _, rc := range s.rcptList {
 			rcptAddrList = append(rcptAddrList, rc.address)
 		}
-		result, err := s.backend.scanner.Scan(context.Background(), raw, ip, s.heloName, s.from, rcptAddrList)
+		result, err := s.policy().Scanner.Scan(context.Background(), raw, ip, s.heloName, s.from, rcptAddrList)
 		if err != nil {
 			log.Printf("smtp: rspamd scan unavailable (fail-open) from=%s: %v", s.from, err)
 		} else {
-			switch result.Action {
+			switch s.policy().Policy.Decide(result) {
 			case spam.ScanReject:
 				metric.InboundRejectTotal.WithLabelValues("rspamd").Inc()
 				log.Printf("smtp: rspamd reject from=%s score=%.1f/%.1f action=%q",
@@ -334,7 +368,7 @@ func (s *Session) Data(r io.Reader) error {
 			s.from, ip, vr.SPFPass, vr.DKIMPass, vr.DMARCPass, vr.DMARCPolicy)
 
 		// DMARC policy enforcement — follow the policy the sender domain published.
-		if s.backend.enforceDMARC && vr.DMARCEvaluated && !vr.DMARCPass {
+		if s.policy().EnforceDMARC && vr.DMARCEvaluated && !vr.DMARCPass {
 			switch vr.DMARCPolicy {
 			case "reject":
 				metric.InboundRejectTotal.WithLabelValues("dmarc").Inc()
@@ -354,7 +388,7 @@ func (s *Session) Data(r io.Reader) error {
 		// evaluation itself was impossible — letting it pass in enforcement
 		// mode would allow bypassing a reject policy with a malformed From
 		// (fail-open). Quarantine to Junk as a suspicious signal (RFC 7489 §6.6.1).
-		if s.backend.enforceDMARC && !vr.FromParsed {
+		if s.policy().EnforceDMARC && !vr.FromParsed {
 			folder = "Junk"
 			log.Printf("smtp: unparseable From header → quarantined to Junk from=%s ip=%s", s.from, ip)
 		}

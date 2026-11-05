@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/krisamin/mail/internal/queue"
 	smtpbackend "github.com/krisamin/mail/internal/smtp"
 	"github.com/krisamin/mail/internal/spam"
+	"github.com/krisamin/mail/internal/store"
 	"github.com/krisamin/mail/internal/store/migration"
 	"github.com/krisamin/mail/internal/store/postgres"
 	"github.com/krisamin/mail/internal/webhook"
@@ -114,28 +116,30 @@ func main() {
 
 	// inbound (MX) SMTP server — SPF/DKIM/DMARC verification + optional policy enforcement
 	mxBackend := smtpbackend.NewBackend(st, hostname)
-	if cfg.DMARCEnforce {
-		mxBackend.WithDMARCEnforcement()
-		log.Printf("maild: DMARC enforcement active (reject→550, quarantine→Junk)")
-	} else {
-		mxBackend.WithInboundVerification()
-	}
-	// connection screening: DNSBL(reject) + FCrDNS/HELO(quarantine).
-	if len(cfg.DNSBLZoneList) > 0 {
-		mxBackend.WithSpamChecker(spam.NewChecker(cfg.DNSBLZoneList))
-		log.Printf("maild: connection screening active (dnsbl=%v, rDNS/HELO quarantine)", cfg.DNSBLZoneList)
-	}
-	// greylisting: first-contact triplets get 451, retries pass.
-	// FCrDNS-verified senders skip it (requires the spam checker above).
-	if cfg.Greylist {
-		mxBackend.WithGreylist(cfg.GreylistDelay)
-		log.Printf("maild: greylisting active (delay=%s, FCrDNS-verified senders exempt)", cfg.GreylistDelay)
-	}
-	// rspamd content scanning (reject → 554, add-header/greylist → Junk)
+	mxBackend.WithInboundVerification()
+	// screening switches: env is the default, an admin-saved policy
+	// (setting spam.policy, PUT /api/admin/spam) replaces it at runtime.
+	var scanner *spam.Scanner
 	if cfg.RspamdURL != "" {
-		mxBackend.WithScanner(spam.NewScanner(cfg.RspamdURL, cfg.RspamdPass))
-		log.Printf("maild: rspamd scanning active (url=%s)", cfg.RspamdURL)
+		scanner = spam.NewScanner(cfg.RspamdURL, cfg.RspamdPass)
 	}
+	spamSource := spam.NewSource(spam.Policy{
+		DMARCEnforce:        cfg.DMARCEnforce,
+		DNSBLZoneList:       cfg.DNSBLZoneList,
+		Greylist:            cfg.Greylist,
+		GreylistDelaySecond: int(cfg.GreylistDelay / time.Second),
+		Rspamd:              scanner != nil,
+	}, scanner, func(ctx context.Context) (string, bool, error) {
+		raw, err := st.GetSetting(ctx, spam.PolicySettingKey)
+		if errors.Is(err, store.ErrNotFound) {
+			return "", false, nil
+		}
+		return raw, err == nil, err
+	})
+	mxBackend.WithPolicySource(spamSource)
+	snap, saved := spamSource.Current(context.Background())
+	log.Printf("maild: screening policy (saved=%v) dmarcEnforce=%v dnsbl=%v greylist=%v/%s rspamd=%v",
+		saved, snap.EnforceDMARC, snap.Policy.DNSBLZoneList, snap.Greylist, snap.GreylistDelay, snap.Scanner != nil)
 	smtpSrv := gosmtp.NewServer(mxBackend)
 	smtpSrv.Addr = smtpAddr
 	smtpSrv.Domain = hostname
@@ -225,13 +229,7 @@ func main() {
 		Addr: apiAddr,
 		Handler: api.NewServer(st, authn).WithHostname(hostname).
 			WithInternal(cfg.InternalToken).
-			WithSpam(api.SpamSetting{
-				RspamdURL:     cfg.RspamdURL,
-				Greylist:      cfg.Greylist,
-				GreylistDelay: cfg.GreylistDelay,
-				DMARCEnforce:  cfg.DMARCEnforce,
-				DNSBLZoneList: cfg.DNSBLZoneList,
-			}).
+			WithSpam(api.SpamSetting{RspamdURL: cfg.RspamdURL, Source: spamSource}).
 			WithSystemPort(systemPortList).
 			WithExternalPort(hostname, []api.ExternalPort{
 				{Name: "imaps", Port: "993", Mode: "tls"},

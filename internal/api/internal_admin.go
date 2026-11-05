@@ -2,13 +2,16 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/krisamin/mail/internal/spam"
 )
 
-// Internal admin (/internal/v1/admin/*) — the ara server's admin console
+// Internal admin (/internal/v1/admin/*): the ara server's admin console
 // drives maild through this. It is the same handler set as /api/admin/*
 // (one source of behavior), reached with the service token instead of a
 // person's OIDC token: ara checks its own admin role before it calls.
@@ -22,7 +25,7 @@ const internalAdminPrefix = "/internal/v1/admin/"
 func (s *Server) internalAdmin() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, internalAdminPrefix)
-		// /api/admin/me answers "which person is this" — a service call has none.
+		// /api/admin/me answers "which person is this"; a service call has none.
 		if rest == "me" {
 			writeError(w, http.StatusNotFound, "not found")
 			return
@@ -34,20 +37,17 @@ func (s *Server) internalAdmin() http.Handler {
 	})
 }
 
-// ── Spam screening (read-only) ──────────────────────────────
+// -- Spam screening --------------------------------------------------
 
-// SpamSetting is the inbound screening configuration. It comes from env at
-// boot (MAIL_RSPAMD_URL, MAIL_GREYLIST*, MAIL_DMARC_ENFORCE, MAIL_DNSBL_ZONE)
-// and is shown to admins as is; it is not editable through the API.
+// SpamSetting wires the screening policy into the admin API. Source holds
+// the env default and the admin-saved policy (the SMTP backend reads the
+// same Source, so a save applies to the next connection).
 type SpamSetting struct {
-	RspamdURL     string
-	Greylist      bool
-	GreylistDelay time.Duration
-	DMARCEnforce  bool
-	DNSBLZoneList []string
+	RspamdURL string
+	Source    *spam.Source
 }
 
-// WithSpam registers the screening configuration for GET /api/admin/spam.
+// WithSpam registers the screening policy for /api/admin/spam.
 func (s *Server) WithSpam(sp SpamSetting) *Server {
 	s.spamSetting = sp
 	return s
@@ -61,28 +61,95 @@ type spamRspamdDTO struct {
 }
 
 type spamDTO struct {
-	Rspamd              spamRspamdDTO `json:"rspamd"`
-	Greylist            bool          `json:"greylist"`
-	GreylistDelaySecond int           `json:"greylistDelaySecond"`
-	DMARCEnforce        bool          `json:"dmarcEnforce"`
-	DNSBLZoneList       []string      `json:"dnsblZoneList"`
-	// Source tells the screen where to change these: "env" = the deployment.
+	Rspamd spamRspamdDTO `json:"rspamd"`
+	// Policy is what applies now; Default is the env policy a reset returns to.
+	Policy  spam.Policy `json:"policy"`
+	Default spam.Policy `json:"default"`
+	// Source: "setting" = an admin saved Policy, "env" = the default applies.
 	Source string `json:"source"`
 }
 
-// handleSpamSetting reports the screening switches and pings rspamd.
+func (s *Server) spamView(ctx context.Context, ping bool) (spamDTO, bool) {
+	src := s.spamSetting.Source
+	if src == nil {
+		return spamDTO{}, false
+	}
+	snap, saved := src.Current(ctx)
+	out := spamDTO{Policy: snap.Policy, Default: src.Default(), Source: "env"}
+	if saved {
+		out.Source = "setting"
+	}
+	if out.Policy.DNSBLZoneList == nil {
+		out.Policy.DNSBLZoneList = []string{}
+	}
+	if out.Default.DNSBLZoneList == nil {
+		out.Default.DNSBLZoneList = []string{}
+	}
+	if s.spamSetting.RspamdURL != "" {
+		out.Rspamd.Configured = true
+		if ping {
+			out.Rspamd = pingRspamd(ctx, s.spamSetting.RspamdURL)
+		}
+	}
+	return out, true
+}
+
+// handleSpamSetting: GET /api/admin/spam, the policy in force and rspamd's ping.
 func (s *Server) handleSpamSetting(w http.ResponseWriter, r *http.Request) {
-	sp := s.spamSetting
-	out := spamDTO{
-		Greylist:            sp.Greylist,
-		GreylistDelaySecond: int(sp.GreylistDelay / time.Second),
-		DMARCEnforce:        sp.DMARCEnforce,
-		DNSBLZoneList:       append([]string{}, sp.DNSBLZoneList...),
-		Source:              "env",
+	out, ok := s.spamView(r.Context(), true)
+	if !ok {
+		writeError(w, http.StatusNotFound, "spam policy not configured")
+		return
 	}
-	if sp.RspamdURL != "" {
-		out.Rspamd = pingRspamd(r.Context(), sp.RspamdURL)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSetSpamPolicy: PUT /api/admin/spam with a whole Policy. It is stored
+// (setting spam.policy) and applies to the next SMTP connection.
+func (s *Server) handleSetSpamPolicy(w http.ResponseWriter, r *http.Request) {
+	src := s.spamSetting.Source
+	if src == nil {
+		writeError(w, http.StatusNotFound, "spam policy not configured")
+		return
 	}
+	var req spam.Policy
+	if err := decodeBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	norm, err := req.Normalize()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if norm.Rspamd && !src.RspamdAvailable() {
+		writeError(w, http.StatusBadRequest, "rspamd is not configured on this server (MAIL_RSPAMD_URL)")
+		return
+	}
+	raw, _ := json.Marshal(norm)
+	if err := s.store.SetSetting(r.Context(), spam.PolicySettingKey, string(raw)); err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+	src.Invalidate()
+	out, _ := s.spamView(r.Context(), false)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleResetSpamPolicy: DELETE /api/admin/spam drops the saved policy, so
+// the env default applies again.
+func (s *Server) handleResetSpamPolicy(w http.ResponseWriter, r *http.Request) {
+	src := s.spamSetting.Source
+	if src == nil {
+		writeError(w, http.StatusNotFound, "spam policy not configured")
+		return
+	}
+	if err := s.store.DeleteSetting(r.Context(), spam.PolicySettingKey); err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+	src.Invalidate()
+	out, _ := s.spamView(r.Context(), false)
 	writeJSON(w, http.StatusOK, out)
 }
 
