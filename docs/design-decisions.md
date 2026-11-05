@@ -304,3 +304,28 @@ sync에 필요한 헤더(Message-ID, In-Reply-To, References, 주소, 첨부 여
 raw 발송은 바이트를 그대로 보낸다(iMIP의 text/calendar가 그대로 가야 한다).
 없을 때만 Message-ID와 Date를 앞에 붙이고, Bcc 헤더는 그대로 모두에게
 배달되므로 거절한다. Bcc는 `recipientList`로 받는다.
+
+## DD-17. 릴레이 비밀번호는 DB가 아니라 OpenBao에 둔다 (2026-11)
+
+릴레이 SMTP 비밀번호(Resend 키 등)가 `relay.password`에 평문으로 있었다. 관리
+화면에서 바꾸는 값이라 환경변수나 ExternalSecret으로 옮길 수는 없고(재시작 없이
+바뀌어야 한다), 값의 정본은 금고여야 한다. 그래서 `MAIL_BAO_ADDR`가 있으면 maild가
+파드의 ServiceAccount 토큰으로 OpenBao에 로그인해(Kubernetes 인증, 역할은
+`MAIL_BAO_ROLE`) KV v2의 `<prefix>/<릴레이 id>`(필드 `password`)를 직접 읽고 쓴다.
+
+- 관리 API 모양은 그대로다. 비밀번호는 쓰기 전용이고 응답은 `hasPassword`만 낸다.
+  `password_ref`(0007)는 응답에 나가지 않는다.
+- 만들기·바꾸기는 OpenBao에 먼저 쓰고 그 다음 행을 바꾼다. OpenBao가 안 되면 요청이
+  실패하고 DB에 평문을 남기지 않는다. 행 삽입이 실패하면 방금 쓴 값을 지운다.
+  지우기는 행을 지우고 값도 지운다.
+- 보낼 때 `ResolveRelay`가 값을 읽어 채운다. 1분 캐시를 두고, OpenBao가 안 닿으면
+  10분까지는 직전 값으로 보낸다(OpenBao 재시작이 발송을 멈추지 않게). 값이 없으면(404)
+  캐시를 쓰지 않고 일시 오류로 재시도한다.
+- 기동할 때 `password`가 남은 행을 OpenBao로 옮긴다. 쓰고, 다시 읽어 같은지 확인한 뒤에만
+  `password_ref`를 채우고 `password`를 비운다(멱등). 한 행이 실패해도 나머지는 옮기고,
+  실패한 행은 평문인 채로 계속 보내며 다음 기동에 다시 시도한다.
+- env가 없으면 예전 그대로다(dev·시험). 다만 행이 이미 `password_ref`를 가리키는데
+  env가 없으면 빈 비밀번호로 AUTH하지 않고 일시 오류로 멈춘다.
+- 되돌릴 때: 이전 이미지는 `password` 열만 읽으니, 옮겨진 뒤에는 OpenBao 값을 열에
+  다시 써 둬야 한다(`password_ref`는 남겨 둬도 된다).
+

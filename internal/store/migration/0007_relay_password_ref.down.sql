@@ -1,0 +1,1 @@
+ALTER TABLE relay DROP COLUMN IF EXISTS password_ref;

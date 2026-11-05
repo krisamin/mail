@@ -116,6 +116,11 @@ func (r *ResolvingSender) Send(ctx context.Context, from, rcpt string, raw []byt
 	}
 	rl, err := r.store.ResolveRelay(ctx, senderDomain)
 	if err == nil {
+		if rl.Password == "" && rl.PasswordRef != "" {
+			// the row says the password is in OpenBao but this process is not wired
+			// to it (MAIL_BAO_* unset). Transient, not a bounce: fix the env and mail flows.
+			return fmt.Errorf("relay %q keeps its password in OpenBao (%s) but MAIL_BAO_ADDR is not set", rl.Name, rl.PasswordRef)
+		}
 		cfg := RelayConfig{
 			Addr:     fmt.Sprintf("%s:%d", rl.Host, rl.Port),
 			Username: rl.Username,

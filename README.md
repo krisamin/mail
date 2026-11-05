@@ -160,9 +160,13 @@ The essentials:
 | `MAIL_ADMIN_GROUP` | OIDC group granting admin access (default `mail-admin`) |
 | `MAIL_INTERNAL_TOKEN` | Service token for `/internal/v1` (empty = routes absent), see [docs/internal-api.md](docs/internal-api.md) |
 | `MAIL_EVENT_URL` / `MAIL_EVENT_SECRET` | Mail event webhook target and HMAC key (both set = on) |
+| `MAIL_BAO_ADDR` / `MAIL_BAO_ROLE` | OpenBao address and Kubernetes-auth role. Set = relay passwords live in OpenBao and the `relay.password` column is kept blank (see DD-17). Empty = passwords stay in the column (dev/tests). `ADDR` without `ROLE` refuses to start |
+| `MAIL_BAO_MOUNT` / `MAIL_BAO_PREFIX` | KV v2 mount (default `secret`) and path under it (default `mail/relay`; a relay's password is `<prefix>/<relay id>`, field `password`) |
+| `MAIL_BAO_AUTH_MOUNT` / `MAIL_BAO_JWT_PATH` | Kubernetes auth mount (default `kubernetes`) and service account token file (default the pod's) |
 
 Domains and outbound relays are managed entirely in the DB through the
-admin UI — no bootstrap or relay env vars. Anyone can log in via OIDC;
+admin UI — no bootstrap or relay env vars (the relay *password* may live in
+OpenBao, `MAIL_BAO_*` above). Anyone can log in via OIDC;
 accounts receive a mailbox only when their email domain is registered
 (retroactively backfilled when the domain is added later).
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -40,6 +41,23 @@ type Server struct {
 	admin http.Handler
 	// spamSetting is the env screening configuration shown at /api/admin/spam.
 	spamSetting SpamSetting
+	// relay serves the relay CRUD. It is the database store unless main.go
+	// swaps in the OpenBao-backed wrapper (WithRelayStore).
+	relay RelayStore
+}
+
+// RelayStore is the relay CRUD the admin API needs.
+type RelayStore interface {
+	ListRelay(ctx context.Context) ([]*store.Relay, error)
+	CreateRelay(ctx context.Context, r *store.Relay) (*store.Relay, error)
+	UpdateRelay(ctx context.Context, r *store.Relay) (*store.Relay, error)
+	DeleteRelay(ctx context.Context, id uuid.UUID) error
+}
+
+// WithRelayStore replaces where relays (and their passwords) are kept.
+func (s *Server) WithRelayStore(rs RelayStore) *Server {
+	s.relay = rs
+	return s
 }
 
 // WithHostname sets the server hostname used as the expected MX in DNS checks.
@@ -50,7 +68,7 @@ func (s *Server) WithHostname(h string) *Server {
 
 // NewServer assembles the routes.
 func NewServer(st *postgres.Store, auth *Authenticator) *Server {
-	s := &Server{store: st, auth: auth, mux: http.NewServeMux()}
+	s := &Server{store: st, auth: auth, mux: http.NewServeMux(), relay: st}
 
 	// Go 1.22+ pattern routing
 	s.mux.HandleFunc("GET /api/health", s.handleHealth) // no auth

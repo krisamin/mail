@@ -41,6 +41,16 @@ type config struct {
 	InternalToken string
 	EventURL      string
 	EventSecret   string
+
+	// OpenBao for relay passwords. Empty BaoAddr = passwords stay in the
+	// database column (dev/tests). Set = they live in OpenBao and the column is
+	// kept blank; a plaintext row is moved at start-up.
+	BaoAddr      string // MAIL_BAO_ADDR, e.g. http://openbao.openbao.svc:8200
+	BaoRole      string // MAIL_BAO_ROLE — Kubernetes auth role
+	BaoMount     string // MAIL_BAO_MOUNT — KV v2 mount (default "secret")
+	BaoPrefix    string // MAIL_BAO_PREFIX — path under the mount (default "mail/relay")
+	BaoAuthMount string // MAIL_BAO_AUTH_MOUNT — Kubernetes auth mount (default "kubernetes")
+	BaoJWTPath   string // MAIL_BAO_JWT_PATH — service account token file
 }
 
 func loadConfig() config {
@@ -65,6 +75,15 @@ func loadConfig() config {
 		InternalToken:  os.Getenv("MAIL_INTERNAL_TOKEN"),
 		EventURL:       os.Getenv("MAIL_EVENT_URL"),
 		EventSecret:    os.Getenv("MAIL_EVENT_SECRET"),
+		BaoAddr:        os.Getenv("MAIL_BAO_ADDR"),
+		BaoRole:        os.Getenv("MAIL_BAO_ROLE"),
+		BaoMount:       env("MAIL_BAO_MOUNT", "secret"),
+		BaoPrefix:      env("MAIL_BAO_PREFIX", "mail/relay"),
+		BaoAuthMount:   env("MAIL_BAO_AUTH_MOUNT", "kubernetes"),
+		BaoJWTPath:     os.Getenv("MAIL_BAO_JWT_PATH"),
+	}
+	if c.BaoAddr != "" && c.BaoRole == "" {
+		log.Fatal("MAIL_BAO_ADDR is set but MAIL_BAO_ROLE is not — refusing to start with relay passwords half-configured")
 	}
 	if (c.EventURL == "") != (c.EventSecret == "") {
 		log.Printf("maild: MAIL_EVENT_URL and MAIL_EVENT_SECRET must both be set — event webhook stays off")
