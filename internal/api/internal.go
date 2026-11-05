@@ -81,6 +81,8 @@ func (s *Server) WithInternal(token string) *Server {
 	// account management names the account in the body/path, not the header
 	in.HandleFunc("POST /internal/v1/account", s.handleInternalProvision)
 	in.HandleFunc("POST /internal/v1/account/{id}/address", s.handleInternalAddAddress)
+	// admin console (ara /admin/mail): same handlers as /api/admin/*
+	in.Handle(internalAdminPrefix, s.internalAdmin())
 	in.Handle("/internal/v1/", s.requireInternalAccount(scoped))
 
 	s.mux.Handle("/internal/", requireServiceToken(token, in))

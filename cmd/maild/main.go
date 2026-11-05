@@ -225,6 +225,13 @@ func main() {
 		Addr: apiAddr,
 		Handler: api.NewServer(st, authn).WithHostname(hostname).
 			WithInternal(cfg.InternalToken).
+			WithSpam(api.SpamSetting{
+				RspamdURL:     cfg.RspamdURL,
+				Greylist:      cfg.Greylist,
+				GreylistDelay: cfg.GreylistDelay,
+				DMARCEnforce:  cfg.DMARCEnforce,
+				DNSBLZoneList: cfg.DNSBLZoneList,
+			}).
 			WithSystemPort(systemPortList).
 			WithExternalPort(hostname, []api.ExternalPort{
 				{Name: "imaps", Port: "993", Mode: "tls"},

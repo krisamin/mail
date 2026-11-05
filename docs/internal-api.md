@@ -61,6 +61,23 @@ gateway.
   direct delivery (filters, quota), external queueing, and a `\Seen` copy in
   the account's Sent. Metrics use `path="internal"`.
 
+## Admin routes (`/internal/v1/admin/*`)
+
+The ara admin console manages maild through the same handlers as the
+OIDC-protected `/api/admin/*`: `/internal/v1/admin/<rest>` is served as
+`/api/admin/<rest>`. Only the service token is checked here, no
+`X-Mail-Account`; ara checks its own admin permission before it calls.
+
+- Every admin route is available: domains (DKIM, DNS check, permission,
+  relay), accounts (service accounts, quota, active), addresses and aliases,
+  app passwords, groups (order, members, daily limit), relays (password is
+  write-only, `hasPassword` only), queue, system check, locale.
+- `GET /internal/v1/admin/me` is 404: it answers "which person is this",
+  and a service call has none.
+- `GET /api/admin/spam` (both surfaces) reports the inbound screening
+  switches (rspamd reachable, greylist and its delay, DMARC enforcement,
+  DNSBL zones). They come from env (`source: "env"`) and are read-only.
+
 ## Mail event webhook
 
 When `MAIL_EVENT_URL` and `MAIL_EVENT_SECRET` are set, maild POSTs one JSON
