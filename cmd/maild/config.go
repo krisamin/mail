@@ -39,8 +39,12 @@ type config struct {
 	// internal API + event webhook (ara integration). Empty token = the
 	// /internal/v1 routes do not exist; URL and secret both set = webhook on.
 	InternalToken string
-	EventURL      string
-	EventSecret   string
+	// ForwardDomain: "ara.ax=host:2525", domains taken on MX and handed to another maild
+	ForwardDomain string
+	// TrustedForward: CIDRs whose hand-overs are already screened
+	TrustedForward string
+	EventURL       string
+	EventSecret    string
 
 	// OpenBao for relay passwords. Empty BaoAddr = passwords stay in the
 	// database column (dev/tests). Set = they live in OpenBao and the column is
@@ -73,6 +77,8 @@ func loadConfig() config {
 		AdminGroup:     env("MAIL_ADMIN_GROUP", "mail-admin"),
 		DevInsecure:    os.Getenv("MAIL_DEV_INSECURE") == "true",
 		InternalToken:  os.Getenv("MAIL_INTERNAL_TOKEN"),
+		ForwardDomain:  os.Getenv("MAIL_FORWARD_DOMAIN"),
+		TrustedForward: os.Getenv("MAIL_TRUSTED_FORWARDER"),
 		EventURL:       os.Getenv("MAIL_EVENT_URL"),
 		EventSecret:    os.Getenv("MAIL_EVENT_SECRET"),
 		BaoAddr:        os.Getenv("MAIL_BAO_ADDR"),

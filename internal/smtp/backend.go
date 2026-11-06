@@ -55,6 +55,10 @@ type Backend struct {
 	// source, when set, overrides the fields above with the admin policy
 	// (re-read every few seconds, so changes apply without a restart).
 	source *spam.Source
+	// forward hands some domains' mail to another maild (forward.go).
+	forward ForwardMap
+	// trustedForwarder: networks whose hand-overs are already screened.
+	trustedForwarder []*net.IPNet
 }
 
 // NewBackend creates an inbound backend on top of store.
@@ -139,6 +143,8 @@ func (b *Backend) NewSession(c *gosmtp.Conn) (gosmtp.Session, error) {
 type rcpt struct {
 	address string
 	user    *store.Account
+	// hop is the next maild for a forwarded domain; "" = delivered here.
+	hop string
 }
 
 // Session is a single SMTP transaction (implements gosmtp.Session).
@@ -173,7 +179,7 @@ var _ gosmtp.Session = (*Session)(nil)
 func (s *Session) Mail(from string, opts *gosmtp.MailOptions) error {
 	// Connection screening at MAIL FROM — after HELO (so we have the name)
 	// but before any recipient/body work is wasted on a listed sender.
-	if s.policy().Checker != nil {
+	if s.policy().Checker != nil && !s.fromTrustedForwarder() {
 		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 		defer cancel()
 		ip := remoteIP(s.remoteAddr)
@@ -208,6 +214,15 @@ func (s *Session) Mail(from string, opts *gosmtp.MailOptions) error {
 func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
+
+	if hop := s.backend.forward.hopFor(to); hop != "" {
+		// the next maild answers for the address itself, at DATA
+		if err := s.greylist(ctx, to); err != nil {
+			return err
+		}
+		s.rcptList = append(s.rcptList, rcpt{address: to, hop: hop})
+		return nil
+	}
 
 	u, err := s.backend.store.ResolveAddress(ctx, to)
 	if err != nil {
@@ -253,6 +268,16 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 		}
 	}
 
+	if err := s.greylist(ctx, to); err != nil {
+		return err
+	}
+
+	s.rcptList = append(s.rcptList, rcpt{address: to, user: u})
+	return nil
+}
+
+// greylist holds back a first-contact triplet from an unverified source.
+func (s *Session) greylist(ctx context.Context, to string) error {
 	// Greylist AFTER recipient validation (an unknown user stays a clean 550)
 	// and only for unverified sources — FCrDNS-verified MTAs and private/dev
 	// addresses skip the delay.
@@ -277,7 +302,6 @@ func (s *Session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 		}
 	}
 
-	s.rcptList = append(s.rcptList, rcpt{address: to, user: u})
 	return nil
 }
 
@@ -316,6 +340,13 @@ func (s *Session) Data(r io.Reader) error {
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return err
+	}
+	// a trusted forwarder already screened and verified it (forward.go):
+	// file it where its verdict says, without checking twice
+	trusted := s.fromTrustedForwarder()
+	raw, verdict := takeVerdict(raw, trusted)
+	if trusted {
+		return s.deliverAll(raw, nil, firstNonEmpty(verdict, "INBOX"))
 	}
 
 	// rspamd content scan — reject beats everything; junk verdicts merge
@@ -394,9 +425,41 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
+	return s.deliverAll(raw, authHeader, folder)
+}
+
+// deliverAll hands forwarded recipients to their next maild (first, so a
+// failure there is a 451 before anything is kept here) and stores the rest.
+func (s *Session) deliverAll(raw, authHeader []byte, folder string) error {
 	now := timeNow()
+	hopList := map[string][]string{}
+	var hopOrder []string
+	for _, rc := range s.rcptList {
+		if rc.hop == "" {
+			continue
+		}
+		if _, seen := hopList[rc.hop]; !seen {
+			hopOrder = append(hopOrder, rc.hop)
+		}
+		hopList[rc.hop] = append(hopList[rc.hop], rc.address)
+	}
+	for _, hop := range hopOrder {
+		stamped := s.receivedHeader(hopList[hop][0], now)
+		stamped = append(stamped, authHeader...)
+		stamped = append(stamped, verdictHeader(folder)...)
+		stamped = append(stamped, raw...)
+		if err := s.handOver(hop, hopList[hop], stamped); err != nil {
+			return handOverError(hop, err)
+		}
+		log.Printf("smtp: forwarded from=%s rcptList=%d hop=%s folder=%s", s.from, len(hopList[hop]), hop, folder)
+	}
+
 	delivered := 0
 	for _, rc := range s.rcptList {
+		if rc.hop != "" {
+			delivered++
+			continue
+		}
 		// Prepend a per-recipient Received header (RFC 5321 §4.4 — delivery tracing)
 		stamped := s.receivedHeader(rc.address, now)
 		stamped = append(stamped, authHeader...)
@@ -481,4 +544,11 @@ func (s *Session) Reset() {
 
 func (s *Session) Logout() error {
 	return nil
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

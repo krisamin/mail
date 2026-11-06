@@ -166,6 +166,21 @@ func main() {
 		return raw, err == nil, err
 	})
 	mxBackend.WithPolicySource(spamSource)
+	if cfg.ForwardDomain != "" {
+		forward, ferr := smtpbackend.ParseForwardMap(cfg.ForwardDomain)
+		if ferr != nil {
+			log.Fatalf("maild: MAIL_FORWARD_DOMAIN: %v", ferr)
+		}
+		mxBackend.WithForward(forward)
+		log.Printf("maild: forwarding domains %v", forward)
+	}
+	if cfg.TrustedForward != "" {
+		netList, nerr := smtpbackend.ParseCIDRList(cfg.TrustedForward)
+		if nerr != nil {
+			log.Fatalf("maild: MAIL_TRUSTED_FORWARDER: %v", nerr)
+		}
+		mxBackend.WithTrustedForwarder(netList)
+	}
 	snap, saved := spamSource.Current(context.Background())
 	log.Printf("maild: screening policy (saved=%v) dmarcEnforce=%v dnsbl=%v greylist=%v/%s rspamd=%v",
 		saved, snap.EnforceDMARC, snap.Policy.DNSBLZoneList, snap.Greylist, snap.GreylistDelay, snap.Scanner != nil)
